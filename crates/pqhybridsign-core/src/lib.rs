@@ -5,3 +5,12 @@
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
+
+pub mod error;
+pub use error::{Error, Result};
+
+pub mod component;
+pub mod composite;
+pub mod derive;
+pub mod message;
+pub mod suite;
