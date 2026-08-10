@@ -22,7 +22,7 @@ serde_json = "1"
 
 [features]
 default = ["profile-256s"]
-profile-256s = []
-profile-256s-sha2 = []
-profile-128s-q18 = []
-profile-128s-q20 = []
+profile-256s = ["hashsigs-rs/profile-256s"]
+profile-256s-sha2 = ["hashsigs-rs/profile-256s-sha2"]
+profile-128s-q18 = ["hashsigs-rs/profile-128s-q18"]
+profile-128s-q20 = ["hashsigs-rs/profile-128s-q20"]
