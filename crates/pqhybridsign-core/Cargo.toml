@@ -14,6 +14,10 @@ hkdf.workspace = true
 sha2.workspace = true
 rand_core.workspace = true
 
+[dev-dependencies]
+subtle.workspace = true
+rand_core.workspace = true
+
 [features]
 default = ["std", "alloc"]
 std = ["alloc"]

@@ -319,6 +319,7 @@ dependencies = [
  "pqhybridsign-core",
  "rand_core",
  "schnorrkel",
+ "sha2",
  "subtle",
  "zeroize",
 ]
