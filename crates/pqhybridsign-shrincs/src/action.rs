@@ -1,2 +1,182 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Implemented in Cycle 2 Task 6.
+//! Maps the hybrid bound message `M'` into the SHRINCS signer's
+//! `ActionContext` (specification section 7.1).
+//!
+//! `ActionContext` carries five 32-byte fields. Cross-suite and
+//! cross-profile separation is carried entirely by `payload_hash` (`M'`
+//! already embeds the suite label, specification section 7.1) and by the
+//! public-key commitment, which is never shared across suites. That is why
+//! `domain_separator` and `action_type` below are fixed constants shared
+//! across every H5/H6 suite and profile combination rather than varying per
+//! suite.
+//!
+//! # Leaf-consuming signatures: validate before signing
+//!
+//! `hashsigs_rs::shrincs::ShrincsSigner::sign_stateful_action` does not
+//! validate its `ActionContext` argument before signing (confirmed by
+//! reading the upstream source, see [`valid_action_context`] below). Stateful
+//! signing consumes a one-time leaf from a budget of at most 4096; signing an
+//! invalid context permanently destroys that leaf and produces a signature
+//! the verifier will always reject, with no way to recover the leaf. Callers
+//! MUST run [`valid_action_context`] on the context returned by
+//! [`to_action_context`] before passing it to `sign_stateful_action`.
+
+use hashsigs_rs::shrincs::ActionContext;
+use sha3::{Digest, Keccak256};
+
+/// Fixed 32-byte domain separator reserved for hybrid-layer SHRINCS use,
+/// distinct from every other consumer of the upstream `hashsigs-rs` crate.
+///
+/// `keccak256(b"pqhybridsign/shrincs/domain-separator/v1")`.
+pub const HYBRID_DOMAIN_SEPARATOR: [u8; 32] = [
+    0xba, 0x0e, 0x5b, 0x3c, 0xbd, 0xe0, 0xec, 0xd2, 0xa8, 0x14, 0xc8, 0xc7, 0x36, 0x1e, 0x8d, 0x57,
+    0xfe, 0x2f, 0x77, 0x2d, 0x89, 0x9c, 0x7f, 0xc1, 0xbe, 0x3e, 0xb7, 0x37, 0x63, 0x80, 0xee, 0xbc,
+];
+
+/// Fixed 32-byte action type shared across all H5/H6 suite and profile
+/// combinations. Suite separation is carried by `payload_hash`, not by this
+/// field.
+///
+/// `keccak256(b"pqhybridsign/shrincs/action-type/v1")`.
+pub const HYBRID_ACTION_TYPE: [u8; 32] = [
+    0x8c, 0xfe, 0xa3, 0x40, 0x74, 0x62, 0x5e, 0xf4, 0x1c, 0x2e, 0x43, 0x42, 0xcd, 0xbe, 0xc1, 0x59,
+    0x68, 0x95, 0xca, 0xaa, 0xff, 0x52, 0xee, 0x86, 0x64, 0x35, 0x4e, 0xa8, 0x76, 0xe1, 0xd0, 0x34,
+];
+
+/// Maps the hybrid bound message `M'` into an `ActionContext` per
+/// specification section 7.1.
+///
+/// `payload_hash = keccak256(M')`; `domain_separator` and `action_type` are
+/// the fixed constants above; `nonce` and `key_version` are the integrating
+/// account's replay counters, or `[0u8; 32]` where no account state machine
+/// exists. Deterministic: the same `m_prime`, `nonce`, and `key_version`
+/// always produce the same `ActionContext`.
+///
+/// The returned context is not guaranteed valid — run
+/// [`valid_action_context`] on it before signing.
+pub fn to_action_context(m_prime: &[u8], nonce: [u8; 32], key_version: [u8; 32]) -> ActionContext {
+    ActionContext {
+        domain_separator: HYBRID_DOMAIN_SEPARATOR,
+        nonce,
+        key_version,
+        action_type: HYBRID_ACTION_TYPE,
+        payload_hash: keccak256(m_prime),
+    }
+}
+
+fn keccak256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    hasher.update(data);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+/// Reimplementation of upstream `hashsigs_rs::shrincs::dispatch::valid_action_context`.
+///
+/// That function is `pub(crate)` in `hashsigs-rs` and unreachable from here,
+/// so this mirrors its checks exactly. Quoted verbatim from the upstream
+/// clone at `hashsigs-rs` commit `833de08d618b7e42b7991f7c684571133c3d88ab`,
+/// `src/shrincs/dispatch.rs:106-110`:
+///
+/// ```text
+/// pub(crate) fn valid_action_context(context: &ActionContext) -> bool {
+///     context.domain_separator != [0u8; HASH_LEN]
+///         && context.action_type != [0u8; HASH_LEN]
+///         && context.payload_hash != [0u8; HASH_LEN]
+/// }
+/// ```
+///
+/// `nonce` and `key_version` may legitimately be zero; `domain_separator`,
+/// `action_type`, and `payload_hash` must each be non-zero. Both upstream
+/// verify paths (`verify_stateful`, `verify_stateless`) enforce this same
+/// rule, but `ShrincsSigner::sign_stateful_action` does not — callers must
+/// run this check before signing.
+pub fn valid_action_context(context: &ActionContext) -> bool {
+    context.domain_separator != [0u8; 32]
+        && context.action_type != [0u8; 32]
+        && context.payload_hash != [0u8; 32]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ZERO: [u8; 32] = [0u8; 32];
+    const NONZERO_NONCE: [u8; 32] = [7u8; 32];
+    const NONZERO_KEY_VERSION: [u8; 32] = [9u8; 32];
+
+    #[test]
+    fn same_m_prime_maps_deterministically() {
+        let m_prime = b"suite-h5-hybrid-message";
+        let a = to_action_context(m_prime, NONZERO_NONCE, NONZERO_KEY_VERSION);
+        let b = to_action_context(m_prime, NONZERO_NONCE, NONZERO_KEY_VERSION);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn different_suite_labels_give_different_payload_hash() {
+        // M' embeds the suite label (specification section 7.1), so two
+        // messages differing only in that label must map to different
+        // payload hashes.
+        let m_prime_h5 = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
+        let m_prime_h6 = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
+        let ctx_h5 = to_action_context(m_prime_h5, ZERO, ZERO);
+        let ctx_h6 = to_action_context(m_prime_h6, ZERO, ZERO);
+        assert_ne!(ctx_h5.payload_hash, ctx_h6.payload_hash);
+    }
+
+    #[test]
+    fn different_nonce_changes_the_context() {
+        let m_prime = b"same message";
+        let a = to_action_context(m_prime, ZERO, ZERO);
+        let b = to_action_context(m_prime, NONZERO_NONCE, ZERO);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn different_key_version_changes_the_context() {
+        let m_prime = b"same message";
+        let a = to_action_context(m_prime, ZERO, ZERO);
+        let b = to_action_context(m_prime, ZERO, NONZERO_KEY_VERSION);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn validation_accepts_a_context_built_by_the_normal_mapping_path() {
+        let ctx = to_action_context(b"any message", ZERO, ZERO);
+        assert!(valid_action_context(&ctx));
+    }
+
+    #[test]
+    fn zero_nonce_and_zero_key_version_are_accepted() {
+        // The specification allows zero nonce/key_version where no account
+        // state machine exists.
+        let ctx = to_action_context(b"any message", ZERO, ZERO);
+        assert_eq!(ctx.nonce, ZERO);
+        assert_eq!(ctx.key_version, ZERO);
+        assert!(valid_action_context(&ctx));
+    }
+
+    #[test]
+    fn validation_rejects_zero_domain_separator() {
+        let mut ctx = to_action_context(b"any message", ZERO, ZERO);
+        ctx.domain_separator = ZERO;
+        assert!(!valid_action_context(&ctx));
+    }
+
+    #[test]
+    fn validation_rejects_zero_action_type() {
+        let mut ctx = to_action_context(b"any message", ZERO, ZERO);
+        ctx.action_type = ZERO;
+        assert!(!valid_action_context(&ctx));
+    }
+
+    #[test]
+    fn validation_rejects_zero_payload_hash() {
+        let mut ctx = to_action_context(b"any message", ZERO, ZERO);
+        ctx.payload_hash = ZERO;
+        assert!(!valid_action_context(&ctx));
+    }
+}

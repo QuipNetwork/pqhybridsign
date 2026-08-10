@@ -12,9 +12,9 @@ pub use error::{Error, Result};
 pub mod component;
 pub mod composite;
 pub mod derive;
+pub mod encoding_path;
 pub mod message;
 pub mod stateful;
-pub mod encoding_path;
 pub mod suite;
 
 pub use component::{ClassicalScheme, PqScheme};
