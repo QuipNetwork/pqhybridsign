@@ -14,3 +14,7 @@
     all(feature = "profile-128s-q18", feature = "profile-128s-q20"),
 ))]
 compile_error!("pqhybridsign-shrincs: exactly one profile-* feature may be enabled at a time");
+
+pub mod action;
+pub mod bundle;
+pub mod suites;
