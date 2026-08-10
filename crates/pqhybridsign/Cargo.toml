@@ -1,0 +1,25 @@
+[package]
+name = "pqhybridsign"
+description = "Hybrid post-quantum signatures: H1 (ed25519 + ML-DSA-44) and H3 (sr25519 + ML-DSA-44)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pqhybridsign-core = { path = "../pqhybridsign-core", default-features = false }
+subtle.workspace = true
+zeroize.workspace = true
+rand_core.workspace = true
+ed25519-zebra.workspace = true
+schnorrkel.workspace = true
+fips204.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+
+[features]
+default = ["std"]
+std = ["pqhybridsign-core/std", "schnorrkel/std", "ed25519-zebra/std"]

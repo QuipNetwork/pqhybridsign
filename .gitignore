@@ -5,3 +5,7 @@
 .beads-credential-key
 .beads/proxieddb/
 /.plans/
+
+# Rust
+/target
+Cargo.lock.bak
