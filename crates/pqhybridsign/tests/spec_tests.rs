@@ -132,7 +132,10 @@ fn t2_h1_hedged_is_deterministic_by_construction() {
     let mut b = vec![0u8; <H1 as Suite>::SIGNATURE_LEN];
     sign::<H1>(&sk, b"m", b"c", &mut OsRng, &mut a).expect("sign");
     sign::<H1>(&sk, b"m", b"c", &mut OsRng, &mut b).expect("sign");
-    assert_eq!(a, b, "hedged H1 signatures must repeat: both halves are message-deterministic");
+    assert_eq!(
+        a, b,
+        "hedged H1 signatures must repeat: both halves are message-deterministic"
+    );
 }
 
 #[test]
@@ -144,5 +147,9 @@ fn t2_hedged_signing_is_not_deterministic_for_sr25519() {
     let mut b = vec![0u8; <H3 as Suite>::SIGNATURE_LEN];
     sign::<H3>(&sk, b"m", b"c", &mut OsRng, &mut a).expect("sign");
     sign::<H3>(&sk, b"m", b"c", &mut OsRng, &mut b).expect("sign");
-    assert_ne!(&a[..64], &b[..64], "hedged sr25519 must not repeat a signature");
+    assert_ne!(
+        &a[..64],
+        &b[..64],
+        "hedged sr25519 must not repeat a signature"
+    );
 }

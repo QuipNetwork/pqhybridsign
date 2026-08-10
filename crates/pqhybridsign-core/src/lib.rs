@@ -16,8 +16,8 @@ pub mod message;
 pub mod suite;
 
 pub use component::{ClassicalScheme, PqScheme};
-pub use suite::Suite;
 pub use derive::derive_component_seeds;
-pub use message::{m_prime_len, write_m_prime, PREFIX};
 #[cfg(feature = "alloc")]
 pub use message::m_prime;
+pub use message::{m_prime_len, write_m_prime, PREFIX};
+pub use suite::Suite;

@@ -132,6 +132,9 @@ mod tests {
         let mut b = [0u8; MlDsa44::SIGNATURE_LEN];
         MlDsa44::sign_deterministic(&sk, b"m", b"n1", &mut a).expect("sign");
         MlDsa44::sign_deterministic(&sk, b"m", b"n2", &mut b).expect("sign");
-        assert_eq!(a, b, "the nonce is ignored: ML-DSA is deterministic by specification");
+        assert_eq!(
+            a, b,
+            "the nonce is ignored: ML-DSA is deterministic by specification"
+        );
     }
 }

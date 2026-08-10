@@ -25,7 +25,12 @@ struct SeededRng {
 
 impl SeededRng {
     fn new(seed: [u8; 32]) -> Self {
-        Self { state: seed, counter: 0, buffer: [0u8; 64], used: 64 }
+        Self {
+            state: seed,
+            counter: 0,
+            buffer: [0u8; 64],
+            used: 64,
+        }
     }
     fn refill(&mut self) {
         let mut hasher = Sha512::new();
@@ -139,7 +144,10 @@ fn check_len(buf: &[u8], want: usize) -> Result<()> {
     if buf.len() == want {
         Ok(())
     } else {
-        Err(Error::BadLength { expected: want, actual: buf.len() })
+        Err(Error::BadLength {
+            expected: want,
+            actual: buf.len(),
+        })
     }
 }
 

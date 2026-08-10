@@ -1,0 +1,51 @@
+stages: [check, test]
+
+default:
+  image: rust:1.83
+  before_script:
+    - rustup component add clippy rustfmt
+    - rustup target add wasm32-unknown-unknown
+
+fmt:
+  stage: check
+  script:
+    - cargo fmt --all -- --check
+
+clippy:
+  stage: check
+  script:
+    - cargo clippy --workspace --all-targets -- -D warnings
+
+deps:
+  stage: check
+  script:
+    # All three component crates require rand_core ^0.6. `cargo tree -i`
+    # prints one root line per matching version plus indented dependency
+    # edges below it, so counting lines that start at column 0 (no leading
+    # whitespace) and match "rand_core v" gives the count of distinct
+    # versions resolved in the graph, not the count of edges to it.
+    - |
+      count=$(cargo tree -i rand_core --workspace | grep -c '^rand_core v')
+      if [ "$count" -ne 1 ]; then
+        echo "Expected exactly one rand_core major version in the graph, found $count:"
+        cargo tree -i rand_core --workspace
+        exit 1
+      fi
+
+wasm:
+  stage: check
+  script:
+    - cargo build -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features
+    - cargo build -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features --features alloc
+
+test-debug:
+  stage: test
+  script:
+    - cargo test --workspace
+
+test-release:
+  stage: test
+  script:
+    # subtle uses debug_assert with secret-dependent branches, so release
+    # mode exercises different code than the debug build above.
+    - cargo test --workspace --release
