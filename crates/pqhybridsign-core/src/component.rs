@@ -77,6 +77,96 @@ pub trait PqScheme {
     fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Choice;
 }
 
+/// A post-quantum component whose stateful signing spends one-time state.
+///
+/// Sibling of [`PqScheme`], for components like SHRINCS that pair a
+/// stateful fast path (a signature spends a one-time leaf) with a stateless
+/// recovery path. The borrow shapes differ from [`PqScheme`] precisely
+/// because of that: stateless signing takes `&sk` (spends no state),
+/// stateful signing takes `&mut sk` (spends one leaf and must advance the
+/// component's own counter on success).
+///
+/// A stateful signature's encoded length grows with the leaf index (its
+/// authentication path), so unlike [`PqScheme::SIGNATURE_LEN`] there is no
+/// single fixed signature length here. [`FIXED_STATEFUL_SIG_LEN`] is the
+/// part that does not vary; [`STATELESS_SIG_LEN`] is fixed because the
+/// stateless path carries no leaf-dependent path at all.
+///
+/// [`FIXED_STATEFUL_SIG_LEN`]: PqStatefulScheme::FIXED_STATEFUL_SIG_LEN
+/// [`STATELESS_SIG_LEN`]: PqStatefulScheme::STATELESS_SIG_LEN
+pub trait PqStatefulScheme {
+    /// Name token used to compose the suite label. Profile-qualified, for
+    /// example `"shrincs-256s"`, since a stateful component's wire geometry
+    /// is a compile-time profile choice.
+    const NAME: &'static str;
+    /// Seed length this component consumes for key derivation.
+    const SEED_LEN: usize;
+    /// Stored public-key form: a commitment, not the full verify key.
+    const PUBLIC_KEY_LEN: usize;
+    /// Verify-key form supplied at verification time (larger than
+    /// `PUBLIC_KEY_LEN`: a commitment alone is not enough to verify
+    /// against).
+    const VERIFY_KEY_LEN: usize;
+    const SECRET_KEY_LEN: usize;
+    /// Upper bound on the one-time leaf budget a key can be given.
+    const LEAF_CAPACITY_LIMIT: u32;
+    /// Bytes of a stateful signature excluding its leaf-dependent
+    /// authentication path.
+    const FIXED_STATEFUL_SIG_LEN: usize;
+    /// Bytes of a stateless signature. Fixed: the stateless path carries no
+    /// leaf-dependent authentication path.
+    const STATELESS_SIG_LEN: usize;
+
+    /// MUST NOT implement `Clone`: a clone forks the one-time leaf budget,
+    /// and both copies would then be able to reissue the same leaf.
+    type SecretKey: zeroize::Zeroize;
+
+    /// Derive a secret key from `seed`, giving it a budget of
+    /// `max_signatures` one-time leaves, and write the verify key
+    /// (`VERIFY_KEY_LEN` bytes) into `vk_out`.
+    fn keygen_from_seed(
+        seed: &[u8],
+        max_signatures: u32,
+        vk_out: &mut [u8],
+    ) -> Result<Self::SecretKey>;
+
+    /// The leaf budget this key was given.
+    fn leaf_capacity(sk: &Self::SecretKey) -> u32;
+    /// The next unspent leaf.
+    fn next_leaf(sk: &Self::SecretKey) -> u32;
+
+    /// Scheme-specific precondition on the message to be signed, checked
+    /// BEFORE any leaf is spent. Returning `false` MUST cost nothing: no
+    /// leaf may be touched on the strength of a message that fails this
+    /// check.
+    fn precheck(msg: &[u8]) -> bool;
+
+    /// Upper bound on the stateful signature length for a key with this
+    /// leaf budget. The leaf that will actually be used is not known before
+    /// signing, so a caller sizing `sig_out` ahead of time must size for the
+    /// worst case.
+    fn max_stateful_sig_len(max_signatures: u32) -> usize;
+
+    /// Sign `msg` with the next unused leaf, advancing this component's own
+    /// leaf counter on success. Returns the number of bytes written into
+    /// `sig_out`.
+    fn sign_stateful(
+        sk: &mut Self::SecretKey,
+        vk: &[u8],
+        msg: &[u8],
+        sig_out: &mut [u8],
+    ) -> Result<usize>;
+
+    /// Sign `msg` without spending any leaf state. Returns the number of
+    /// bytes written into `sig_out`.
+    fn sign_stateless(sk: &Self::SecretKey, msg: &[u8], sig_out: &mut [u8]) -> Result<usize>;
+
+    /// Verify a stateful signature against the verify key `vk`.
+    fn verify_stateful(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice;
+    /// Verify a stateless signature against the verify key `vk`.
+    fn verify_stateless(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

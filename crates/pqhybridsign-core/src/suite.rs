@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use crate::{ClassicalScheme, PqScheme};
+use crate::{ClassicalScheme, PqScheme, PqStatefulScheme};
 
 /// One hybrid construction: a classical component, a post-quantum
 /// component, and the label that separates it from every other suite.
@@ -78,6 +78,98 @@ macro_rules! hybrid_suite {
                     <$pq as $crate::PqScheme>::NAME, $ptok,
                 ),
                 "post-quantum name token does not match PqScheme::NAME",
+            );
+        };
+    };
+}
+
+/// One stateful hybrid construction: a classical component, a stateful
+/// post-quantum component, and the label that separates it from every other
+/// suite.
+///
+/// Mirrors [`Suite`], but its post-quantum half is [`PqStatefulScheme`]
+/// rather than [`PqScheme`]: a stateful signature spends a one-time leaf and
+/// its encoded length varies with the leaf index, neither of which
+/// [`PqScheme`]'s fixed-length, stateless shape can express.
+///
+/// `STORED_PUBLIC_KEY_LEN` is the small on-storage form (a classical public
+/// key plus a commitment); `VERIFY_PUBLIC_KEY_LEN` is the larger form a
+/// verifier needs at verification time (a classical public key plus the
+/// full verify key). There is no single `SIGNATURE_LEN`: see
+/// [`PqStatefulScheme::FIXED_STATEFUL_SIG_LEN`] and
+/// [`PqStatefulScheme::STATELESS_SIG_LEN`].
+pub trait StatefulSuite {
+    type Classical: ClassicalScheme;
+    type Pq: PqStatefulScheme;
+
+    /// Null-terminated registry label from specification section 7.
+    const LABEL: &'static [u8];
+
+    const STORED_PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
+        + <Self::Pq as PqStatefulScheme>::PUBLIC_KEY_LEN;
+    const VERIFY_PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
+        + <Self::Pq as PqStatefulScheme>::VERIFY_KEY_LEN;
+    const SECRET_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::SECRET_KEY_LEN
+        + <Self::Pq as PqStatefulScheme>::SECRET_KEY_LEN;
+    /// Byte offset where the post-quantum half begins in the composite wire
+    /// encoding (`pqhybridsign_core::encoding_path`).
+    const SPLIT: usize = <Self::Classical as ClassicalScheme>::SIGNATURE_LEN;
+}
+
+/// Declare a stateful hybrid suite.
+///
+/// Same compile-time discipline as [`hybrid_suite!`]: composes the label as
+/// `"hybrid-" classical "-" pq "-v1"` plus a null byte, then checks the
+/// result against the registry literal and its byte count, and each name
+/// token against its component's `NAME`, all at compile time.
+#[macro_export]
+macro_rules! hybrid_stateful_suite {
+    (
+        $(#[$meta:meta])*
+        $name:ident,
+        classical = $classical:ty as $ctok:literal,
+        pq = $pq:ty as $ptok:literal,
+        label = $label:literal,
+        label_len = $len:literal $(,)?
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug)]
+        pub struct $name;
+
+        impl $crate::StatefulSuite for $name {
+            type Classical = $classical;
+            type Pq = $pq;
+            const LABEL: &'static [u8] =
+                ::core::concat!("hybrid-", $ctok, "-", $ptok, "-v1", "\0").as_bytes();
+        }
+
+        const _: () = {
+            // The composed name must equal the registry literal.
+            assert!(
+                $crate::suite::const_str_eq(
+                    ::core::concat!("hybrid-", $ctok, "-", $ptok, "-v1"),
+                    $label,
+                ),
+                "composed suite label does not match the registry literal",
+            );
+            // The byte count must equal the registry byte count, which
+            // includes the trailing null byte.
+            assert!(
+                $label.len() + 1 == $len,
+                "label length does not match the registry byte count",
+            );
+            // Each name token must equal its component's NAME constant.
+            assert!(
+                $crate::suite::const_str_eq(
+                    <$classical as $crate::ClassicalScheme>::NAME, $ctok,
+                ),
+                "classical name token does not match ClassicalScheme::NAME",
+            );
+            assert!(
+                $crate::suite::const_str_eq(
+                    <$pq as $crate::PqStatefulScheme>::NAME, $ptok,
+                ),
+                "post-quantum name token does not match PqStatefulScheme::NAME",
             );
         };
     };

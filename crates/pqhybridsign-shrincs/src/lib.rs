@@ -17,4 +17,9 @@ compile_error!("pqhybridsign-shrincs: exactly one profile-* feature may be enabl
 
 pub mod action;
 pub mod bundle;
+pub mod scheme;
 pub mod suites;
+
+pub use pqhybridsign_core::stateful_composite::{keygen, PublicKey, SecretKey};
+pub use scheme::ShrincsScheme;
+pub use suites::{H5, H6};

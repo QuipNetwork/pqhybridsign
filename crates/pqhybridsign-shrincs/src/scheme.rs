@@ -1,0 +1,409 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! [`ShrincsScheme`]: the [`PqStatefulScheme`] implementation that lets H5
+//! and H6 (declared in `suites.rs`) sign and verify through
+//! `pqhybridsign_core::stateful_composite`'s generic driver.
+//!
+//! Everything SHRINCS-specific lives here: the commitment bundle, the
+//! `ActionContext` mapping, and the flat wire encoding of a single
+//! component signature. The generic driver in `pqhybridsign_core` never
+//! sees any of it -- only the opaque `vk`/`sk`/`msg`/`sig` byte buffers this
+//! trait's methods take and return.
+//!
+//! # Why the component signature is flattened by hand
+//!
+//! `hashsigs_rs::shrincs::Signature::to_bytes()` and
+//! `sphincs_plus_c::Signature::to_bytes()` use upstream's Solidity ABI
+//! encoding (`abi.encode`) -- offsets, padding, dynamic-array length words.
+//! Re-deriving that framing by hand would be needless risk for a format we
+//! do not need to interoperate with: `pqhybridsign_core::encoding_path` is
+//! *our* composite wire format (specification section 6), not upstream's.
+//! Every field these signatures carry is a public struct field (`pub
+//! randomizer`, `pub chains`, ...; confirmed against the pinned upstream
+//! source, `.superpowers/sdd/shrincs-api-reference.md`), so flattening them
+//! into `randomizer || counter || fixed-count fields` is a direct
+//! byte-for-byte reading of already-public data, not a reimplementation of
+//! upstream's own codec.
+
+use hashsigs_rs::shrincs::{
+    Keys, PublicKey as ShrincsBundlePublicKey, ShrincsSigner, ShrincsVerifier,
+};
+use pqhybridsign_core::{Error, PqStatefulScheme, Result};
+use subtle::Choice;
+use zeroize::Zeroize;
+
+use crate::{action, bundle};
+
+/// Marker type implementing [`PqStatefulScheme`] for SHRINCS.
+#[derive(Clone, Copy, Debug)]
+pub struct ShrincsScheme;
+
+/// Offset of the 32-byte `publicKeyCommitment` field inside a
+/// [`bundle::BUNDLE_LEN`]-byte SHRINCS bundle (`statefulPublicKey(68) ||
+/// commitment(32) || ...`).
+const BUNDLE_COMMITMENT_OFFSET: usize = 68;
+
+/// Upper bound on `max_stateful_signatures`, mirroring upstream's
+/// `pub(crate) MAX_STATEFUL_SIGNATURES_LIMIT` (`hashsigs_rs`
+/// `src/shrincs/uxmss.rs:39`, unreachable from outside that crate). Kept in
+/// sync by `tests::keygen_rejects_max_signatures_over_the_limit`.
+const MAX_STATEFUL_SIGNATURES_LIMIT: u32 = 4096;
+
+// ---------------------------------------------------------------------
+// Profile-derived wire-format geometry, computed from `hashsigs_rs`' own
+// re-exported profile constants so it stays correct across every profile
+// without hardcoding per-profile numbers.
+// ---------------------------------------------------------------------
+
+const HASH_LEN: usize = hashsigs_rs::HASH_LEN;
+const NUM_WOTS_CHAINS: usize = hashsigs_rs::shrincs::NUM_WOTS_CHAINS as usize;
+const NUM_FORS_TREES: usize = hashsigs_rs::shrincs::NUM_FORS_TREES as usize;
+const FORS_TREE_HEIGHT: usize = hashsigs_rs::shrincs::FORS_TREE_HEIGHT as usize;
+const NUM_HYPERTREE_LAYERS: usize = hashsigs_rs::shrincs::NUM_HYPERTREE_LAYERS as usize;
+const HYPERTREE_HEIGHT: usize = hashsigs_rs::shrincs::HYPERTREE_HEIGHT as usize;
+const SUBTREE_HEIGHT: usize = HYPERTREE_HEIGHT / NUM_HYPERTREE_LAYERS;
+
+/// `randomizer(32) || counter(4) || chains(NUM_WOTS_CHAINS * 32)`: the
+/// WOTS-C signature body shared by the stateful (UXMSS) fast path and every
+/// hypertree layer of the stateless path.
+const WOTS_C_SIG_LEN: usize = HASH_LEN + 4 + NUM_WOTS_CHAINS * HASH_LEN;
+
+const FIXED_STATEFUL_LEN: usize = WOTS_C_SIG_LEN;
+
+/// FORS-C reveals `NUM_FORS_TREES - 1` entries (the omitted final tree must
+/// select leaf 0; see `hashsigs_rs::sphincs_plus_c::fors_c`).
+const FORS_LEN: usize =
+    HASH_LEN + 4 + (NUM_FORS_TREES - 1) * (HASH_LEN + FORS_TREE_HEIGHT * HASH_LEN);
+const HYPERTREE_LEN: usize =
+    NUM_HYPERTREE_LAYERS * (HASH_LEN + WOTS_C_SIG_LEN + SUBTREE_HEIGHT * HASH_LEN);
+const STATELESS_LEN: usize = FORS_LEN + HYPERTREE_LEN;
+
+/// The composite SHRINCS secret key: `Keys` plus its own `Zeroize`, since
+/// upstream's `Keys` does not implement the trait itself.
+pub struct ShrincsSecretKey {
+    keys: Keys,
+}
+
+impl Zeroize for ShrincsSecretKey {
+    fn zeroize(&mut self) {
+        // `Keys` does not implement `Zeroize` (upstream; its two
+        // private-key halves are individually `ZeroizeOnDrop`, so they wipe
+        // when this struct drops, but there is no hook to wipe them early
+        // on an explicit `zeroize()` call). Nothing more to do here.
+    }
+}
+
+impl PqStatefulScheme for ShrincsScheme {
+    #[cfg(feature = "profile-256s")]
+    const NAME: &'static str = "shrincs-256s";
+    #[cfg(feature = "profile-256s-sha2")]
+    const NAME: &'static str = "shrincs-256s-sha2";
+    #[cfg(feature = "profile-128s-q18")]
+    const NAME: &'static str = "shrincs-128s-q18";
+    #[cfg(feature = "profile-128s-q20")]
+    const NAME: &'static str = "shrincs-128s-q20";
+
+    const SEED_LEN: usize = 32;
+    /// Stored form: a 32-byte commitment.
+    const PUBLIC_KEY_LEN: usize = 32;
+    /// Verify form: the full commitment bundle.
+    const VERIFY_KEY_LEN: usize = bundle::BUNDLE_LEN;
+    const SECRET_KEY_LEN: usize = hashsigs_rs::shrincs::key::KEYS_BYTES;
+    const LEAF_CAPACITY_LIMIT: u32 = MAX_STATEFUL_SIGNATURES_LIMIT;
+    const FIXED_STATEFUL_SIG_LEN: usize = FIXED_STATEFUL_LEN;
+    const STATELESS_SIG_LEN: usize = STATELESS_LEN;
+
+    type SecretKey = ShrincsSecretKey;
+
+    fn keygen_from_seed(
+        seed: &[u8],
+        max_signatures: u32,
+        vk_out: &mut [u8],
+    ) -> Result<Self::SecretKey> {
+        if vk_out.len() != bundle::BUNDLE_LEN {
+            return Err(Error::BadLength {
+                expected: bundle::BUNDLE_LEN,
+                actual: vk_out.len(),
+            });
+        }
+        if max_signatures == 0 || max_signatures > MAX_STATEFUL_SIGNATURES_LIMIT {
+            return Err(Error::ComponentFailure);
+        }
+        let (keys, public_key) =
+            ShrincsSigner::keygen(seed, max_signatures).ok_or(Error::ComponentFailure)?;
+        write_bundle(&public_key, vk_out);
+        Ok(ShrincsSecretKey { keys })
+    }
+
+    fn leaf_capacity(sk: &Self::SecretKey) -> u32 {
+        sk.keys.stateful().public_key().max_signatures
+    }
+
+    fn next_leaf(sk: &Self::SecretKey) -> u32 {
+        // Upstream's `next_leaf_index` is 1-based (starts at 1); the
+        // generic driver and `LeafJournal` use the 0-based convention
+        // ("for a fresh key this is 0"). Normalize here, once, rather than
+        // asking every caller to know upstream's off-by-one.
+        sk.keys.stateful().next_leaf_index().saturating_sub(1)
+    }
+
+    fn precheck(msg: &[u8]) -> bool {
+        let ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
+        action::valid_action_context(&ctx)
+    }
+
+    fn max_stateful_sig_len(max_signatures: u32) -> usize {
+        FIXED_STATEFUL_LEN + max_signatures as usize * 32
+    }
+
+    fn sign_stateful(
+        sk: &mut Self::SecretKey,
+        vk: &[u8],
+        msg: &[u8],
+        sig_out: &mut [u8],
+    ) -> Result<usize> {
+        let public_key = parse_bundle(vk)?;
+        let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
+        // `sign_stateful_action` does not validate its `ActionContext`
+        // itself (see `action` module docs); the generic driver already ran
+        // `precheck` (== `valid_action_context`) before calling here, so
+        // this call only ever sees a valid context.
+        let sig = ShrincsSigner::sign_stateful_action(&mut sk.keys, &public_key, &action_ctx)
+            .ok_or(Error::ComponentFailure)?;
+        write_flat_stateful(&sig, sig_out)
+    }
+
+    fn sign_stateless(sk: &Self::SecretKey, msg: &[u8], sig_out: &mut [u8]) -> Result<usize> {
+        let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
+        let commitment = *sk.keys.public_key_commitment().as_bytes();
+        let message = ShrincsVerifier::new().stateless_action_message_hash(commitment, &action_ctx);
+        let sig =
+            ShrincsSigner::sign_stateless_raw(&sk.keys, &message).ok_or(Error::ComponentFailure)?;
+        write_flat_stateless(&sig, sig_out)
+    }
+
+    fn verify_stateful(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice {
+        let Some((commitment, public_key)) = verify_bundle_self_consistent(vk) else {
+            return Choice::from(0u8);
+        };
+        let Some(shrincs_sig) = read_flat_stateful(sig) else {
+            return Choice::from(0u8);
+        };
+        let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
+        Choice::from(u8::from(ShrincsVerifier::new().verify_stateful(
+            commitment,
+            &public_key,
+            &action_ctx,
+            &shrincs_sig,
+        )))
+    }
+
+    fn verify_stateless(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice {
+        let Some((commitment, public_key)) = verify_bundle_self_consistent(vk) else {
+            return Choice::from(0u8);
+        };
+        let Some(shrincs_sig) = read_flat_stateless(sig) else {
+            return Choice::from(0u8);
+        };
+        let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
+        Choice::from(u8::from(ShrincsVerifier::new().verify_stateless(
+            commitment,
+            &public_key,
+            &action_ctx,
+            &shrincs_sig,
+        )))
+    }
+}
+
+/// Flatten a `hashsigs_rs::shrincs::PublicKey` into the
+/// [`bundle::BUNDLE_LEN`]-byte bundle layout `statefulPublicKey(68) ||
+/// commitment(32) || pkSeed(32) || hypertreeRoot(32)`.
+fn write_bundle(pk: &ShrincsBundlePublicKey, out: &mut [u8]) {
+    debug_assert_eq!(out.len(), bundle::BUNDLE_LEN);
+    let mut at = 0;
+    for field in [
+        &pk.stateful_public_key,
+        &pk.public_key_commitment,
+        &pk.pk_seed,
+        &pk.hypertree_root,
+    ] {
+        out[at..at + field.len()].copy_from_slice(field);
+        at += field.len();
+    }
+}
+
+/// Parse a trusted (self-produced) bundle into a `PublicKey`, without
+/// re-verifying the commitment. Used on the signing side, where `vk` is
+/// always the caller's own cached verify key, never attacker-supplied.
+fn parse_bundle(vk: &[u8]) -> Result<ShrincsBundlePublicKey> {
+    if vk.len() != bundle::BUNDLE_LEN {
+        return Err(Error::BadLength {
+            expected: bundle::BUNDLE_LEN,
+            actual: vk.len(),
+        });
+    }
+    Ok(ShrincsBundlePublicKey {
+        stateful_public_key: vk[..BUNDLE_COMMITMENT_OFFSET].to_vec(),
+        public_key_commitment: vk[BUNDLE_COMMITMENT_OFFSET..BUNDLE_COMMITMENT_OFFSET + 32].to_vec(),
+        pk_seed: vk[BUNDLE_COMMITMENT_OFFSET + 32..BUNDLE_COMMITMENT_OFFSET + 64].to_vec(),
+        hypertree_root: vk[BUNDLE_COMMITMENT_OFFSET + 64..BUNDLE_COMMITMENT_OFFSET + 96].to_vec(),
+    })
+}
+
+/// Parse and self-verify a possibly-untrusted `vk` on the verification
+/// side: recomputes the commitment from the bundle and rejects any
+/// mismatch (`bundle::verify_bundle`), so a single tampered byte anywhere
+/// in `vk` is caught here rather than silently accepted.
+fn verify_bundle_self_consistent(vk: &[u8]) -> Option<([u8; 32], ShrincsBundlePublicKey)> {
+    if vk.len() != bundle::BUNDLE_LEN {
+        return None;
+    }
+    let mut stored_commitment = [0u8; 32];
+    stored_commitment.copy_from_slice(&vk[BUNDLE_COMMITMENT_OFFSET..BUNDLE_COMMITMENT_OFFSET + 32]);
+    let public_key = bundle::verify_bundle(vk, &stored_commitment).ok()?;
+    Some((stored_commitment, public_key))
+}
+
+fn write_flat_stateful(sig: &hashsigs_rs::shrincs::Signature, sig_out: &mut [u8]) -> Result<usize> {
+    let needed = FIXED_STATEFUL_LEN + sig.auth_path.len() * 32;
+    if sig_out.len() < needed {
+        return Err(Error::OutputBufferTooSmall {
+            needed,
+            actual: sig_out.len(),
+        });
+    }
+    let mut at = 0;
+    write_bytes(sig_out, &mut at, &sig.randomizer);
+    write_bytes(sig_out, &mut at, &sig.counter.to_be_bytes());
+    for chain in &sig.chains {
+        write_bytes(sig_out, &mut at, chain);
+    }
+    for node in &sig.auth_path {
+        write_bytes(sig_out, &mut at, node);
+    }
+    Ok(at)
+}
+
+fn write_flat_stateless(
+    sig: &hashsigs_rs::shrincs::StatelessSignature,
+    sig_out: &mut [u8],
+) -> Result<usize> {
+    if sig_out.len() < STATELESS_LEN {
+        return Err(Error::OutputBufferTooSmall {
+            needed: STATELESS_LEN,
+            actual: sig_out.len(),
+        });
+    }
+    let mut at = 0;
+    write_bytes(sig_out, &mut at, &sig.fors.randomizer);
+    write_bytes(sig_out, &mut at, &sig.fors.counter.to_be_bytes());
+    for entry in &sig.fors.entries {
+        write_bytes(sig_out, &mut at, &entry.secret_leaf);
+        for node in &entry.auth_path {
+            write_bytes(sig_out, &mut at, node);
+        }
+    }
+    for layer in &sig.hypertree {
+        write_bytes(sig_out, &mut at, &layer.wots_c_pk_hash);
+        write_bytes(sig_out, &mut at, &layer.wots_c_signature.randomizer);
+        write_bytes(
+            sig_out,
+            &mut at,
+            &layer.wots_c_signature.counter.to_be_bytes(),
+        );
+        for chain in &layer.wots_c_signature.chains {
+            write_bytes(sig_out, &mut at, chain);
+        }
+        for node in &layer.auth_path {
+            write_bytes(sig_out, &mut at, node);
+        }
+    }
+    Ok(at)
+}
+
+fn write_bytes(out: &mut [u8], at: &mut usize, bytes: &[u8]) {
+    out[*at..*at + bytes.len()].copy_from_slice(bytes);
+    *at += bytes.len();
+}
+
+fn read_flat_stateful(bytes: &[u8]) -> Option<hashsigs_rs::shrincs::Signature> {
+    if bytes.len() < FIXED_STATEFUL_LEN || (bytes.len() - FIXED_STATEFUL_LEN) % HASH_LEN != 0 {
+        return None;
+    }
+    let mut at = 0;
+    let randomizer = read_hash(bytes, &mut at)?;
+    let counter = read_u32(bytes, &mut at)?;
+    let chains = read_hashes(bytes, &mut at, NUM_WOTS_CHAINS)?;
+    let remaining = (bytes.len() - at) / HASH_LEN;
+    let auth_path = read_hashes(bytes, &mut at, remaining)?;
+    Some(hashsigs_rs::shrincs::Signature {
+        randomizer,
+        counter,
+        chains,
+        auth_path,
+    })
+}
+
+fn read_flat_stateless(bytes: &[u8]) -> Option<hashsigs_rs::shrincs::StatelessSignature> {
+    if bytes.len() != STATELESS_LEN {
+        return None;
+    }
+    let mut at = 0;
+
+    let randomizer = read_hash(bytes, &mut at)?;
+    let counter = read_u32(bytes, &mut at)?;
+    let mut entries = Vec::with_capacity(NUM_FORS_TREES - 1);
+    for _ in 0..NUM_FORS_TREES - 1 {
+        let secret_leaf = read_hash(bytes, &mut at)?;
+        let auth_path = read_hashes(bytes, &mut at, FORS_TREE_HEIGHT)?;
+        entries.push(hashsigs_rs::sphincs_plus_c::ForsEntry {
+            secret_leaf,
+            auth_path,
+        });
+    }
+    let fors = hashsigs_rs::sphincs_plus_c::ForsSignature {
+        randomizer,
+        counter,
+        entries,
+    };
+
+    let mut hypertree = Vec::with_capacity(NUM_HYPERTREE_LAYERS);
+    for _ in 0..NUM_HYPERTREE_LAYERS {
+        let wots_c_pk_hash = read_hash(bytes, &mut at)?;
+        let wots_randomizer = read_hash(bytes, &mut at)?;
+        let wots_counter = read_u32(bytes, &mut at)?;
+        let chains = read_hashes(bytes, &mut at, NUM_WOTS_CHAINS)?;
+        let auth_path = read_hashes(bytes, &mut at, SUBTREE_HEIGHT)?;
+        hypertree.push(hashsigs_rs::sphincs_plus_c::LayerSignature {
+            wots_c_pk_hash,
+            wots_c_signature: hashsigs_rs::wots_c::Signature {
+                randomizer: wots_randomizer,
+                counter: wots_counter,
+                chains,
+            },
+            auth_path,
+        });
+    }
+
+    debug_assert_eq!(at, STATELESS_LEN);
+    Some(hashsigs_rs::shrincs::StatelessSignature { fors, hypertree })
+}
+
+fn read_hash(bytes: &[u8], at: &mut usize) -> Option<[u8; HASH_LEN]> {
+    let slice = bytes.get(*at..*at + HASH_LEN)?;
+    *at += HASH_LEN;
+    <[u8; HASH_LEN]>::try_from(slice).ok()
+}
+
+fn read_u32(bytes: &[u8], at: &mut usize) -> Option<u32> {
+    let slice = bytes.get(*at..*at + 4)?;
+    *at += 4;
+    Some(u32::from_be_bytes(<[u8; 4]>::try_from(slice).ok()?))
+}
+
+fn read_hashes(bytes: &[u8], at: &mut usize, count: usize) -> Option<Vec<[u8; HASH_LEN]>> {
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        out.push(read_hash(bytes, at)?);
+    }
+    Some(out)
+}

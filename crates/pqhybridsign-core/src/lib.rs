@@ -15,11 +15,13 @@ pub mod derive;
 pub mod encoding_path;
 pub mod message;
 pub mod stateful;
+#[cfg(feature = "alloc")]
+pub mod stateful_composite;
 pub mod suite;
 
-pub use component::{ClassicalScheme, PqScheme};
+pub use component::{ClassicalScheme, PqScheme, PqStatefulScheme};
 pub use derive::derive_component_seeds;
 #[cfg(feature = "alloc")]
 pub use message::m_prime;
 pub use message::{m_prime_len, write_m_prime, PREFIX};
-pub use suite::Suite;
+pub use suite::{StatefulSuite, Suite};
