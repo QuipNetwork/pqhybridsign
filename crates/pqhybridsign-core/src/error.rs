@@ -17,6 +17,17 @@ pub enum Error {
     OutputBufferTooSmall { needed: usize, actual: usize },
     /// A soft derivation junction was supplied. Only hard junctions exist.
     SoftJunctionRejected,
+    /// A path-selected signature carried a selector other than `0x01`
+    /// (stateful) or `0x02` (stateless).
+    BadPathSelector { selector: u8 },
+    /// A declared `LeafCount` was below 1 or above the `maxSignatures` the
+    /// verified commitment bundle records.
+    LeafCountOutOfRange {
+        leaf_count: u32,
+        max_signatures: u32,
+    },
+    /// Bytes remained past the length the encoding implies.
+    TrailingBytes { expected: usize, actual: usize },
     /// A component crate reported an internal failure.
     ComponentFailure,
 }
@@ -38,6 +49,22 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "soft derivation junctions are rejected for every hybrid suite"
+                )
+            }
+            Self::BadPathSelector { selector } => {
+                write!(f, "path selector {selector:#04x} is not 0x01 or 0x02")
+            }
+            Self::LeafCountOutOfRange {
+                leaf_count,
+                max_signatures,
+            } => write!(
+                f,
+                "leaf count {leaf_count} outside 1..={max_signatures} for this key"
+            ),
+            Self::TrailingBytes { expected, actual } => {
+                write!(
+                    f,
+                    "trailing bytes: encoding implies {expected} bytes, got {actual}"
                 )
             }
             Self::ComponentFailure => write!(f, "component algorithm failed"),
