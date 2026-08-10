@@ -5,3 +5,6 @@
 
 pub mod classical;
 pub mod pq;
+mod suites;
+
+pub use suites::{H1, H3};
