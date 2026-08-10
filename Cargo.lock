@@ -231,6 +231,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashsigs-rs"
+version = "0.2.0-rc.2"
+source = "git+https://gitlab.com/quip.network/hashsigs-rs.git?rev=833de08d618b7e42b7991f7c684571133c3d88ab#833de08d618b7e42b7991f7c684571133c3d88ab"
+dependencies = [
+ "serde",
+ "sha2",
+ "sha3",
+ "zeroize",
+]
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -345,6 +356,21 @@ dependencies = [
  "hkdf",
  "rand_core",
  "sha2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "pqhybridsign-shrincs"
+version = "0.1.0"
+dependencies = [
+ "hashsigs-rs",
+ "hex",
+ "pqhybridsign",
+ "pqhybridsign-core",
+ "serde",
+ "serde_json",
+ "sha3",
  "subtle",
  "zeroize",
 ]

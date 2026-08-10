@@ -1,0 +1,28 @@
+[package]
+name = "pqhybridsign-shrincs"
+description = "Stateful hash-based hybrid signatures: H5 (ed25519 + SHRINCS) and H6 (sr25519 + SHRINCS)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pqhybridsign-core = { path = "../pqhybridsign-core" }
+pqhybridsign = { path = "../pqhybridsign" }
+hashsigs-rs.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+sha3 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+hex.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = ["profile-256s"]
+profile-256s = []
+profile-256s-sha2 = []
+profile-128s-q18 = []
+profile-128s-q20 = []
