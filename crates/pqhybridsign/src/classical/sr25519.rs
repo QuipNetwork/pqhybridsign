@@ -88,7 +88,11 @@ impl ClassicalScheme for Sr25519 {
         check_len(pk_out, Self::PUBLIC_KEY_LEN)?;
         let mini = MiniSecretKey::from_bytes(seed).map_err(|_| Error::ComponentFailure)?;
         let keypair = mini.expand_to_keypair(ExpansionMode::Ed25519);
-        sk_out.copy_from_slice(&keypair.secret.to_bytes());
+        // `to_bytes` returns an owned array with no drop glue, so wipe the
+        // temporary once it has been copied into the caller's buffer.
+        let mut secret_bytes = keypair.secret.to_bytes();
+        sk_out.copy_from_slice(&secret_bytes);
+        secret_bytes.zeroize();
         pk_out.copy_from_slice(&keypair.public.to_bytes());
         Ok(())
     }
@@ -120,9 +124,12 @@ impl ClassicalScheme for Sr25519 {
         hasher.update(sk);
         hasher.update(nonce);
         hasher.update(msg);
-        let digest = hasher.finalize();
+        let mut digest = hasher.finalize();
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&digest[..32]);
+        // The digest is secret: its first half is the nonce seed and it is
+        // derived from the secret key.
+        digest.zeroize();
         let result = sign_with_rng(sk, msg, label, &mut SeededRng::new(seed), sig_out);
         seed.zeroize();
         result

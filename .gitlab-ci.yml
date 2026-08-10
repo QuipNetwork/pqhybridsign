@@ -37,6 +37,10 @@ wasm:
   script:
     - cargo build -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features
     - cargo build -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features --features alloc
+    # The lattice crate must also build without an allocator: it is the
+    # crate that pulls in ed25519-zebra, schnorrkel and fips204, any of
+    # which could introduce a std or getrandom dependency.
+    - cargo build -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
 
 test-debug:
   stage: test

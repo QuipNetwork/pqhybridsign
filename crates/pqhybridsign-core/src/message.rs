@@ -57,6 +57,8 @@ mod tests {
 
     const H1: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
 
+    // Uses the allocating `m_prime` wrapper.
+    #[cfg(feature = "alloc")]
     #[test]
     fn layout_matches_the_specification() {
         let out = m_prime(H1, b"chain", b"hello").expect("build");
@@ -67,6 +69,8 @@ mod tests {
         assert_eq!(&out[7 + H1.len()..], b"hello");
     }
 
+    // Uses the allocating `m_prime` wrapper.
+    #[cfg(feature = "alloc")]
     #[test]
     fn empty_context_encodes_a_zero_length() {
         let out = m_prime(H1, b"", b"m").expect("build");
@@ -74,6 +78,8 @@ mod tests {
         assert_eq!(&out[2 + H1.len()..], b"m");
     }
 
+    // Uses the allocating `m_prime` wrapper.
+    #[cfg(feature = "alloc")]
     #[test]
     fn context_over_255_bytes_is_rejected() {
         let ctx = [0u8; 256];
@@ -84,6 +90,8 @@ mod tests {
         );
     }
 
+    // Uses the allocating `m_prime` wrapper.
+    #[cfg(feature = "alloc")]
     #[test]
     fn context_of_exactly_255_bytes_is_accepted() {
         let ctx = [7u8; 255];
@@ -103,8 +111,9 @@ mod tests {
     #[test]
     fn a_short_buffer_is_rejected_and_not_partially_written() {
         let need = m_prime_len(H1, b"", b"m").expect("len");
-        let mut buf = alloc::vec![0u8; need - 1];
-        let err = write_m_prime(&mut buf, H1, b"", b"m").unwrap_err();
+        let mut storage = [0u8; 64];
+        let buf = &mut storage[..need - 1];
+        let err = write_m_prime(buf, H1, b"", b"m").unwrap_err();
         assert_eq!(
             err,
             Error::OutputBufferTooSmall {
@@ -115,6 +124,8 @@ mod tests {
         assert!(buf.iter().all(|b| *b == 0), "must not partially write");
     }
 
+    // Uses the allocating `m_prime` wrapper.
+    #[cfg(feature = "alloc")]
     #[test]
     fn different_labels_give_different_bindings() {
         const H3: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";

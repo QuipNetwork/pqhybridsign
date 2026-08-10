@@ -167,6 +167,7 @@ fn malformed_input_returns_false_and_never_panics() {
     assert!(!verify::<HashH1>(&pk, b"hello", &long_ctx, &sig));
 }
 
+#[cfg(feature = "alloc")]
 #[test]
 fn a_message_longer_than_the_stack_buffer_round_trips() {
     let msg = vec![0xa5u8; 4096];
@@ -175,6 +176,37 @@ fn a_message_longer_than_the_stack_buffer_round_trips() {
     let mut bad = sig.clone();
     bad[0] ^= 1;
     assert!(!verify::<HashH1>(&pk, &msg, b"chain", &bad));
+}
+
+/// Without `alloc`, `M'` lives in a 512-byte stack buffer. For the 26-byte
+/// suite label that leaves 484 bytes for `ctx` and `msg` together. Signing
+/// past the ceiling must report `OutputBufferTooSmall` rather than truncate.
+///
+/// Run with `cargo test -p pqhybridsign-core --no-default-features`.
+#[cfg(not(feature = "alloc"))]
+#[test]
+fn without_alloc_an_oversized_message_reports_the_ceiling() {
+    let mut sk = vec![0u8; HashH1::SECRET_KEY_LEN];
+    let mut pk = vec![0u8; HashH1::PUBLIC_KEY_LEN];
+    keypair_from_seed::<HashH1>(&[9u8; 32], &mut sk, &mut pk).expect("keypair");
+    let mut sig = vec![0u8; HashH1::SIGNATURE_LEN];
+
+    // 1 prefix + 26 label + 1 length byte + 0 ctx + 484 msg = 512 exactly.
+    let at_ceiling = vec![0xa5u8; 484];
+    sign_deterministic::<HashH1>(&sk, &at_ceiling, b"", b"n", &mut sig)
+        .expect("484 bytes is the largest message that fits");
+    assert!(verify::<HashH1>(&pk, &at_ceiling, b"", &sig));
+
+    let over = vec![0xa5u8; 1024];
+    assert_eq!(
+        sign_deterministic::<HashH1>(&sk, &over, b"", b"n", &mut sig).unwrap_err(),
+        Error::OutputBufferTooSmall {
+            needed: 1 + 26 + 1 + 1024,
+            actual: 512,
+        }
+    );
+    // Verification of an oversized message is a `false`, never a panic.
+    assert!(!verify::<HashH1>(&pk, &over, b"", &sig));
 }
 
 #[test]

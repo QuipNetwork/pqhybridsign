@@ -14,6 +14,15 @@ use zeroize::Zeroize;
 
 /// Largest `M'` this crate builds on the stack. Longer messages need the
 /// `alloc` feature.
+///
+/// 512 bytes is the largest buffer this crate is willing to place on the
+/// stack of an embedded or wasm target that has no allocator. `M'` is
+/// `0x01 || Label || len(ctx) || ctx || M`, so the space left for `M` is
+/// `512 - 1 - Label.len() - 1 - ctx.len()`. Both shipped suites carry a
+/// 26-byte label, which leaves 484 bytes for the message and the context
+/// together. Beyond that, and without the `alloc` feature, signing and
+/// verification return [`Error::OutputBufferTooSmall`]; nothing is
+/// truncated.
 const STACK_M_PRIME: usize = 512;
 
 /// Largest post-quantum seed this crate expands from the master seed.
@@ -68,6 +77,17 @@ pub fn keypair_from_seed<S: Suite>(
 ///
 /// Both components sign the same `M'`, which binds the suite label and the
 /// application context into the message.
+///
+/// `rng` supplies fresh randomness to every component that accepts it:
+/// sr25519 through schnorrkel, and ML-DSA-44 through the FIPS 204 hedged
+/// `rnd` value. ed25519 is deterministic by RFC 8032 and takes no
+/// randomness, so under H1 the classical half repeats across calls while
+/// the post-quantum half does not.
+///
+/// Without the `alloc` feature, `M'` is built in a [`STACK_M_PRIME`]-byte
+/// stack buffer. `ctx.len() + msg.len()` above 484 bytes for the shipped
+/// 26-byte labels returns [`Error::OutputBufferTooSmall`]; the message is
+/// never truncated.
 pub fn sign<S: Suite>(
     sk: &[u8],
     msg: &[u8],
@@ -85,6 +105,26 @@ pub fn sign<S: Suite>(
 }
 
 /// Deterministic composite signing.
+///
+/// Not every component honours `nonce`, and the API cannot report that:
+///
+/// - sr25519 binds it. The Schnorr nonce is seeded from
+///   `H(sk || nonce || msg)` and attached to the schnorrkel transcript, so
+///   a different `nonce` gives a different classical half under H3.
+/// - ed25519 ignores it. RFC 8032 fixes `r = H(prefix || msg)`, and
+///   `ed25519-zebra` exposes no hook for a caller-chosen `r`. The RFC 8032
+///   nonce is already secret and unique per message, which is the property
+///   `nonce` exists to provide.
+/// - ML-DSA-44 ignores it. FIPS 204's deterministic variant fixes `rnd` to
+///   all zeros.
+///
+/// The practical consequence: under H1 both halves ignore `nonce`, so two
+/// different nonces over the same message and context give byte-identical
+/// signatures. Under H3 only the classical half changes. Callers who need
+/// distinct signatures over one message must either vary `ctx` or use
+/// [`sign`].
+///
+/// The no-`alloc` message ceiling described on [`sign`] applies here too.
 pub fn sign_deterministic<S: Suite>(
     sk: &[u8],
     msg: &[u8],

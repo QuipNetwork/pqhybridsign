@@ -17,8 +17,11 @@ impl ClassicalScheme for Ed25519 {
     fn derive(seed: &[u8; 32], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()> {
         check_len(sk_out, Self::SECRET_KEY_LEN)?;
         check_len(pk_out, Self::PUBLIC_KEY_LEN)?;
-        let signing = SigningKey::from(*seed);
+        let mut signing = SigningKey::from(*seed);
         let public: [u8; 32] = VerificationKey::from(&signing).into();
+        // `SigningKey` is `Copy`, so it has no drop glue and its copy of the
+        // seed would otherwise stay on the stack.
+        signing.zeroize();
         sk_out[..32].copy_from_slice(seed);
         sk_out[32..].copy_from_slice(&public);
         pk_out.copy_from_slice(&public);
@@ -86,9 +89,11 @@ fn raw_sign(sk: &[u8], msg: &[u8], sig_out: &mut [u8]) -> Result<()> {
     check_len(sig_out, 64)?;
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&sk[..32]);
-    let signing = SigningKey::from(seed);
+    let mut signing = SigningKey::from(seed);
     seed.zeroize();
     let sig: [u8; 64] = signing.sign(msg).into();
+    // `SigningKey` is `Copy`, so it has no drop glue: wipe it explicitly.
+    signing.zeroize();
     sig_out.copy_from_slice(&sig);
     Ok(())
 }
