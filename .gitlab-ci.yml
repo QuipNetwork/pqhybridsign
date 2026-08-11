@@ -84,9 +84,18 @@ doc:
 msrv:
   stage: check
   script:
-    - rustup install 1.82
-    - rustup default 1.82
-    - cargo check --workspace --all-targets
+    # `rust-toolchain.toml` pins `stable`, and a toolchain file overrides
+    # `rustup default`. Selecting the toolchain any other way leaves this job
+    # running on stable and passing whatever the declared floor is, which is a
+    # gate that cannot fail. Only the `+toolchain` argument outranks the file.
+    - |
+      set -eu
+      msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
+      test -n "$msrv"
+      rustup toolchain install "$msrv" --profile minimal
+      # Prove the override took effect before trusting the check below.
+      cargo "+$msrv" --version
+      cargo "+$msrv" check --workspace --all-targets
 
 test-debug:
   stage: test
