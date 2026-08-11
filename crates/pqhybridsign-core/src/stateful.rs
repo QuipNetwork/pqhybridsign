@@ -203,6 +203,88 @@ where
     build(leaf)
 }
 
+/// A durable record of the highest leaf index a verifier has accepted.
+///
+/// The verifier-side counterpart to [`LeafJournal`]. The signer's journal
+/// stops that signer from reissuing a leaf; this stops a verifier from
+/// accepting a leaf twice, whoever produced it. Both are needed: a signer
+/// whose key was copied, or restored from a seed backup, will happily reissue
+/// leaf 1, and the copy's signature is cryptographically valid. Only a
+/// verifier that remembers can reject it.
+///
+/// The library holds no I/O. The integrator supplies storage, as with
+/// [`LeafJournal`].
+pub trait LeafIndexStore {
+    /// Whatever the backing store reports. It never reaches the caller of
+    /// [`accept_monotonic_leaf`], which sees only [`ReplayRejected`].
+    type Error: fmt::Debug;
+
+    /// The highest leaf index accepted so far, or `None` if none has been.
+    ///
+    /// This must survive a restart. A store that forgets accepts replays.
+    fn highest_accepted(&self) -> Option<u32>;
+
+    /// Durably record `leaf` as accepted.
+    ///
+    /// The same durability promise [`LeafJournal::commit`] makes: returning
+    /// `Ok` means the record survives a crash on the next instruction.
+    fn record(&mut self, leaf: u32) -> Result<(), Self::Error>;
+}
+
+/// Why a leaf index was refused before any cryptography ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReplayRejected {
+    /// The leaf is not above every leaf already accepted. Either a replay or
+    /// a reordering; the verifier cannot tell which, and both are refused.
+    NotAboveHighest {
+        /// The offered leaf index.
+        leaf: u32,
+        /// The highest index already accepted.
+        highest: u32,
+    },
+    /// Leaf indices are one-based. Zero is never a valid stateful leaf.
+    ZeroLeaf,
+    /// The store failed. The leaf is refused, because an accepted leaf that
+    /// was not recorded would be accepted again after a restart.
+    StoreFailed,
+}
+
+/// Accept `leaf` only if it is strictly above every leaf accepted before, and
+/// only once the acceptance is durable.
+///
+/// Call this with the `leaf_count` read out of a decoded stateful signature,
+/// BEFORE verifying it. The index is four bytes of plaintext at a fixed
+/// offset, so checking it first costs nothing and refuses a replay without
+/// running any cryptography.
+///
+/// Strictly increasing, not merely unequal: a set of seen indices would grow
+/// without bound, and a verifier that must remember every index forever is
+/// one that eventually forgets.
+///
+/// This is a policy a verifier opts into. It is not part of signature
+/// verification, and a signature this refuses may still be perfectly valid --
+/// that is the point. Replay is not a property the cryptography can decide.
+pub fn accept_monotonic_leaf<S: LeafIndexStore>(
+    store: &mut S,
+    leaf: u32,
+) -> Result<(), ReplayRejected> {
+    if leaf == 0 {
+        return Err(ReplayRejected::ZeroLeaf);
+    }
+    if let Some(highest) = store.highest_accepted() {
+        if leaf <= highest {
+            return Err(ReplayRejected::NotAboveHighest { leaf, highest });
+        }
+    }
+    // Record before accepting, for the same reason the signer commits before
+    // releasing: a crash between the two must not lose the fact.
+    store
+        .record(leaf)
+        .map_err(|_| ReplayRejected::StoreFailed)?;
+    Ok(())
+}
+
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
@@ -450,5 +532,86 @@ mod tests {
 
         assert_eq!(outcome, Err(StatefulSignError::SigningFailed));
         assert!(state.borrow().committed.is_empty());
+    }
+
+    /// A store that can be told to fail, so the fail-closed path is testable.
+    #[derive(Default)]
+    struct MemoryIndex {
+        highest: Option<u32>,
+        fail: bool,
+    }
+
+    impl LeafIndexStore for MemoryIndex {
+        type Error = ();
+
+        fn highest_accepted(&self) -> Option<u32> {
+            self.highest
+        }
+
+        fn record(&mut self, leaf: u32) -> Result<(), Self::Error> {
+            if self.fail {
+                return Err(());
+            }
+            self.highest = Some(leaf);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn increasing_leaves_are_accepted_and_replays_are_not() {
+        let mut store = MemoryIndex::default();
+        assert_eq!(accept_monotonic_leaf(&mut store, 1), Ok(()));
+        assert_eq!(accept_monotonic_leaf(&mut store, 2), Ok(()));
+
+        // The replay a signer-side journal cannot catch: another holder of
+        // the same key offering leaf 1 again.
+        assert_eq!(
+            accept_monotonic_leaf(&mut store, 1),
+            Err(ReplayRejected::NotAboveHighest {
+                leaf: 1,
+                highest: 2
+            })
+        );
+        // Re-offering the highest is equally refused.
+        assert_eq!(
+            accept_monotonic_leaf(&mut store, 2),
+            Err(ReplayRejected::NotAboveHighest {
+                leaf: 2,
+                highest: 2
+            })
+        );
+        // A gap is fine: leaves may be spent without every signature arriving.
+        assert_eq!(accept_monotonic_leaf(&mut store, 9), Ok(()));
+    }
+
+    #[test]
+    fn a_zero_leaf_is_refused() {
+        let mut store = MemoryIndex::default();
+        assert_eq!(
+            accept_monotonic_leaf(&mut store, 0),
+            Err(ReplayRejected::ZeroLeaf)
+        );
+        assert_eq!(store.highest_accepted(), None);
+    }
+
+    #[test]
+    fn a_failed_store_refuses_the_leaf_and_records_nothing() {
+        let mut store = MemoryIndex {
+            fail: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            accept_monotonic_leaf(&mut store, 1),
+            Err(ReplayRejected::StoreFailed)
+        );
+        assert_eq!(
+            store.highest_accepted(),
+            None,
+            "a leaf that could not be recorded must not count as accepted"
+        );
+
+        // Once the store recovers, the same leaf is still available.
+        store.fail = false;
+        assert_eq!(accept_monotonic_leaf(&mut store, 1), Ok(()));
     }
 }
