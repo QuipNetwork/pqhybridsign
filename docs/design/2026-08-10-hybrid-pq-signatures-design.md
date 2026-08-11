@@ -194,7 +194,7 @@ Three rules become structural instead of documentary:
 3. **Every signing attempt burns a leaf.** `sign_stateful` commits the
    advanced leaf index before it attempts the component signature, and it
    validates nothing beforehand. An attempt the component then refuses still
-   spends its leaf. The rule is deliberate: a signing path that can return
+   spends its leaf. The rule holds because a signing path that can return
    without advancing the counter is a leaf-reuse hazard, and reuse is total
    security failure for the key, while a burned leaf is only availability
    loss. Upstream `sign_stateful_action` behaves the same way, which is
@@ -264,6 +264,66 @@ Stateful signing returns a typed error: `LeavesExhausted`, `GrindAbort` or
 `SigningFailed`. The documentation and the tests treat `GrindAbort` as
 non-retryable, because the reference randomizer is a deterministic function of
 the key and the message.
+
+### Rotation
+
+Rotation assigns future signing authority, so it is the one operation where a
+single surviving component is not enough. Section 19.2 requires an AND gate:
+both the classical co-signature and a stateless SHRINCS signature, never
+either alone. A single-component rotation path would let one compromised
+component redirect all future authority, which drops the composite below its
+own guarantee at the worst possible moment.
+
+Each suite carries a second compile-time label, `ROTATE_LABEL`, composed as
+`"hybrid-" classical "-" pq "-rotate-v1"` plus the null byte and checked
+against the registry the same way the ordinary label is. An ordinary signature
+cannot be spliced in as a rotation co-signature, because the message differs.
+
+`RotationKind` is its own type. It shares the values `0x01` and `0x02` with
+the wire format's `PathSelector`, and the specification forbids merging them.
+No conversion exists between the two, in either direction.
+
+`verify_rotation` returns the next stored public key rather than a boolean.
+Section 19.3 requires the classical key and the new commitment to install
+together, atomically. A boolean forces a second install
+step that a caller can invoke on its own. That is the non-atomicity the
+section forbids, so the type carries the result instead.
+
+**`NextClassicalPK` is bound twice, by independent mechanisms.** It sits
+inside the rotation payload, so `M'_rotation` covers it, and it is folded into
+the stateless signature's rotation domain separator,
+`keccak256("hybrid-rotate-ds" || NextClassicalPK || RotationKind)`. Each
+binding alone defeats the front-running attack section 19.2 describes.
+Removing one binding and watching the attack still fail confirmed this, from
+both sides.
+The specification only requires the domain separator, because it assumes the
+stateless signature covers the commitments alone. Signing over `M'_rotation`
+makes the message binding a second, redundant defence rather than a
+replacement.
+
+### Verifier-side acceptance policy
+
+Section 20 puts path acceptance in verifier state, not in the cryptographic
+layer. The layer verifies what it is given and holds no policy.
+
+The policy machine tracks leaf consumption under exactly one active policy per
+key epoch: `MonotonicIndex`, `LeafBitmap`, or `RecoveryRotation`. It is total
+and fails closed, and the type system carries that rather than a runtime
+check: each variant holds only the sub-state its policy has, so an armed
+`MonotonicIndex` or a frozen `RecoveryRotation` has no representable value.
+The freeze and arming flags are two-variant enums rather than booleans, for
+the same reason.
+
+Accept and mark-consumed are one step, in the order `accept_monotonic_leaf`
+already established: record first, and refuse if recording fails. Once a leaf
+is consumed in an epoch the choice between the two consuming policies freezes,
+because switching or reconciling two representations re-opens consumed leaves.
+The owner-authorized move to `RecoveryRotation` stays available even when
+frozen, or a key that had signed once could never be rotated.
+
+`LeafBitmap` is a fixed 512-byte array, 4096 bits, matching the leaf capacity
+limit. It is not an allocation, so the module works where core has no
+allocator.
 
 ## Seed derivation
 
@@ -362,9 +422,27 @@ defect. The golden vectors state which derivation they cover.
 ### Finding 4: No stated value for `MIN_FALCON512_SIG_LEN`
 
 Section 6 requires a `MIN_FALCON512_SIG_LEN` constant from the Falcon-512
-specification, but never gives the value. The delta length encoding stays
-untrustworthy until someone derives the constant and pins it with a test. This
-blocks all H2 and H4 encoding work.
+specification, but never gives the value.
+
+**Resolved on 2026-08-10, and the premise turned out to be stale.** Section 6
+describes Falcon-512 signatures as variable-length, up to 666 bytes. The
+`fn-dsa` crate at version 0.4.0 produces a **fixed** 666-byte signature, with
+a 897-byte verifying key and a 1345-byte signing key. Those three numbers come
+from building the crate and running it, not from its documentation. FN-DSA
+pads to a constant size where the earlier compressed Falcon format did not.
+
+The maintainer chose to keep `FalconLen` as a real length field rather than
+drop it or freeze it at zero, so the encoder computes it from the actual
+length and the decoder honours whatever it reads.
+`MIN_FALCON512_SIG_LEN` is pinned at **411**: the field is one byte
+and spans 256 values, the largest signature the component emits is 666, so
+the smallest representable length is `666 - 255`. Pinning the minimum at 666
+would leave the field able to encode only lengths at or above the maximum,
+which points the wrong way.
+
+Specification section 6 still describes the variable-length shape. That text
+needs an update, tracked separately, and this section records the measured
+values in the meantime.
 
 ## Delivery plan
 
@@ -382,21 +460,37 @@ Cycle 2: `pqhybridsign-shrincs` with H5 and H6. Covers `PqStatefulScheme`,
 path-selected encoding, commitment verification, leaf-indexed golden vectors,
 and specification tests 15 to 32.
 
+Cycle 3: rotation and the two-path acceptance policy, from sections 19 and
+20. Covers the 97-byte rotation payload, the per-suite rotate labels, the
+AND-gated rotation verification, the leaf-tracking policy machine, and the
+stateless budget accounting.
+
+The three decisions Cycle 2 raised are settled and built: the composite
+stateful secret key has a validating export and import path (`pqhs-utz`), the
+`MonotonicIndex` verifier ships in core beside `LeafJournal` (`pqhs-rg3`), and
+continuous integration runs a cross-profile job that compares commitments
+rather than labels (`pqhs-yn0`).
+
 ### Next
 
-Cycle 3: rotation payloads and the two-path acceptance policy, from sections
-19 and 20.
+Cycle 4: H2 and H4, over `fn-dsa` 0.4.0. The maintainer decided on 2026-08-10
+to ship these now rather than wait for a final FIPS 206, having been told that
+the standard may change the wire format and that signatures made before then
+could stop verifying. The dependency lifts the workspace Rust floor to 1.82.
 
-Three decisions that Cycle 2 raised and did not settle: whether the composite
-stateful secret key gets a validating import and export path
-(`pqhs-utz`), whether the library ships the `MonotonicIndex` verifier the
-specification names (`pqhs-rg3`), and whether continuous integration gains a
-cross-profile job (`pqhs-yn0`).
+Cycle 5: the language bindings. A type-erased API over a runtime suite enum
+comes first. No C header, JavaScript function, or Python module can name a
+type parameter, so every binding needs a runtime enum underneath it. The C
+ABI, the WebAssembly package, and the Python wheel sit on top.
+
+Rotation and the policy machine stay out of the binding surface for the first
+release candidate. Both need registry state that lives in the integrator's
+system, and exposing half a state machine across a C boundary invites the
+misuse the state machine exists to prevent.
 
 ### Later
 
-Cycle 4: H2 and H4. Gated on final FIPS 206 and a stable `fn-dsa` release, and
-blocked by Finding 4.
+Nothing is gated on an external event any more.
 
 ## Out of scope
 
