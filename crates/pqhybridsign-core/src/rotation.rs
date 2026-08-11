@@ -15,10 +15,12 @@
 //! is the domain separator that keeps an ordinary signature from ever being
 //! read back as a rotation co-signature; see `crate::suite`.
 
-use crate::{message, ClassicalScheme, Error, PqStatefulScheme, Result, StatefulSuite};
+use crate::{message, Error, Result, StatefulSuite};
 
+// Only the AND-gated rotation verification uses the component traits, and
+// it needs an allocator.
 #[cfg(feature = "alloc")]
-use crate::{encoding_path, stateful_composite};
+use crate::{encoding_path, stateful_composite, ClassicalScheme, PqStatefulScheme};
 
 /// Width of one commitment or public-key field inside [`RotationPayload`].
 const FIELD_LEN: usize = 32;
