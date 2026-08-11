@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![doc = "Composite layer for hybrid post-quantum signature constructions."]

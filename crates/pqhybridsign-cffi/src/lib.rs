@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = "The C ABI binding over `pqhybridsign-abi`.
 

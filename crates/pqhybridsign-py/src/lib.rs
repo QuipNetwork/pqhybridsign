@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#![deny(missing_docs)]
 //! Python bindings for `pqhybridsign`, over `pqhybridsign-abi`'s
 //! type-erased dispatch layer.
 //!

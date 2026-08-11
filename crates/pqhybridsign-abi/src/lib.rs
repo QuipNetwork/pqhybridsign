@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 #![doc = "Type-erased, runtime-dispatched API over the pqhybridsign suites.
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 #![doc = "Stateful hash-based hybrid signatures: H5 (ed25519 + SHRINCS) and H6 (sr25519 + SHRINCS)."]
 

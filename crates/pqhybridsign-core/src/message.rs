@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! `M'` framing, specification section 7: the domain-separated message every
+//! component signature is actually computed over.
+
 use crate::{Error, Result};
 
 /// Hybrid construction version prefix, specification section 7.

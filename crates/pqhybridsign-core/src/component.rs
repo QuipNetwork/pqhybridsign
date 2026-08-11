@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! The classical and post-quantum component traits every hybrid suite
+//! composes, and their stateful variant.
+
 use crate::rotation::RotationPayload;
 use crate::Result;
 use subtle::Choice;
@@ -11,8 +14,13 @@ use subtle::Choice;
 pub trait ClassicalScheme {
     /// Name token used to compose the suite label, for example `"ed25519"`.
     const NAME: &'static str;
+    /// Length in bytes of this component's public key.
     const PUBLIC_KEY_LEN: usize;
+    /// Length in bytes of this component's secret key.
     const SECRET_KEY_LEN: usize;
+    /// Length in bytes of this component's signature. Fixed: unlike
+    /// [`PqScheme::SIGNATURE_LEN`], a classical component's signature never
+    /// varies in length.
     const SIGNATURE_LEN: usize;
 
     /// Derive the component keypair from a 32-byte seed.
@@ -54,16 +62,27 @@ pub trait ClassicalScheme {
 pub trait PqScheme {
     /// Name token used to compose the suite label, for example `"mldsa44"`.
     const NAME: &'static str;
+    /// Length in bytes of this component's public key.
     const PUBLIC_KEY_LEN: usize;
+    /// Length in bytes of this component's secret key.
     const SECRET_KEY_LEN: usize;
+    /// Length in bytes of this component's signature. Unlike
+    /// [`ClassicalScheme::SIGNATURE_LEN`], a post-quantum component's
+    /// encoded signature length is fixed per algorithm but need not equal
+    /// the classical half's.
     const SIGNATURE_LEN: usize;
     /// Seed length this component consumes from HKDF. 32 for ML-DSA-44.
     const SEED_LEN: usize;
     /// True when the algorithm is message-deterministic by specification.
     const IS_DETERMINISTIC: bool;
 
+    /// Derive the component keypair from `seed`.
+    ///
+    /// Writes `SECRET_KEY_LEN` bytes into `sk_out` and `PUBLIC_KEY_LEN`
+    /// bytes into `pk_out`.
     fn derive(seed: &[u8], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()>;
 
+    /// Hedged signing.
     fn sign(
         sk: &[u8],
         msg: &[u8],
@@ -75,6 +94,8 @@ pub trait PqScheme {
     /// specification ignores the nonce.
     fn sign_deterministic(sk: &[u8], msg: &[u8], nonce: &[u8], sig_out: &mut [u8]) -> Result<()>;
 
+    /// Verify. Returns a `Choice`, never a `bool`, for the same reason as
+    /// [`ClassicalScheme::verify`].
     fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Choice;
 }
 

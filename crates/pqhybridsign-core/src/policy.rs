@@ -18,7 +18,7 @@
 //!   policy happens to be active, and no state a future match arm could
 //!   silently fall through to a catch-all accept.
 //! - **Accept and mark-consumed are one atomic step**, the same discipline
-//!   [`accept_monotonic_leaf`](crate::stateful::accept_monotonic_leaf)
+//!   [`accept_monotonic_leaf`]
 //!   already applies: nothing durable moves before the record succeeds, so a
 //!   caller never observes an accepted leaf that a crash could still lose.
 //! - **The freeze is per epoch, not per call.** Once any leaf is consumed
@@ -105,7 +105,7 @@ impl LeafBitmap {
     }
 }
 
-/// Why [`LeafBitmap::accept`] refused a leaf.
+/// Why `LeafBitmap::accept` refused a leaf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BitmapRejected {
@@ -211,7 +211,7 @@ pub enum OwnerAuthorization {
     Denied,
 }
 
-/// Why a stateful leaf was refused before it reached [`LeafBitmap::accept`]
+/// Why a stateful leaf was refused before it reached `LeafBitmap::accept`
 /// or [`accept_monotonic_leaf`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

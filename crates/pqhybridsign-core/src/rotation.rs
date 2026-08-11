@@ -78,9 +78,15 @@ impl TryFrom<u8> for RotationKind {
 /// section 19.2 for the attack this closes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RotationPayload {
+    /// What this rotation authorizes: a stateful-only graft or a full swap.
     pub kind: RotationKind,
+    /// The commitment the currently installed public key carries. Ties this
+    /// authorization to a specific current key, so it cannot be replayed
+    /// against a key that has since rotated.
     pub current_commitment: [u8; FIELD_LEN],
+    /// The commitment the key rotates to on success.
     pub next_commitment: [u8; FIELD_LEN],
+    /// The classical public key the key rotates to on success.
     pub next_classical_pk: [u8; FIELD_LEN],
 }
 
@@ -157,7 +163,7 @@ pub fn m_prime_rotation_len<S: StatefulSuite>(ctx: &[u8]) -> Result<usize> {
 /// [`message::write_m_prime`]: the payload goes into a stack buffer first,
 /// then the existing prefix/length-prefixed-context framing runs unchanged
 /// with [`StatefulSuite::ROTATE_LABEL`] in place of
-/// [`StatefulSuite::LABEL`](StatefulSuite::LABEL). No allocation, so this
+/// [`StatefulSuite::LABEL`]. No allocation, so this
 /// works without the `alloc` feature.
 ///
 /// # Errors
@@ -199,7 +205,9 @@ pub fn m_prime_rotation<S: StatefulSuite>(
 /// value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NextStoredPublicKey {
+    /// The classical public key to install.
     pub next_classical_pk: [u8; FIELD_LEN],
+    /// The commitment to install alongside it.
     pub next_commitment: [u8; FIELD_LEN],
 }
 

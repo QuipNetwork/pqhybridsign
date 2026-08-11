@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 //! WebAssembly and npm binding over `pqhybridsign-abi`.
 //!
 //! # Only the stateless suites are exposed

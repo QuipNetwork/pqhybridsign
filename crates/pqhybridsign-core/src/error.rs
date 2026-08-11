@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! The error type shared across every operation in this crate.
+
 use core::fmt;
 
 /// Errors from encoding, decoding and key handling.
@@ -10,33 +12,63 @@ use core::fmt;
 #[non_exhaustive]
 pub enum Error {
     /// A byte string had the wrong length.
-    BadLength { expected: usize, actual: usize },
+    BadLength {
+        /// The length the encoding requires.
+        expected: usize,
+        /// The length actually supplied.
+        actual: usize,
+    },
     /// The application context exceeded 255 bytes.
     ContextTooLong,
     /// A caller-supplied output buffer was too small.
-    OutputBufferTooSmall { needed: usize, actual: usize },
+    OutputBufferTooSmall {
+        /// The number of bytes the operation needed to write.
+        needed: usize,
+        /// The number of bytes the caller's buffer actually held.
+        actual: usize,
+    },
     /// A soft derivation junction was supplied. Only hard junctions exist.
     SoftJunctionRejected,
     /// A path-selected signature carried a selector other than `0x01`
     /// (stateful) or `0x02` (stateless).
-    BadPathSelector { selector: u8 },
+    BadPathSelector {
+        /// The byte actually found where `PathSelector` is expected.
+        selector: u8,
+    },
     /// A declared `LeafCount` was below 1 or above the `maxSignatures` the
     /// verified commitment bundle records.
     LeafCountOutOfRange {
+        /// The leaf count that was rejected.
         leaf_count: u32,
+        /// The declared budget for this key, from its verified commitment
+        /// bundle.
         max_signatures: u32,
     },
     /// Bytes remained past the length the encoding implies.
-    TrailingBytes { expected: usize, actual: usize },
+    TrailingBytes {
+        /// The length the encoding implies.
+        expected: usize,
+        /// The length actually supplied, greater than `expected`.
+        actual: usize,
+    },
     /// A component crate reported an internal failure.
     ComponentFailure,
     /// A rotation payload carried a `RotationKind` other than `0x01`
     /// (stateful graft) or `0x02` (full swap).
-    BadRotationKind { kind: u8 },
+    BadRotationKind {
+        /// The byte actually found where `RotationKind` is expected.
+        kind: u8,
+    },
     /// A delta-length-encoded post-quantum signature had a length outside
     /// `min_len..=min_len + 255`, the range the 1-byte `DeltaLen` field can
     /// represent.
-    DeltaLengthOutOfRange { actual_len: usize, min_len: usize },
+    DeltaLengthOutOfRange {
+        /// The post-quantum signature length that was rejected.
+        actual_len: usize,
+        /// The suite's `MIN_PQ_SIG_LEN`: the low end of the range the
+        /// 1-byte `DeltaLen` field can represent.
+        min_len: usize,
+    },
 }
 
 impl fmt::Display for Error {

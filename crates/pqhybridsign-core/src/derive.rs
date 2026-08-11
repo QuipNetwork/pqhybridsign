@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! Component seed derivation, specification section 9.
+//!
+//! A hybrid key starts from one master seed; this module expands it into the
+//! independent classical and post-quantum component seeds via HKDF, keeping
+//! the two components' key material from ever overlapping.
+
 use crate::{Error, Result};
 use hkdf::Hkdf;
 use sha2::Sha256;

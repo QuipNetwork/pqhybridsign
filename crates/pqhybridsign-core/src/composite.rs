@@ -84,7 +84,7 @@ pub fn keypair_from_seed<S: Suite>(
 /// randomness, so under H1 the classical half repeats across calls while
 /// the post-quantum half does not.
 ///
-/// Without the `alloc` feature, `M'` is built in a [`STACK_M_PRIME`]-byte
+/// Without the `alloc` feature, `M'` is built in a `STACK_M_PRIME`-byte
 /// stack buffer. `ctx.len() + msg.len()` above 484 bytes for the shipped
 /// 26-byte labels returns [`Error::OutputBufferTooSmall`]; the message is
 /// never truncated.

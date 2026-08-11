@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! Suite traits: the classical and post-quantum components, and the
+//! registry-checked label, that together identify one hybrid construction.
+
 use crate::{ClassicalScheme, PqScheme, PqStatefulScheme};
 
 /// One hybrid construction: a classical component, a post-quantum
@@ -8,16 +11,26 @@ use crate::{ClassicalScheme, PqScheme, PqStatefulScheme};
 /// composed from its primitives and then bound cryptographically. Here the
 /// composed name is the label prepended into `M'`.
 pub trait Suite {
+    /// The classical component.
     type Classical: ClassicalScheme;
+    /// The post-quantum component.
     type Pq: PqScheme;
 
     /// Null-terminated registry label from specification section 7.
     const LABEL: &'static [u8];
 
+    /// Length in bytes of the composite public key: the classical public
+    /// key followed by the post-quantum public key.
     const PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
         + <Self::Pq as PqScheme>::PUBLIC_KEY_LEN;
+    /// Length in bytes of the composite secret key: the classical secret
+    /// key followed by the post-quantum secret key.
     const SECRET_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::SECRET_KEY_LEN
         + <Self::Pq as PqScheme>::SECRET_KEY_LEN;
+    /// Length in bytes of the composite signature: the classical signature
+    /// followed by the post-quantum signature. Fixed, since both halves are
+    /// fixed-length for every [`Suite`] (H1, H3); H2 and H4's variable-length
+    /// post-quantum half is why they implement [`DeltaSuite`] instead.
     const SIGNATURE_LEN: usize =
         <Self::Classical as ClassicalScheme>::SIGNATURE_LEN + <Self::Pq as PqScheme>::SIGNATURE_LEN;
     /// Byte offset where the post-quantum half begins.
@@ -99,7 +112,9 @@ macro_rules! hybrid_suite {
 /// [`PqStatefulScheme::FIXED_STATEFUL_SIG_LEN`] and
 /// [`PqStatefulScheme::STATELESS_SIG_LEN`].
 pub trait StatefulSuite {
+    /// The classical component.
     type Classical: ClassicalScheme;
+    /// The stateful post-quantum component.
     type Pq: PqStatefulScheme;
 
     /// Null-terminated registry label from specification section 7.
@@ -111,10 +126,20 @@ pub trait StatefulSuite {
     /// co-signature.
     const ROTATE_LABEL: &'static [u8];
 
+    /// Length in bytes of the small, on-storage composite public key: the
+    /// classical public key followed by the post-quantum component's
+    /// commitment ([`PqStatefulScheme::PUBLIC_KEY_LEN`]). Not enough on its
+    /// own to verify against; see [`VERIFY_PUBLIC_KEY_LEN`](Self::VERIFY_PUBLIC_KEY_LEN).
     const STORED_PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
         + <Self::Pq as PqStatefulScheme>::PUBLIC_KEY_LEN;
+    /// Length in bytes of the larger composite public key a verifier needs:
+    /// the classical public key followed by the post-quantum component's
+    /// full verify key ([`PqStatefulScheme::VERIFY_KEY_LEN`]).
     const VERIFY_PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
         + <Self::Pq as PqStatefulScheme>::VERIFY_KEY_LEN;
+    /// Length in bytes of the composite secret key: the classical secret
+    /// key followed by the post-quantum secret key's exported form
+    /// ([`PqStatefulScheme::SECRET_KEY_LEN`]).
     const SECRET_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::SECRET_KEY_LEN
         + <Self::Pq as PqStatefulScheme>::SECRET_KEY_LEN;
     /// Byte offset where the post-quantum half begins in the composite wire
@@ -211,12 +236,14 @@ macro_rules! hybrid_stateful_suite {
 /// [`Suite::SPLIT`], which FN-DSA-512 does not fit: its wire form carries a
 /// length field between the classical and post-quantum halves
 /// (`crate::encoding_delta`). This trait exists so H2 and H4 can share
-/// [`hybrid_delta_suite!`] and `crate::composite_delta` without perturbing
+/// [`hybrid_delta_suite!`](crate::hybrid_delta_suite) and `crate::composite_delta` without perturbing
 /// [`Suite`] or the fixed-offset composite functions H1 and H3 already use,
 /// mirroring how [`StatefulSuite`] sits beside [`Suite`] for the same
 /// reason.
 pub trait DeltaSuite {
+    /// The classical component.
     type Classical: ClassicalScheme;
+    /// The post-quantum component.
     type Pq: PqScheme;
 
     /// Null-terminated registry label from specification section 7.
@@ -227,8 +254,12 @@ pub trait DeltaSuite {
     /// and H4.
     const MIN_PQ_SIG_LEN: usize;
 
+    /// Length in bytes of the composite public key: the classical public
+    /// key followed by the post-quantum public key.
     const PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
         + <Self::Pq as PqScheme>::PUBLIC_KEY_LEN;
+    /// Length in bytes of the composite secret key: the classical secret
+    /// key followed by the post-quantum secret key.
     const SECRET_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::SECRET_KEY_LEN
         + <Self::Pq as PqScheme>::SECRET_KEY_LEN;
     /// Largest wire-encoded signature this suite can produce: the classical
