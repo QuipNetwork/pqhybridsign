@@ -70,6 +70,24 @@ cross-profile:
         exit 1
       fi
 
+deny:
+  stage: check
+  script:
+    - cargo install cargo-deny --version 0.20.2
+    - cargo deny check
+
+doc:
+  stage: check
+  script:
+    - RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+msrv:
+  stage: check
+  script:
+    - rustup install 1.82
+    - rustup default 1.82
+    - cargo check --workspace --all-targets
+
 test-debug:
   stage: test
   script:
