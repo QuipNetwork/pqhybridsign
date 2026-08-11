@@ -25,9 +25,20 @@
 //! asserted that equality live when the vector was produced (see
 //! `generate_vectors_stateful.rs`); this test pins the result.
 //!
-//! Exactly one `profile-*` feature compiles per build (see `suites.rs`), so
-//! every field here is keyed on the active profile rather than assuming
-//! `profile-256s`.
+//! Exactly one `profile-*` feature compiles per build (see `suites.rs`),
+//! and every field in a vector is keyed on the profile that produced it.
+//! Vectors exist only for `profile-256s`, so this file compiles only under
+//! that feature. `check` still asserts the recorded `profile_name` against
+//! the active one: if vectors for another profile are added later and the
+//! gate below is widened, a mismatched pair fails loudly instead of
+//! comparing signatures from two different parameter sets.
+//!
+//! Generating vectors for the other three profiles is real coverage that
+//! this crate does not yet have. It is not cheap: at `profile-128s-q18` a
+//! single stateless signature takes roughly an hour to grind, against
+//! seconds at `profile-256s`.
+#![cfg(feature = "profile-256s")]
+
 use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
 use pqhybridsign_shrincs::{keygen, PublicKey, ShrincsScheme, H5, H6};
