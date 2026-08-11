@@ -115,6 +115,13 @@ pub trait PqStatefulScheme {
     const SECRET_KEY_LEN: usize;
     /// Upper bound on the one-time leaf budget a key can be given.
     const LEAF_CAPACITY_LIMIT: u32;
+    /// Few-time budget for the stateless path (specification section 21):
+    /// `2^20`, except `2^18` under the component's low-budget profile (for
+    /// this component, `profile-128s-q18`). A caller reads this constant
+    /// rather than hardcoding the figure at the call site, so the budget
+    /// used to guard signing can never drift from the one the spec assigns
+    /// to the active profile.
+    const STATELESS_BUDGET: u64;
     /// Bytes of a stateful signature excluding its leaf-dependent
     /// authentication path.
     const FIXED_STATEFUL_SIG_LEN: usize;
@@ -264,6 +271,24 @@ pub trait PqStatefulScheme {
         m_prime_rotation: &[u8],
         sig: &[u8],
     ) -> Choice;
+
+    /// The stateless key material inside a verify key -- `pkSeed ||
+    /// hypertreeRoot` (specification section 3), 64 bytes -- the bytes the
+    /// few-time stateless budget (specification section 21) is keyed to.
+    ///
+    /// This is distinct from `vk` as a whole and from any commitment or
+    /// stored public key derived from it: a rotation changes the
+    /// commitment on every install, but the stateless budget MUST reset
+    /// only when this material itself changes (specification section
+    /// 19.3). A component that keyed the budget to the commitment instead
+    /// would let a rotation silently refill a hard security bound -- the
+    /// exact finding this method exists to prevent.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the component reports for a `vk` it cannot parse (for
+    /// example, the wrong length).
+    fn stateless_key_material(vk: &[u8]) -> Result<&[u8]>;
 }
 
 #[cfg(test)]

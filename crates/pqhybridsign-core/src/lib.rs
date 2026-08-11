@@ -9,6 +9,7 @@ extern crate alloc;
 pub mod error;
 pub use error::{Error, Result};
 
+pub mod budget;
 pub mod component;
 pub mod composite;
 pub mod composite_delta;

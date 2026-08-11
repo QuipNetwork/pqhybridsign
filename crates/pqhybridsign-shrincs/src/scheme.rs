@@ -132,6 +132,12 @@ impl PqStatefulScheme for ShrincsScheme {
     const LEAF_CAPACITY_LIMIT: u32 = MAX_STATEFUL_SIGNATURES_LIMIT;
     const FIXED_STATEFUL_SIG_LEN: usize = FIXED_STATEFUL_LEN;
     const STATELESS_SIG_LEN: usize = STATELESS_LEN;
+    /// Specification section 21: `2^20`, except `2^18` under
+    /// `profile-128s-q18`.
+    #[cfg(not(feature = "profile-128s-q18"))]
+    const STATELESS_BUDGET: u64 = 1 << 20;
+    #[cfg(feature = "profile-128s-q18")]
+    const STATELESS_BUDGET: u64 = 1 << 18;
 
     type SecretKey = ShrincsSecretKey;
 
@@ -344,6 +350,21 @@ impl PqStatefulScheme for ShrincsScheme {
             &action_ctx,
             &shrincs_sig,
         )))
+    }
+
+    /// Returns the 64 contiguous bytes at
+    /// [`bundle::STATELESS_KEY_MATERIAL_OFFSET`]: `pkSeed || hypertreeRoot`,
+    /// never the commitment field that sits before them and that rotation
+    /// changes on every install.
+    fn stateless_key_material(vk: &[u8]) -> Result<&[u8]> {
+        if vk.len() != bundle::BUNDLE_LEN {
+            return Err(Error::BadLength {
+                expected: bundle::BUNDLE_LEN,
+                actual: vk.len(),
+            });
+        }
+        Ok(&vk[bundle::STATELESS_KEY_MATERIAL_OFFSET
+            ..bundle::STATELESS_KEY_MATERIAL_OFFSET + bundle::STATELESS_KEY_MATERIAL_LEN])
     }
 }
 
@@ -593,6 +614,37 @@ mod tests {
         // Wiping twice is not an error.
         sk.zeroize();
         assert_eq!(ShrincsScheme::leaf_capacity(&sk), 0);
+    }
+
+    /// Pins `stateless_key_material` to a byte range independently computed
+    /// from the generated `PublicKey`'s own `pk_seed`/`hypertree_root`
+    /// fields (not from `STATELESS_KEY_MATERIAL_OFFSET`), so a later change
+    /// to the bundle layout that moves this range breaks this test loudly
+    /// instead of silently keying the budget to the wrong bytes.
+    #[test]
+    fn stateless_key_material_is_pk_seed_concatenated_with_hypertree_root() {
+        let mut vk = [0u8; bundle::BUNDLE_LEN];
+        ShrincsScheme::keygen_from_seed(&SEED, 4, &mut vk).expect("keygen");
+
+        let public_key = parse_bundle(&vk).expect("parse trusted bundle");
+        let mut expected = Vec::with_capacity(64);
+        expected.extend_from_slice(&public_key.pk_seed);
+        expected.extend_from_slice(&public_key.hypertree_root);
+        assert_eq!(expected.len(), 64);
+
+        let material = ShrincsScheme::stateless_key_material(&vk).expect("stateless key material");
+        assert_eq!(material, expected.as_slice());
+    }
+
+    #[test]
+    fn stateless_key_material_rejects_the_wrong_length() {
+        assert_eq!(
+            ShrincsScheme::stateless_key_material(&[0u8; 10]),
+            Err(Error::BadLength {
+                expected: bundle::BUNDLE_LEN,
+                actual: 10,
+            })
+        );
     }
 
     /// Specification section 19.2: the rotation domain separator must bind

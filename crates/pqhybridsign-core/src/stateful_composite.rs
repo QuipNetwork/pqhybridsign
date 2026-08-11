@@ -74,6 +74,35 @@ impl<S: StatefulSuite> PublicKey<S> {
     pub fn pq_verify_key(&self) -> &[u8] {
         &self.bytes[<S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN..]
     }
+
+    /// Reconstruct a public key from its wire bytes (`ClassicalPK ||
+    /// PqVerifyKey`, [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes).
+    ///
+    /// This is the verify-key form [`keygen`] hands back and
+    /// [`StatefulHybridSignatureScheme::verify`] needs, so a caller that
+    /// only holds the serialized bytes -- the case for every binding that
+    /// crosses a language boundary -- can rebuild a value this crate's
+    /// `verify` accepts. No structural validation runs here, matching
+    /// [`crate::composite::verify`] and [`crate::composite_delta::verify`]:
+    /// a garbled public key produces a value that fails verification,
+    /// rather than an error that would need its own channel.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `bytes` is not
+    /// [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != S::VERIFY_PUBLIC_KEY_LEN {
+            return Err(Error::BadLength {
+                expected: S::VERIFY_PUBLIC_KEY_LEN,
+                actual: bytes.len(),
+            });
+        }
+        Ok(Self {
+            bytes: bytes.to_vec(),
+            _suite: PhantomData,
+        })
+    }
 }
 
 /// The composite secret key: `ClassicalSK || PqSecretKey`, length
@@ -586,6 +615,7 @@ mod tests {
         const LEAF_CAPACITY_LIMIT: u32 = 8;
         const FIXED_STATEFUL_SIG_LEN: usize = 0;
         const STATELESS_SIG_LEN: usize = 1;
+        const STATELESS_BUDGET: u64 = 4;
 
         type SecretKey = FakeSecretKey;
 
@@ -687,6 +717,9 @@ mod tests {
             _sig: &[u8],
         ) -> Choice {
             Choice::from(1u8)
+        }
+        fn stateless_key_material(vk: &[u8]) -> Result<&[u8]> {
+            Ok(vk)
         }
     }
 
@@ -967,6 +1000,25 @@ mod tests {
             Some(Error::BadLength {
                 expected,
                 actual: 0
+            })
+        );
+    }
+
+    /// `from_bytes` round-trips a public key's wire bytes and rejects the
+    /// wrong length, mirroring `SecretKey::import`'s length check.
+    #[test]
+    fn public_key_from_bytes_round_trips_and_rejects_bad_length() {
+        let (_sk, pk) = keygen::<FakeH>(&[10u8; 32], 4).expect("keygen");
+
+        let rebuilt = PublicKey::<FakeH>::from_bytes(pk.as_ref()).expect("from_bytes");
+        assert_eq!(rebuilt.as_ref(), pk.as_ref());
+
+        let expected = <FakeH as crate::StatefulSuite>::VERIFY_PUBLIC_KEY_LEN;
+        assert_eq!(
+            PublicKey::<FakeH>::from_bytes(&pk.as_ref()[..pk.as_ref().len() - 1]).err(),
+            Some(Error::BadLength {
+                expected,
+                actual: expected - 1
             })
         );
     }

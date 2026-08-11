@@ -28,6 +28,20 @@ const HYPERTREE_ROOT_LEN: usize = 32;
 const PK_SEED_OFFSET: usize = STATEFUL_PUBLIC_KEY_LEN + COMMITMENT_LEN;
 const HYPERTREE_ROOT_OFFSET: usize = PK_SEED_OFFSET + PK_SEED_LEN;
 
+/// Offset of the stateless key material -- `pkSeed || hypertreeRoot` -- within
+/// the bundle. `pkSeed` and `hypertreeRoot` are adjacent in the bundle layout
+/// (`statefulPublicKey || commitment || pkSeed || hypertreeRoot`), so this is
+/// one contiguous 64-byte range, not two fields to stitch together.
+///
+/// This is the material specification section 21's few-time stateless budget
+/// is keyed to. It is deliberately not `PK_SEED_OFFSET` re-exported under a
+/// second name: this constant documents *why* the range matters (the budget
+/// key), where `PK_SEED_OFFSET` documents only where `pkSeed` starts.
+pub const STATELESS_KEY_MATERIAL_OFFSET: usize = PK_SEED_OFFSET;
+
+/// Length of the stateless key material: `pkSeed(32) || hypertreeRoot(32)`.
+pub const STATELESS_KEY_MATERIAL_LEN: usize = PK_SEED_LEN + HYPERTREE_ROOT_LEN;
+
 /// Offset of the big-endian `maxSignatures` field within `statefulPublicKey`
 /// (and therefore within the bundle, since `statefulPublicKey` starts at 0).
 const MAX_SIGNATURES_OFFSET: usize = 64;

@@ -17,12 +17,15 @@ cross-implementation test vectors exist yet. See
 | Suite | Classical | Post-quantum | State |
 |---|---|---|---|
 | H1 | ed25519 | ML-DSA-44 | stateless |
+| H2 | ed25519 | FN-DSA-512 | stateless |
 | H3 | sr25519 | ML-DSA-44 | stateless |
+| H4 | sr25519 | FN-DSA-512 | stateless |
 | H5 | ed25519 | SHRINCS | stateful |
 | H6 | sr25519 | SHRINCS | stateful |
 
-H2 and H4 pair the classical components with Falcon-512. They wait on a
-final FIPS 206 and are not implemented.
+H2 and H4 ship against the `fn-dsa` crate rather than waiting for a final
+FIPS 206. Read the caveat under [Limitations](#limitations) before you use
+them.
 
 The suite name is the domain separator. `H1` signs under the label
 `hybrid-ed25519-mldsa44-v1`, plus a trailing null byte, and the label is
@@ -34,7 +37,7 @@ for one suite cannot verify under another.
 | Crate | Contents |
 |---|---|
 | `pqhybridsign-core` | Composition layer: suite macros, message binding, key derivation, wire encoding, and the stateful signer and verifier ports. Carries no cryptography of its own. |
-| `pqhybridsign` | H1 and H3, over `ed25519-zebra`, `schnorrkel`, and `fips204`. |
+| `pqhybridsign` | H1 through H4, over `ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`. |
 | `pqhybridsign-shrincs` | H5 and H6, over `hashsigs-rs`. |
 
 ## Stateless signing, H1 and H3
@@ -116,6 +119,8 @@ same suite under another parameter set.
 workspace builds for `wasm32-unknown-unknown`, and continuous integration
 checks it.
 
+The minimum supported Rust version is 1.82, set by `fn-dsa`.
+
 ## Testing
 
 ```bash
@@ -138,7 +143,12 @@ delivers.
   implementation.
 - **No external known-answer tests exist for the composition layer.** The
   component crates carry their own tests for the underlying primitives.
-- **H2 and H4 do not exist.** Falcon waits on a final FIPS 206.
+- **H2 and H4 predate the standard.** FIPS 206 is not final. A signature
+  made under H2 or H4 today may not verify against a later, conforming
+  implementation. Use them where you control both sides, or use H1 or H3.
+- **The H2/H4 length field is wider than it needs to be.** `fn-dsa` 0.4.0
+  emits a fixed 666-byte signature, so the one-byte `FalconLen` delta always
+  carries the same value. The field stays because the format specifies it.
 - **Rotation and the verifier-side acceptance policy are in progress.**
 
 ## License

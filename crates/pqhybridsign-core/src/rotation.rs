@@ -507,6 +507,7 @@ mod tests {
         const LEAF_CAPACITY_LIMIT: u32 = 1;
         const FIXED_STATEFUL_SIG_LEN: usize = 0;
         const STATELESS_SIG_LEN: usize = 1;
+        const STATELESS_BUDGET: u64 = 1;
 
         type SecretKey = FakeSecretKey;
 
@@ -579,6 +580,9 @@ mod tests {
             Choice::from(u8::from(
                 sig.len() == 1 && sig0 == (vk0 ^ mix(payload, m_prime_rotation)),
             ))
+        }
+        fn stateless_key_material(vk: &[u8]) -> Result<&[u8]> {
+            Ok(vk)
         }
     }
 
