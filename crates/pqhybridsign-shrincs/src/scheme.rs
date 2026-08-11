@@ -79,16 +79,36 @@ const STATELESS_LEN: usize = FORS_LEN + HYPERTREE_LEN;
 
 /// The composite SHRINCS secret key: `Keys` plus its own `Zeroize`, since
 /// upstream's `Keys` does not implement the trait itself.
+///
+/// The key lives in an `Option` so that `zeroize` can take it and drop it.
+/// Upstream exposes no way to wipe a `Keys` in place -- both private halves
+/// sit behind immutable accessors -- but each half is `ZeroizeOnDrop`, so
+/// dropping the value is what actually clears the secret material. Taking the
+/// `Option` is therefore a real wipe, not a gesture.
+///
+/// A wiped key is unusable rather than silently wrong: every accessor below
+/// fails closed. That is the point of calling `zeroize` early.
 pub struct ShrincsSecretKey {
-    keys: Keys,
+    keys: Option<Keys>,
+}
+
+impl ShrincsSecretKey {
+    /// Borrow the key material, or fail if it was already wiped.
+    fn keys(&self) -> Result<&Keys> {
+        self.keys.as_ref().ok_or(Error::ComponentFailure)
+    }
+
+    /// Mutably borrow the key material, or fail if it was already wiped.
+    fn keys_mut(&mut self) -> Result<&mut Keys> {
+        self.keys.as_mut().ok_or(Error::ComponentFailure)
+    }
 }
 
 impl Zeroize for ShrincsSecretKey {
     fn zeroize(&mut self) {
-        // `Keys` does not implement `Zeroize` (upstream; its two
-        // private-key halves are individually `ZeroizeOnDrop`, so they wipe
-        // when this struct drops, but there is no hook to wipe them early
-        // on an explicit `zeroize()` call). Nothing more to do here.
+        // Dropping the taken value runs `ZeroizeOnDrop` on both private
+        // halves, which is the only wipe upstream makes reachable.
+        drop(self.keys.take());
     }
 }
 
@@ -131,11 +151,17 @@ impl PqStatefulScheme for ShrincsScheme {
         let (keys, public_key) =
             ShrincsSigner::keygen(seed, max_signatures).ok_or(Error::ComponentFailure)?;
         write_bundle(&public_key, vk_out);
-        Ok(ShrincsSecretKey { keys })
+        Ok(ShrincsSecretKey { keys: Some(keys) })
     }
 
     fn leaf_capacity(sk: &Self::SecretKey) -> u32 {
-        sk.keys.stateful().public_key().max_signatures
+        // A wiped key has no remaining budget. Zero is the fail-closed
+        // answer: the generic driver compares it against the next leaf and
+        // refuses to sign.
+        match sk.keys() {
+            Ok(keys) => keys.stateful().public_key().max_signatures,
+            Err(_) => 0,
+        }
     }
 
     fn next_leaf(sk: &Self::SecretKey) -> u32 {
@@ -143,7 +169,12 @@ impl PqStatefulScheme for ShrincsScheme {
         // generic driver and `LeafJournal` use the 0-based convention
         // ("for a fresh key this is 0"). Normalize here, once, rather than
         // asking every caller to know upstream's off-by-one.
-        sk.keys.stateful().next_leaf_index().saturating_sub(1)
+        match sk.keys() {
+            Ok(keys) => keys.stateful().next_leaf_index().saturating_sub(1),
+            // A wiped key reports no progress; `leaf_capacity` returns 0 for
+            // the same key, so the driver sees an exhausted budget and stops.
+            Err(_) => 0,
+        }
     }
 
     fn precheck(msg: &[u8]) -> bool {
@@ -167,17 +198,18 @@ impl PqStatefulScheme for ShrincsScheme {
         // itself (see `action` module docs); the generic driver already ran
         // `precheck` (== `valid_action_context`) before calling here, so
         // this call only ever sees a valid context.
-        let sig = ShrincsSigner::sign_stateful_action(&mut sk.keys, &public_key, &action_ctx)
+        let sig = ShrincsSigner::sign_stateful_action(sk.keys_mut()?, &public_key, &action_ctx)
             .ok_or(Error::ComponentFailure)?;
         write_flat_stateful(&sig, sig_out)
     }
 
     fn sign_stateless(sk: &Self::SecretKey, msg: &[u8], sig_out: &mut [u8]) -> Result<usize> {
         let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
-        let commitment = *sk.keys.public_key_commitment().as_bytes();
+        let keys = sk.keys()?;
+        let commitment = *keys.public_key_commitment().as_bytes();
         let message = ShrincsVerifier::new().stateless_action_message_hash(commitment, &action_ctx);
         let sig =
-            ShrincsSigner::sign_stateless_raw(&sk.keys, &message).ok_or(Error::ComponentFailure)?;
+            ShrincsSigner::sign_stateless_raw(keys, &message).ok_or(Error::ComponentFailure)?;
         write_flat_stateless(&sig, sig_out)
     }
 
@@ -406,4 +438,59 @@ fn read_hashes(bytes: &[u8], at: &mut usize, count: usize) -> Option<Vec<[u8; HA
         out.push(read_hash(bytes, at)?);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEED: [u8; 32] = [0x11; 32];
+
+    #[test]
+    fn keygen_rejects_max_signatures_over_the_limit() {
+        let mut vk = [0u8; bundle::BUNDLE_LEN];
+        assert!(ShrincsScheme::keygen_from_seed(&SEED, 0, &mut vk).is_err());
+        assert!(
+            ShrincsScheme::keygen_from_seed(&SEED, MAX_STATEFUL_SIGNATURES_LIMIT + 1, &mut vk)
+                .is_err()
+        );
+    }
+
+    /// `zeroize` must actually drop the key material, not merely satisfy the
+    /// trait. Wiping is observable only through behaviour, so this asserts
+    /// the fail-closed contract every accessor promises.
+    #[test]
+    fn zeroize_wipes_the_key_and_every_accessor_fails_closed() {
+        let mut vk = [0u8; bundle::BUNDLE_LEN];
+        let mut sk = ShrincsScheme::keygen_from_seed(&SEED, 4, &mut vk).expect("keygen");
+
+        // Live key: the budget is real and one stateful signature works.
+        assert_eq!(ShrincsScheme::leaf_capacity(&sk), 4);
+        let mut sig = vec![0u8; ShrincsScheme::max_stateful_sig_len(4)];
+        assert!(ShrincsScheme::sign_stateful(&mut sk, &vk, b"before", &mut sig).is_ok());
+
+        sk.zeroize();
+
+        // Wiped key: no budget, no progress, and neither signing path runs.
+        assert_eq!(
+            ShrincsScheme::leaf_capacity(&sk),
+            0,
+            "a wiped key must report an exhausted budget"
+        );
+        assert_eq!(ShrincsScheme::next_leaf(&sk), 0);
+        assert!(
+            ShrincsScheme::sign_stateful(&mut sk, &vk, b"after", &mut sig).is_err(),
+            "stateful signing must fail on a wiped key"
+        );
+        let mut stateless = vec![0u8; ShrincsScheme::STATELESS_SIG_LEN];
+        assert!(
+            ShrincsScheme::sign_stateless(&sk, b"after", &mut stateless).is_err(),
+            "stateless signing must fail on a wiped key, and must fail before \
+             it starts grinding"
+        );
+
+        // Wiping twice is not an error.
+        sk.zeroize();
+        assert_eq!(ShrincsScheme::leaf_capacity(&sk), 0);
+    }
 }
