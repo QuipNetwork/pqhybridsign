@@ -130,6 +130,20 @@ impl<S: StatefulSuite> SecretKey<S> {
             + <S::Pq as PqStatefulScheme>::VERIFY_KEY_LEN
     }
 
+    /// The next unused leaf this key will spend.
+    ///
+    /// Read this after [`Self::import`] and compare it against the journal
+    /// the key will sign with. The two must agree: a key restored from an
+    /// older blob than the journal has already recorded will try to reissue
+    /// leaves the journal says are spent.
+    ///
+    /// The driver also checks this at signing time, but only as an opaque
+    /// failure. Reconciling at restore time fails loudly, while there is
+    /// still an operator watching.
+    pub fn next_leaf(&self) -> u32 {
+        <S::Pq as PqStatefulScheme>::next_leaf(&self.pq)
+    }
+
     /// Serialize this key, its post-quantum half, and the leaf counter as one
     /// blob, so the parts cannot be restored out of step with each other.
     ///
@@ -804,6 +818,32 @@ mod tests {
     /// The counter field and the component key are two records of the same
     /// state. If they disagree, the blob was edited, and importing it would
     /// restore a signer whose state nobody vouches for.
+    #[test]
+    fn next_leaf_lets_an_integrator_reconcile_a_restored_key() {
+        let (mut sk, _pk) = keygen::<FakeH>(&[7u8; 32], 4).expect("keygen");
+        assert_eq!(sk.next_leaf(), 0, "a fresh key has spent nothing");
+
+        let state = Rc::new(RefCell::new(JournalState::default()));
+        let mut journal = MemoryJournal(Rc::clone(&state));
+        FakeH::sign_stateful(&mut sk, &mut journal, b"one", b"").expect("sign");
+        FakeH::sign_stateful(&mut sk, &mut journal, b"two", b"").expect("sign");
+        assert_eq!(sk.next_leaf(), 2);
+        assert_eq!(
+            sk.next_leaf(),
+            journal.next_leaf(),
+            "the restored key and its journal must agree, which is what an \
+             integrator checks at restore time"
+        );
+
+        let blob = sk.export().expect("export");
+        let restored = SecretKey::<FakeH>::import(&blob).expect("import");
+        assert_eq!(
+            restored.next_leaf(),
+            2,
+            "the counter survives the round trip"
+        );
+    }
+
     #[test]
     fn import_rejects_a_counter_field_that_disagrees_with_the_component_key() {
         let (mut sk, _pk) = keygen::<FakeH>(&[5u8; 32], 4).expect("keygen");
