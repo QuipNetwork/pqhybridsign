@@ -11,11 +11,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.0-rc1"
 edition = "2021"
 rust-version = "1.82"
 license = "AGPL-3.0-or-later"
 repository = "https://gitlab.com/quip.network/pqhybridsign"
+readme = "README.md"
+keywords = ["post-quantum", "signature", "hybrid", "cryptography", "ml-dsa"]
+categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
 subtle = { version = "2.6.1", default-features = false }
