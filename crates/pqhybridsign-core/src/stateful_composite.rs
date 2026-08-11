@@ -707,6 +707,8 @@ mod tests {
         pq = FakePq as "fake",
         label = "hybrid-stub-fake-v1",
         label_len = 20,
+        rotate_label = "hybrid-stub-fake-rotate-v1",
+        rotate_label_len = 27,
     }
 
     #[derive(Default)]

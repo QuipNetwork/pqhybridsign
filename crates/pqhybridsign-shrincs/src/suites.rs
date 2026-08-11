@@ -24,6 +24,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-256s",
     label = "hybrid-ed25519-shrincs-256s-v1",
     label_len = 31,
+    rotate_label = "hybrid-ed25519-shrincs-256s-rotate-v1",
+    rotate_label_len = 38,
 }
 #[cfg(feature = "profile-256s")]
 hybrid_stateful_suite! {
@@ -33,6 +35,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-256s",
     label = "hybrid-sr25519-shrincs-256s-v1",
     label_len = 31,
+    rotate_label = "hybrid-sr25519-shrincs-256s-rotate-v1",
+    rotate_label_len = 38,
 }
 
 #[cfg(feature = "profile-256s-sha2")]
@@ -43,6 +47,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-256s-sha2",
     label = "hybrid-ed25519-shrincs-256s-sha2-v1",
     label_len = 36,
+    rotate_label = "hybrid-ed25519-shrincs-256s-sha2-rotate-v1",
+    rotate_label_len = 43,
 }
 #[cfg(feature = "profile-256s-sha2")]
 hybrid_stateful_suite! {
@@ -52,6 +58,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-256s-sha2",
     label = "hybrid-sr25519-shrincs-256s-sha2-v1",
     label_len = 36,
+    rotate_label = "hybrid-sr25519-shrincs-256s-sha2-rotate-v1",
+    rotate_label_len = 43,
 }
 
 #[cfg(feature = "profile-128s-q18")]
@@ -62,6 +70,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-128s-q18",
     label = "hybrid-ed25519-shrincs-128s-q18-v1",
     label_len = 35,
+    rotate_label = "hybrid-ed25519-shrincs-128s-q18-rotate-v1",
+    rotate_label_len = 42,
 }
 #[cfg(feature = "profile-128s-q18")]
 hybrid_stateful_suite! {
@@ -71,6 +81,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-128s-q18",
     label = "hybrid-sr25519-shrincs-128s-q18-v1",
     label_len = 35,
+    rotate_label = "hybrid-sr25519-shrincs-128s-q18-rotate-v1",
+    rotate_label_len = 42,
 }
 
 #[cfg(feature = "profile-128s-q20")]
@@ -81,6 +93,8 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-128s-q20",
     label = "hybrid-ed25519-shrincs-128s-q20-v1",
     label_len = 35,
+    rotate_label = "hybrid-ed25519-shrincs-128s-q20-rotate-v1",
+    rotate_label_len = 42,
 }
 #[cfg(feature = "profile-128s-q20")]
 hybrid_stateful_suite! {
@@ -90,4 +104,6 @@ hybrid_stateful_suite! {
     pq = ShrincsScheme as "shrincs-128s-q20",
     label = "hybrid-sr25519-shrincs-128s-q20-v1",
     label_len = 35,
+    rotate_label = "hybrid-sr25519-shrincs-128s-q20-rotate-v1",
+    rotate_label_len = 42,
 }

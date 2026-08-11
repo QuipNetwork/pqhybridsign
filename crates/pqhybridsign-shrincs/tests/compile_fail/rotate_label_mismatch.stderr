@@ -1,0 +1,13 @@
+error[E0080]: evaluation panicked: composed rotate label does not match the registry literal
+  --> tests/compile_fail/rotate_label_mismatch.rs:12:1
+   |
+12 | / hybrid_stateful_suite! {
+13 | |     WrongRotateLabel,
+14 | |     classical = Ed25519 as "ed25519",
+15 | |     pq = ShrincsScheme as "shrincs-256s",
+...  |
+19 | |     rotate_label_len = 38,
+20 | | }
+   | |_^ evaluation of `_` failed here
+   |
+   = note: this error originates in the macro `$crate::panic::panic_2021` which comes from the expansion of the macro `hybrid_stateful_suite` (in Nightly builds, run with -Z macro-backtrace for more info)

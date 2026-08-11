@@ -30,6 +30,9 @@ pub enum Error {
     TrailingBytes { expected: usize, actual: usize },
     /// A component crate reported an internal failure.
     ComponentFailure,
+    /// A rotation payload carried a `RotationKind` other than `0x01`
+    /// (stateful graft) or `0x02` (full swap).
+    BadRotationKind { kind: u8 },
 }
 
 impl fmt::Display for Error {
@@ -68,6 +71,9 @@ impl fmt::Display for Error {
                 )
             }
             Self::ComponentFailure => write!(f, "component algorithm failed"),
+            Self::BadRotationKind { kind } => {
+                write!(f, "rotation kind {kind:#04x} is not 0x01 or 0x02")
+            }
         }
     }
 }

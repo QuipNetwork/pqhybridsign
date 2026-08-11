@@ -105,6 +105,12 @@ pub trait StatefulSuite {
     /// Null-terminated registry label from specification section 7.
     const LABEL: &'static [u8];
 
+    /// Null-terminated registry label for the rotation domain, specification
+    /// section 19.2. Distinct from [`LABEL`](Self::LABEL) so an ordinary
+    /// classical signature can never be spliced in as a rotation
+    /// co-signature.
+    const ROTATE_LABEL: &'static [u8];
+
     const STORED_PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
         + <Self::Pq as PqStatefulScheme>::PUBLIC_KEY_LEN;
     const VERIFY_PUBLIC_KEY_LEN: usize = <Self::Classical as ClassicalScheme>::PUBLIC_KEY_LEN
@@ -121,7 +127,10 @@ pub trait StatefulSuite {
 /// Same compile-time discipline as [`hybrid_suite!`]: composes the label as
 /// `"hybrid-" classical "-" pq "-v1"` plus a null byte, then checks the
 /// result against the registry literal and its byte count, and each name
-/// token against its component's `NAME`, all at compile time.
+/// token against its component's `NAME`, all at compile time. The rotation
+/// label (specification section 19.2) gets the same treatment: composed as
+/// `"hybrid-" classical "-" pq "-rotate-v1"` plus a null byte, checked
+/// against its own registry literal and byte count.
 #[macro_export]
 macro_rules! hybrid_stateful_suite {
     (
@@ -130,7 +139,9 @@ macro_rules! hybrid_stateful_suite {
         classical = $classical:ty as $ctok:literal,
         pq = $pq:ty as $ptok:literal,
         label = $label:literal,
-        label_len = $len:literal $(,)?
+        label_len = $len:literal,
+        rotate_label = $rotate_label:literal,
+        rotate_label_len = $rotate_len:literal $(,)?
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Debug)]
@@ -141,6 +152,8 @@ macro_rules! hybrid_stateful_suite {
             type Pq = $pq;
             const LABEL: &'static [u8] =
                 ::core::concat!("hybrid-", $ctok, "-", $ptok, "-v1", "\0").as_bytes();
+            const ROTATE_LABEL: &'static [u8] =
+                ::core::concat!("hybrid-", $ctok, "-", $ptok, "-rotate-v1", "\0").as_bytes();
         }
 
         const _: () = {
@@ -157,6 +170,19 @@ macro_rules! hybrid_stateful_suite {
             assert!(
                 $label.len() + 1 == $len,
                 "label length does not match the registry byte count",
+            );
+            // The composed rotation name must equal its own registry literal.
+            assert!(
+                $crate::suite::const_str_eq(
+                    ::core::concat!("hybrid-", $ctok, "-", $ptok, "-rotate-v1"),
+                    $rotate_label,
+                ),
+                "composed rotate label does not match the registry literal",
+            );
+            // Same byte-count discipline as the label above.
+            assert!(
+                $rotate_label.len() + 1 == $rotate_len,
+                "rotate label length does not match the registry byte count",
             );
             // Each name token must equal its component's NAME constant.
             assert!(
