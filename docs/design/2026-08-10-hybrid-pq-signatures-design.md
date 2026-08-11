@@ -301,6 +301,74 @@ stateless signature covers the commitments alone. Signing over `M'_rotation`
 makes the message binding a second, redundant defence rather than a
 replacement.
 
+### SHRINCS profile geometry, and why 128s keygen costs 47 seconds
+
+Recorded here because it was reconstructed twice from timings and should not
+have to be reconstructed a third time.
+
+Measured in release, one H5 key with four leaves, by
+`crates/pqhybridsign-shrincs/tests/profile_timing.rs`:
+
+| Profile | keygen | sign_stateful | sign_stateless | Stateless signature |
+|---|---|---|---|---|
+| `profile-256s` | 0.09 s | under 0.01 s | 1.16 s | 29,157 B |
+| `profile-256s-sha2` | 0.03 s | under 0.01 s | 0.33 s | 29,157 B |
+| `profile-128s-q18` | 46.85 s | under 0.01 s | 176.60 s | 5,769 B |
+| `profile-128s-q20` | 47.47 s | under 0.01 s | 166.51 s | 5,769 B |
+
+Debug builds run about 70 times slower. Never quote a debug figure as a
+performance characteristic.
+
+The cause is hypertree geometry, not grinding. The parameter sets, from the
+SHRINCS Implementations overview, which is the authority shared by the
+Solidity and Rust implementations:
+
+| Parameter | `256s`, `256s-sha2` | `128s-q18`, `128s-q20` |
+|---|---|---|
+| Hypertree | `h = 64`, `d = 8` layers | `h = 18`, `d = 1` (single layer) |
+| FORS-C | `k = 22` trees, height `a = 14` | `k = 6`, `a = 24` |
+| WOTS-C chains | 64, target sum 480 | 32, target sum 240 |
+| Hash length | 32 B | 16 B (truncated, high-aligned) |
+
+`d` is the standard SPHINCS+ knob trading signature size against key
+generation and signing time, and the two profiles sit at opposite ends of it.
+Key generation builds the top subtree, whose height is `h / d`. At `d = 8`
+that is 2^8 = 256 leaves. At `d = 1` it is the whole tree, 2^18 = 262,144
+leaves: a 1024-fold difference in leaf count against a measured 520-fold
+difference in time, the remainder being the cheaper 16-byte hash.
+
+What the single layer buys is signature size. A stateless signature carries
+one WOTS-C signature plus one authentication path per layer, so eight layers
+of height 8 cost far more than one layer of height 18. The arithmetic matches
+the measurements: at 256s the hypertree part is 8 × 2048 B of WOTS-C plus 64
+nodes, about 18.4 kB, against 1 × 1024 B plus 18 nodes, about 1.6 kB, at
+128s. Add the FORS-C part (21 revealed trees of height 14, against 5 of
+height 24) and the totals land on the 29,157 B and 5,769 B actually measured.
+
+**The internal documents record the parameter values, not the reason for
+them.** `hashsigs-rs` states only that its constants mirror the Solidity
+`SHRINCSParams` libraries. The reading above follows from the structure of
+SPHINCS+ and is confirmed by the size arithmetic, but no document says "we
+chose `d = 1` to shrink the signature". Treat it as a well-supported
+inference. On-chain, where signature bytes are calldata gas paid on every
+verification and key generation happens once off-chain, the trade is a
+sensible one.
+
+Two consequences for this crate:
+
+- A recovery runbook for a 128s deployment must budget about three minutes
+  for a stateless rotation or recovery signature. The Solidity measurements
+  go further and call in-process stateless signing "compute-infeasible at
+  128s" for their test harness.
+- The overview flags that the `q20` profile's 2^20 stateless budget "wants
+  profile security-analysis backing before production use". `q18` and `q20`
+  are otherwise identical. This crate exposes both, so that caveat travels
+  with it.
+
+References: SHRINCS is Kudinov and Nick, *Hash-based Signature Schemes for
+Bitcoin*, ePrint 2025/2203, with UXMSS in its appendix B.3. SPHINCS+C is
+Kudinov, Hülsing, Ronen and Yogev, ePrint 2022/778.
+
 ### Verifier-side acceptance policy
 
 Section 20 puts path acceptance in verifier state, not in the cryptographic

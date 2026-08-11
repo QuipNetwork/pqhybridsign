@@ -16,7 +16,10 @@
 //! here are limited to that.
 //!
 //! Cost: one keygen, no signing. Stateful signing is cheap but unnecessary
-//! here, and stateless signing grinds for 60 to 180 seconds.
+//! here. Stateless signing grinds: 1.16 s at `profile-256s` in release,
+//! 176.60 s at `profile-128s-q18`, and roughly 70 times those figures in a
+//! debug build. Keygen alone is 0.09 s at `profile-256s` but 46.85 s at
+//! `profile-128s-q18`, which sets this test's cost under those profiles.
 use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
 use pqhybridsign_shrincs::{keygen, H5};
 

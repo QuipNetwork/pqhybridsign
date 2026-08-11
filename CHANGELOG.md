@@ -69,4 +69,11 @@ made for one suite cannot verify under another.
 - **The Python binding accepts `bytes` and `bytearray`, not arbitrary buffer
   objects.** The `abi3-py39` stable ABI cannot reach the buffer-protocol C API
   below CPython 3.11.
+- **The `profile-128s-q20` stateless budget is not yet security-analysed.**
+  The SHRINCS parameter-set overview records that its 2^20 budget wants
+  profile security-analysis backing before production use. It is otherwise
+  identical to `q18`.
+- **Key generation under the 128s profiles takes about 47 seconds**, and a
+  stateless signature about three minutes, because those profiles use a
+  single-layer height-18 hypertree. See the performance table in the README.
 - The minimum supported Rust version is 1.82, set by `fn-dsa`.

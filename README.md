@@ -109,6 +109,11 @@ Exactly one profile feature must be active.
 | `profile-128s-q18` | no | 1161 bytes |
 | `profile-128s-q20` | no | 1161 bytes |
 
+The `q18` and `q20` profiles are identical except for the stateless budget
+(2^18 against 2^20). The SHRINCS parameter-set overview records that the
+`q20` budget wants profile security analysis before production use. That
+caveat travels with this crate, which exposes both.
+
 The profile name goes into the suite label, so `H5` under `profile-256s`
 signs under `hybrid-ed25519-shrincs-256s-v1` and cannot be confused with the
 same suite under another parameter set.
@@ -128,9 +133,40 @@ cargo test --workspace                    # default profile
 cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q20
 ```
 
-The suite runs in about five minutes. The stateless SHRINCS path dominates
-that time: it grinds a target sum, which takes 60 to 180 seconds per
-signature.
+The suite runs in about five minutes under the default profile. The
+stateless SHRINCS path dominates that time, and debug builds run roughly 70
+times slower than release, so measure in release.
+
+## Performance
+
+Measured on one machine in release mode, for one H5 key with four leaves.
+Reproduce with:
+
+```bash
+cargo test -p pqhybridsign-shrincs --release --no-default-features \
+    --features profile-128s-q18 --test profile_timing -- --ignored --nocapture
+```
+
+| Profile | keygen | sign_stateful | sign_stateless | Stateless signature |
+|---|---|---|---|---|
+| `profile-256s` | 0.09 s | under 0.01 s | 1.16 s | 29,157 B |
+| `profile-256s-sha2` | 0.03 s | under 0.01 s | 0.33 s | 29,157 B |
+| `profile-128s-q18` | 46.85 s | under 0.01 s | 176.60 s | 5,769 B |
+| `profile-128s-q20` | 47.47 s | under 0.01 s | 166.51 s | 5,769 B |
+
+Stateful signing and verification are too fast to measure at this
+resolution under every profile. Two consequences are worth planning around.
+
+**The 128s profiles cost about 47 seconds to generate a key.** They set
+`NUM_HYPERTREE_LAYERS = 1` over a height-18 tree, so key generation
+materialises all 262,144 leaves, where the 256s profiles build one 256-leaf
+subtree of an eight-layer hypertree. The gain is a stateless signature five
+times smaller. Nothing about it is a defect; it is the parameter set doing
+what it was chosen to do.
+
+**A stateless signature takes about three minutes at 128s.** The stateless
+path is the rotation and recovery path, so a recovery runbook for a 128s
+deployment must budget minutes, not milliseconds.
 
 ## Limitations
 
@@ -149,7 +185,14 @@ delivers.
 - **The H2/H4 length field is wider than it needs to be.** `fn-dsa` 0.4.0
   emits a fixed 666-byte signature, so the one-byte `FalconLen` delta always
   carries the same value. The field stays because the format specifies it.
-- **Rotation and the verifier-side acceptance policy are in progress.**
+- **The WebAssembly binding exposes H1 through H4 only.** A JavaScript object
+  holding a stateful secret key can be structured-cloned, which forks the leaf
+  counter. Use the C ABI or the Python binding for H5 and H6.
+- **The Python binding accepts `bytes` and `bytearray`, not arbitrary buffer
+  objects.** The `abi3-py39` stable ABI cannot reach the buffer-protocol C API
+  below CPython 3.11.
+- **Golden vectors exist only for `profile-256s`.** The other three profiles
+  have no pinned wire format.
 
 ## License
 

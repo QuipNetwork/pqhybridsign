@@ -17,7 +17,7 @@
 //! The stateful leaves (1, 2, 4) are reproduced live in this test:
 //! `sign_stateful` is cheap, so re-signing exercises the encode path exactly
 //! as the generator did. The stateless vector is not re-signed here --
-//! `sign_stateless` grinds and costs 60 to 180 seconds per call in a debug
+//! `sign_stateless` grinds; in a debug build that costs 60 to 180 seconds
 //! build -- so this test only re-verifies the recorded signature (the
 //! decode and verify path) and checks that the two signature hexes the
 //! generator captured over one message are equal, which is what "byte-
@@ -34,9 +34,10 @@
 //! comparing signatures from two different parameter sets.
 //!
 //! Generating vectors for the other three profiles is real coverage that
-//! this crate does not yet have. It is not cheap: at `profile-128s-q18` a
-//! single stateless signature takes roughly an hour to grind, against
-//! seconds at `profile-256s`.
+//! this crate does not yet have. Measured cost of one stateless signature
+//! in release: 1.16 s at `profile-256s`, 0.33 s at `profile-256s-sha2`,
+//! 176.60 s at `profile-128s-q18`, 166.51 s at `profile-128s-q20`. Debug
+//! builds run roughly 70 times slower, so generate in release.
 #![cfg(feature = "profile-256s")]
 
 use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
