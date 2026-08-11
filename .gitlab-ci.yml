@@ -42,6 +42,34 @@ wasm:
     # which could introduce a std or getrandom dependency.
     - cargo build -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
 
+cross-profile:
+  stage: check
+  script:
+    # Exactly one profile-* feature compiles at a time, so no single build can
+    # hold a key from another profile and check that it fails. This job
+    # supplies the comparison a build cannot: it runs the same fixed-seed
+    # keygen under every profile and asserts the fingerprints all differ.
+    # A change that stopped binding the profile into the commitment would
+    # collide two of them here.
+    - |
+      set -eu
+      out=$(mktemp)
+      for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
+        cargo test -p pqhybridsign-shrincs --release --no-default-features \
+          --features "$p" --test cross_profile -- --nocapture \
+          | grep CROSS_PROFILE_FINGERPRINT >> "$out"
+      done
+      total=$(wc -l < "$out")
+      # Compare only the commitment field: the label differs by construction
+      # (it carries the profile name), so counting distinct labels would pass
+      # even if the commitment stopped depending on the profile.
+      distinct=$(sed 's/.*commitment=//' "$out" | sort -u | wc -l)
+      cat "$out"
+      if [ "$total" -ne 4 ] || [ "$distinct" -ne 4 ]; then
+        echo "Expected 4 profiles with 4 distinct commitments, got $total lines and $distinct distinct"
+        exit 1
+      fi
+
 test-debug:
   stage: test
   script:
