@@ -33,6 +33,10 @@ pub enum Error {
     /// A rotation payload carried a `RotationKind` other than `0x01`
     /// (stateful graft) or `0x02` (full swap).
     BadRotationKind { kind: u8 },
+    /// A delta-length-encoded post-quantum signature had a length outside
+    /// `min_len..=min_len + 255`, the range the 1-byte `DeltaLen` field can
+    /// represent.
+    DeltaLengthOutOfRange { actual_len: usize, min_len: usize },
 }
 
 impl fmt::Display for Error {
@@ -74,6 +78,15 @@ impl fmt::Display for Error {
             Self::BadRotationKind { kind } => {
                 write!(f, "rotation kind {kind:#04x} is not 0x01 or 0x02")
             }
+            Self::DeltaLengthOutOfRange {
+                actual_len,
+                min_len,
+            } => write!(
+                f,
+                "post-quantum signature length {actual_len} outside {min_len}..={} \
+                 for the 1-byte delta field",
+                min_len + 255
+            ),
         }
     }
 }

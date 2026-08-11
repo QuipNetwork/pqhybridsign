@@ -19,9 +19,9 @@
 // are covered; the composition layer this crate adds is not.
 //
 // Adding external or cross-implementation vectors is Cycle 2 work.
-use pqhybridsign::{H1, H3};
+use pqhybridsign::{H1, H2, H3, H4};
 use pqhybridsign_core::composite::{keypair_from_seed, sign_deterministic, verify};
-use pqhybridsign_core::Suite;
+use pqhybridsign_core::{composite_delta, DeltaSuite, Suite};
 
 #[derive(serde::Deserialize)]
 struct Vector {
@@ -89,6 +89,59 @@ fn check<S: Suite>(v: &Vector) {
     assert!(verify::<S>(&pk, &msg, &ctx, &sig));
 }
 
+/// Same shape as [`check`], for a [`DeltaSuite`] (H2, H4): the label is
+/// 28 bytes, not 26, and the signature length is not known ahead of
+/// signing.
+fn check_delta<S: DeltaSuite>(v: &Vector) {
+    let master: [u8; 32] = hex::decode(&v.master_seed_hex)
+        .expect("seed")
+        .try_into()
+        .expect("32 bytes");
+    let mut sk = vec![0u8; S::SECRET_KEY_LEN];
+    let mut pk = vec![0u8; S::PUBLIC_KEY_LEN];
+    composite_delta::keypair_from_seed::<S>(&master, &mut sk, &mut pk).expect("keygen");
+    assert_eq!(
+        hex::encode(&pk),
+        v.public_key_hex,
+        "{} public key drifted",
+        v.suite
+    );
+
+    assert_eq!(
+        hex::encode(S::LABEL),
+        v.label_hex,
+        "{} label drifted",
+        v.suite
+    );
+    let label = hex::decode(&v.label_hex).expect("label");
+    assert_eq!(label.len(), 28, "{} label must be 28 bytes", v.suite);
+    assert_eq!(
+        label.last(),
+        Some(&0u8),
+        "{} label must end in a null byte",
+        v.suite
+    );
+    assert!(
+        v.hkdf_info_includes_label_null_byte,
+        "this crate pins the null byte inside info"
+    );
+
+    let ctx = hex::decode(&v.ctx_hex).expect("ctx");
+    let msg = hex::decode(&v.msg_hex).expect("msg");
+    let nonce = hex::decode(&v.nonce_hex).expect("nonce");
+    let mut sig = vec![0u8; S::MAX_SIGNATURE_LEN];
+    let written =
+        composite_delta::sign_deterministic::<S>(&sk, &msg, &ctx, &nonce, &mut sig).expect("sign");
+    sig.truncate(written);
+    assert_eq!(
+        hex::encode(&sig),
+        v.signature_hex,
+        "{} signature drifted",
+        v.suite
+    );
+    assert!(composite_delta::verify::<S>(&pk, &msg, &ctx, &sig));
+}
+
 #[test]
 fn h1_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h1.json")).expect("parse");
@@ -101,4 +154,18 @@ fn h3_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h3.json")).expect("parse");
     assert_eq!(v.suite, "H3");
     check::<H3>(&v);
+}
+
+#[test]
+fn h2_matches_the_golden_vector() {
+    let v: Vector = serde_json::from_str(include_str!("vectors/h2.json")).expect("parse");
+    assert_eq!(v.suite, "H2");
+    check_delta::<H2>(&v);
+}
+
+#[test]
+fn h4_matches_the_golden_vector() {
+    let v: Vector = serde_json::from_str(include_str!("vectors/h4.json")).expect("parse");
+    assert_eq!(v.suite, "H4");
+    check_delta::<H4>(&v);
 }

@@ -1,6 +1,6 @@
 [package]
 name = "pqhybridsign"
-description = "Hybrid post-quantum signatures: H1 (ed25519 + ML-DSA-44) and H3 (sr25519 + ML-DSA-44)"
+description = "Hybrid post-quantum signatures: H1/H3 (ML-DSA-44) and H2/H4 (FN-DSA-512)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,7 @@ rand_core.workspace = true
 ed25519-zebra.workspace = true
 schnorrkel.workspace = true
 fips204.workspace = true
+fn-dsa.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

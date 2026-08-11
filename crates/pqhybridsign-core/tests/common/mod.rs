@@ -169,32 +169,52 @@ fn pq_sign(sk: &[u8], msg: &[u8], sig_out: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-impl PqScheme for HashPq {
-    const NAME: &'static str = "mldsa44";
-    const PUBLIC_KEY_LEN: usize = 32;
-    const SECRET_KEY_LEN: usize = 32;
-    const SIGNATURE_LEN: usize = 128;
-    const SEED_LEN: usize = 32;
-    const IS_DETERMINISTIC: bool = true;
-    fn derive(seed: &[u8], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()> {
-        kdf(sk_out, b"stub-pq-sk", &[seed]);
-        pk_out.copy_from_slice(&pq_public(sk_out));
-        Ok(())
-    }
-    fn sign(
-        sk: &[u8],
-        msg: &[u8],
-        _rng: &mut impl rand_core::CryptoRngCore,
-        sig_out: &mut [u8],
-    ) -> Result<()> {
-        pq_sign(sk, msg, sig_out)
-    }
-    fn sign_deterministic(sk: &[u8], msg: &[u8], _nonce: &[u8], sig_out: &mut [u8]) -> Result<()> {
-        pq_sign(sk, msg, sig_out)
-    }
-    fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Choice {
-        let mut expected = [0u8; 128];
-        kdf(&mut expected, b"stub-pq-sig", &[pk, msg]);
-        sig.ct_eq(&expected)
-    }
+macro_rules! hash_pq_impl {
+    ($ty:ty, $name:literal, $siglen:literal) => {
+        impl PqScheme for $ty {
+            const NAME: &'static str = $name;
+            const PUBLIC_KEY_LEN: usize = 32;
+            const SECRET_KEY_LEN: usize = 32;
+            const SIGNATURE_LEN: usize = $siglen;
+            const SEED_LEN: usize = 32;
+            const IS_DETERMINISTIC: bool = true;
+            fn derive(seed: &[u8], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()> {
+                kdf(sk_out, b"stub-pq-sk", &[seed]);
+                pk_out.copy_from_slice(&pq_public(sk_out));
+                Ok(())
+            }
+            fn sign(
+                sk: &[u8],
+                msg: &[u8],
+                _rng: &mut impl rand_core::CryptoRngCore,
+                sig_out: &mut [u8],
+            ) -> Result<()> {
+                pq_sign(sk, msg, sig_out)
+            }
+            fn sign_deterministic(
+                sk: &[u8],
+                msg: &[u8],
+                _nonce: &[u8],
+                sig_out: &mut [u8],
+            ) -> Result<()> {
+                pq_sign(sk, msg, sig_out)
+            }
+            fn verify(pk: &[u8], msg: &[u8], sig: &[u8]) -> Choice {
+                let mut expected = [0u8; $siglen];
+                kdf(&mut expected, b"stub-pq-sig", &[pk, msg]);
+                sig.ct_eq(&expected)
+            }
+        }
+    };
 }
+
+hash_pq_impl!(HashPq, "mldsa44", 128);
+
+/// A fixed-signature-length post-quantum stub for `DeltaSuite` tests. Real
+/// FN-DSA-512 signatures under `fn-dsa` 0.4.0 are fixed-length too (see
+/// `pqhybridsign::pq::Falcon512`); the delta-length wire encoding still
+/// carries a real length field, so these tests exercise it against a
+/// component whose signature length is deliberately not the classical
+/// component's, rather than assume the two happen to line up.
+pub struct HashPqDelta;
+hash_pq_impl!(HashPqDelta, "falcon512", 96);

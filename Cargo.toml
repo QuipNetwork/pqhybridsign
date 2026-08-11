@@ -5,7 +5,7 @@ members = ["crates/pqhybridsign-core", "crates/pqhybridsign", "crates/pqhybridsi
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.82"
 license = "AGPL-3.0-or-later"
 repository = "https://gitlab.com/quip.network/pqhybridsign"
 
@@ -18,5 +18,6 @@ rand_core = { version = "0.6.4", default-features = false }
 ed25519-zebra = { version = "4.2", default-features = false }
 schnorrkel = { version = "0.11.5", default-features = false }
 fips204 = { version = "0.4.6", default-features = false, features = ["ml-dsa-44"] }
+fn-dsa = { version = "0.4.0", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hashsigs-rs = { git = "https://gitlab.com/quip.network/hashsigs-rs.git", rev = "833de08d618b7e42b7991f7c684571133c3d88ab", default-features = false, features = ["std"] }

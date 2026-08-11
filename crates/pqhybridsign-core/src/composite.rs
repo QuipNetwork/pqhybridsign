@@ -95,7 +95,7 @@ pub fn sign<S: Suite>(
     rng: &mut impl rand_core::CryptoRngCore,
     sig_out: &mut [u8],
 ) -> Result<()> {
-    with_m_prime::<S, ()>(msg, ctx, |m| {
+    with_m_prime::<()>(S::LABEL, msg, ctx, |m| {
         let (sk_halves, sig_halves) = split::<S>(sk, sig_out)?;
         // The label is the classical component's signing context. Dropping
         // it would leave sr25519 signatures unbound to the suite.
@@ -132,7 +132,7 @@ pub fn sign_deterministic<S: Suite>(
     nonce: &[u8],
     sig_out: &mut [u8],
 ) -> Result<()> {
-    with_m_prime::<S, ()>(msg, ctx, |m| {
+    with_m_prime::<()>(S::LABEL, msg, ctx, |m| {
         let (sk_halves, sig_halves) = split::<S>(sk, sig_out)?;
         <S::Classical as ClassicalScheme>::sign_deterministic(
             sk_halves.0,
@@ -160,7 +160,7 @@ pub fn verify<S: Suite>(pk: &[u8], msg: &[u8], ctx: &[u8], sig: &[u8]) -> bool {
     let c_pk = <S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
     let split = S::SPLIT;
 
-    let outcome = with_m_prime::<S, Choice>(msg, ctx, |m| {
+    let outcome = with_m_prime::<Choice>(S::LABEL, msg, ctx, |m| {
         let classical_ok =
             <S::Classical as ClassicalScheme>::verify(&pk[..c_pk], m, S::LABEL, &sig[..split]);
         let pq_ok = <S::Pq as PqScheme>::verify(&pk[c_pk..], m, &sig[split..]);
@@ -186,7 +186,7 @@ fn split<'a, S: Suite>(sk: &'a [u8], sig_out: &'a mut [u8]) -> Result<(Halves<'a
     Ok((sk.split_at(sk_split), sig_out.split_at_mut(S::SPLIT)))
 }
 
-fn exact(buf: &[u8], want: usize) -> Result<()> {
+pub(crate) fn exact(buf: &[u8], want: usize) -> Result<()> {
     if buf.len() == want {
         Ok(())
     } else {
@@ -197,16 +197,23 @@ fn exact(buf: &[u8], want: usize) -> Result<()> {
     }
 }
 
-/// Build `M'` and hand it to `f`, then wipe the buffer.
-fn with_m_prime<S: Suite, T>(
+/// Build `M' = Prefix || Label || len(ctx) || ctx || M` for `label` and hand
+/// it to `f`, then wipe the buffer.
+///
+/// `pub(crate)` so [`crate::composite_delta`] can share it: `M'` does not
+/// depend on how a suite's signature is split, only on its label, so the
+/// delta-length composite functions reuse this rather than duplicate the
+/// stack/alloc fallback.
+pub(crate) fn with_m_prime<T>(
+    label: &'static [u8],
     msg: &[u8],
     ctx: &[u8],
     f: impl FnOnce(&[u8]) -> Result<T>,
 ) -> Result<T> {
-    let needed = m_prime_len(S::LABEL, ctx, msg)?;
+    let needed = m_prime_len(label, ctx, msg)?;
     if needed <= STACK_M_PRIME {
         let mut buf = [0u8; STACK_M_PRIME];
-        let out = match write_m_prime(&mut buf[..needed], S::LABEL, ctx, msg) {
+        let out = match write_m_prime(&mut buf[..needed], label, ctx, msg) {
             Ok(n) => f(&buf[..n]),
             Err(e) => Err(e),
         };
@@ -216,7 +223,7 @@ fn with_m_prime<S: Suite, T>(
     #[cfg(feature = "alloc")]
     {
         let mut buf = alloc::vec![0u8; needed];
-        let out = match write_m_prime(&mut buf, S::LABEL, ctx, msg) {
+        let out = match write_m_prime(&mut buf, label, ctx, msg) {
             Ok(n) => f(&buf[..n]),
             Err(e) => Err(e),
         };

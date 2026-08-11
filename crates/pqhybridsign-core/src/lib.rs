@@ -11,7 +11,9 @@ pub use error::{Error, Result};
 
 pub mod component;
 pub mod composite;
+pub mod composite_delta;
 pub mod derive;
+pub mod encoding_delta;
 pub mod encoding_path;
 pub mod message;
 pub mod policy;
@@ -26,4 +28,5 @@ pub use derive::derive_component_seeds;
 #[cfg(feature = "alloc")]
 pub use message::m_prime;
 pub use message::{m_prime_len, write_m_prime, PREFIX};
+pub use suite::DeltaSuite;
 pub use suite::{StatefulSuite, Suite};
