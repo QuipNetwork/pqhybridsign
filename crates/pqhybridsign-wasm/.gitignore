@@ -1,0 +1,5 @@
+# Build output from scripts/build-npm.sh: assembled here for publishing,
+# never committed. The TypeScript definitions it contains are checked in
+# separately, under npm/types/, and diff-tested by scripts/check-types.sh.
+/npm/web/
+/npm/node/

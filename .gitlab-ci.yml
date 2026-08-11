@@ -70,6 +70,16 @@ cross-profile:
         exit 1
       fi
 
+wasm-npm:
+  stage: test
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends nodejs
+    - curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - cd crates/pqhybridsign-wasm
+    - ./scripts/check-types.sh
+    - ./scripts/build-npm.sh
+    - node tests/node/sign_and_verify.mjs
+
 deny:
   stage: check
   script:
@@ -108,3 +118,11 @@ test-release:
     # subtle uses debug_assert with secret-dependent branches, so release
     # mode exercises different code than the debug build above.
     - cargo test --workspace --release
+
+c-abi:
+  stage: test
+  script:
+    # Builds the cdylib/staticlib, then compiles and links tests/c/main.c
+    # against the checked-in header and runs it: proof the header and the
+    # library it describes agree, not just that the Rust side compiles.
+    - crates/pqhybridsign-cffi/tests/c/run.sh

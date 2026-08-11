@@ -5,6 +5,9 @@ members = [
     "crates/pqhybridsign",
     "crates/pqhybridsign-shrincs",
     "crates/pqhybridsign-abi",
+    "crates/pqhybridsign-wasm",
+    "crates/pqhybridsign-py",
+    "crates/pqhybridsign-cffi",
 ]
 
 [workspace.package]

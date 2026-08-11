@@ -1,0 +1,28 @@
+[package]
+name = "pqhybridsign-wasm"
+description = "WebAssembly and npm binding for pqhybridsign, wrapping pqhybridsign-abi's stateless suites for JavaScript"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pqhybridsign-abi = { path = "../pqhybridsign-abi" }
+rand_core = { workspace = true, features = ["getrandom"] }
+zeroize.workspace = true
+wasm-bindgen = "0.2.127"
+js-sys = "0.3.104"
+
+# `getrandom` backs `rand_core::OsRng`. On `wasm32-unknown-unknown` it has no
+# OS source of randomness to call by default and needs the `js` backend
+# (`crypto.getRandomValues` in a browser, `crypto.randomFillSync` under
+# Node) enabled explicitly.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.77"

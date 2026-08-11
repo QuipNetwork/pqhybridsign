@@ -1,0 +1,31 @@
+{
+  "name": "pqhybridsign",
+  "version": "0.1.0",
+  "description": "Hybrid classical/post-quantum signing (H1-H4) compiled to WebAssembly",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/quip.network/pqhybridsign"
+  },
+  "sideEffects": [
+    "./web/pqhybridsign_wasm.js"
+  ],
+  "files": [
+    "web/",
+    "node/"
+  ],
+  "main": "./node/pqhybridsign_wasm.js",
+  "types": "./node/pqhybridsign_wasm.d.ts",
+  "exports": {
+    ".": {
+      "node": {
+        "types": "./node/pqhybridsign_wasm.d.ts",
+        "default": "./node/pqhybridsign_wasm.js"
+      },
+      "default": {
+        "types": "./web/pqhybridsign_wasm.d.ts",
+        "default": "./web/pqhybridsign_wasm.js"
+      }
+    }
+  }
+}
