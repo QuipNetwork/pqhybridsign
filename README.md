@@ -131,11 +131,31 @@ The minimum supported Rust version is 1.82, set by `fn-dsa`.
 ```bash
 cargo test --workspace                    # default profile
 cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q20
+cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q18
 ```
 
-The suite runs in about five minutes under the default profile. The
-stateless SHRINCS path dominates that time, and debug builds run roughly 70
-times slower than release, so measure in release.
+`cargo test --workspace` finishes in about 16.5 seconds under the default
+profile (292 tests across 36 binaries on this machine). Any one profile
+suite takes 0.24 s to 7.4 s. All four profiles together take about 8.2 s.
+
+The default suite is fast because the workspace `Cargo.toml` builds
+dependencies at `opt-level = 3` while workspace crates stay unoptimized.
+Before that change, one binary took 184.80 seconds.
+
+Tests read per-profile fixtures from
+`crates/pqhybridsign-shrincs/tests/vectors/` instead of generating keys and
+signatures. Regenerate a fixture with the command in `generate_fixtures.rs`.
+
+One real 128s key generation still runs per commit, in `smoke_128s.rs`. It
+carries `#[ignore]`, so run it explicitly:
+
+```bash
+cargo test -p pqhybridsign-shrincs --release --no-default-features \
+    --features profile-128s-q18 --test smoke_128s -- --ignored
+```
+
+That ignored smoke takes about 46 seconds in release. Debug builds run
+roughly 67 times slower than release for this code, so measure in release.
 
 ## Performance
 
@@ -167,6 +187,17 @@ what it was chosen to do.
 **A stateless signature takes about three minutes at 128s.** The stateless
 path is the rotation and recovery path, so a recovery runbook for a 128s
 deployment must budget minutes, not milliseconds.
+
+**Stateless signing time varies widely between messages at 128s.** A
+signature is about 47 seconds of fixed work plus about 128 seconds of
+grinding, on average. The fixed part builds a 262,144-leaf subtree, the same
+tree key generation builds, and no message avoids it. The grinding has two
+independent stages, FORS-C and a WOTS-C target sum. Plan for the average
+rather than the best case.
+
+**Restoring a signer from a stored key is not a fast path.**
+`SecretKey::import` costs about the same as `keygen` at 128s, because it
+re-derives the hypertree root to validate the blob.
 
 ## Limitations
 

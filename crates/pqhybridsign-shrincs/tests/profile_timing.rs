@@ -2,7 +2,7 @@
 //! Times the three costly SHRINCS operations under the active profile.
 //!
 //! `#[ignore]`d: this is a measurement, not an assertion, and under the
-//! 128s profiles it runs for hours. Invoke it deliberately:
+//! 128s profiles it runs for 221.97 seconds. Invoke it deliberately:
 //!
 //! ```text
 //! cargo test -p pqhybridsign-shrincs --release --no-default-features \
