@@ -32,6 +32,7 @@
 //! and in verification, the check runs first as an ordinary precondition.
 
 use hashsigs_rs::shrincs::ActionContext;
+use pqhybridsign_core::rotation::RotationKind;
 use sha3::{Digest, Keccak256};
 
 /// Fixed 32-byte domain separator reserved for hybrid-layer SHRINCS use,
@@ -72,6 +73,60 @@ pub fn to_action_context(m_prime: &[u8], nonce: [u8; 32], key_version: [u8; 32])
         action_type: HYBRID_ACTION_TYPE,
         payload_hash: keccak256(m_prime),
     }
+}
+
+/// Maps `m_prime_rotation` into an `ActionContext` for a rotation signature,
+/// specification section 19.2. The same mapping as [`to_action_context`],
+/// except that `domain_separator` is [`rotation_domain_separator`] instead
+/// of the fixed [`HYBRID_DOMAIN_SEPARATOR`], and `payload_hash` is over the
+/// rotation message rather than an ordinary `M'`.
+///
+/// Binding `next_classical_pk` and `kind` into the domain separator here --
+/// not only into `m_prime_rotation`'s bytes -- is what stops a holder of a
+/// compromised current classical key from reusing an honest stateless
+/// rotation signature (which binds only the commitments) alongside a
+/// co-signature over their own `NextClassicalPK`. See `RotationPayload`'s
+/// documentation and specification section 19.2 for the full attack.
+///
+/// The returned context is not guaranteed valid -- run
+/// [`valid_action_context`] on it before signing, same as
+/// [`to_action_context`].
+pub fn to_rotation_action_context(
+    m_prime_rotation: &[u8],
+    next_classical_pk: &[u8; 32],
+    kind: RotationKind,
+    nonce: [u8; 32],
+    key_version: [u8; 32],
+) -> ActionContext {
+    ActionContext {
+        domain_separator: rotation_domain_separator(next_classical_pk, kind),
+        nonce,
+        key_version,
+        action_type: HYBRID_ACTION_TYPE,
+        payload_hash: keccak256(m_prime_rotation),
+    }
+}
+
+/// `keccak256("hybrid-rotate-ds" || NextClassicalPK || RotationKind)`,
+/// specification section 19.2's rotation domain separator.
+///
+/// A function, not a constant like [`HYBRID_DOMAIN_SEPARATOR`]: it depends
+/// on the payload being authorized, specifically on `next_classical_pk` and
+/// `kind`. Binding those two fields here, inside the domain separator the
+/// stateless signer actually signs over
+/// (`ShrincsVerifier::stateless_action_message_hash` folds
+/// `ActionContext.domain_separator` in), is what makes the stateless
+/// rotation signature unusable against a different `NextClassicalPK`: see
+/// [`to_rotation_action_context`].
+pub fn rotation_domain_separator(next_classical_pk: &[u8; 32], kind: RotationKind) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    hasher.update(b"hybrid-rotate-ds");
+    hasher.update(next_classical_pk);
+    hasher.update([kind.to_u8()]);
+    let digest = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }
 
 fn keccak256(data: &[u8]) -> [u8; 32] {
@@ -188,5 +243,48 @@ mod tests {
         let mut ctx = to_action_context(b"any message", ZERO, ZERO);
         ctx.payload_hash = ZERO;
         assert!(!valid_action_context(&ctx));
+    }
+
+    #[test]
+    fn rotation_domain_separator_differs_from_the_ordinary_one() {
+        let ds = rotation_domain_separator(&[1u8; 32], RotationKind::StatefulGraft);
+        assert_ne!(ds, HYBRID_DOMAIN_SEPARATOR);
+    }
+
+    #[test]
+    fn rotation_domain_separator_binds_next_classical_pk() {
+        let a = rotation_domain_separator(&[1u8; 32], RotationKind::StatefulGraft);
+        let b = rotation_domain_separator(&[2u8; 32], RotationKind::StatefulGraft);
+        assert_ne!(
+            a, b,
+            "two different NextClassicalPK values must give different domain separators"
+        );
+    }
+
+    #[test]
+    fn rotation_domain_separator_binds_rotation_kind() {
+        let a = rotation_domain_separator(&[1u8; 32], RotationKind::StatefulGraft);
+        let b = rotation_domain_separator(&[1u8; 32], RotationKind::FullSwap);
+        assert_ne!(
+            a, b,
+            "two different RotationKind values must give different domain separators"
+        );
+    }
+
+    #[test]
+    fn rotation_action_context_round_trips_the_domain_separator() {
+        let next_classical_pk = [3u8; 32];
+        let ctx = to_rotation_action_context(
+            b"m-prime-rotation",
+            &next_classical_pk,
+            RotationKind::FullSwap,
+            ZERO,
+            ZERO,
+        );
+        assert_eq!(
+            ctx.domain_separator,
+            rotation_domain_separator(&next_classical_pk, RotationKind::FullSwap)
+        );
+        assert!(valid_action_context(&ctx));
     }
 }

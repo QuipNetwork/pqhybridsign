@@ -130,6 +130,22 @@ impl<S: StatefulSuite> SecretKey<S> {
             + <S::Pq as PqStatefulScheme>::VERIFY_KEY_LEN
     }
 
+    /// The classical secret key bytes.
+    ///
+    /// `pub(crate)`, not `pub`: the only caller outside this module is
+    /// `crate::rotation`, which needs both component secret keys directly to
+    /// sign a rotation's two component signatures over `M'_rotation` rather
+    /// than the ordinary `M'` this type's other methods build.
+    pub(crate) fn classical_bytes(&self) -> &[u8] {
+        &self.classical
+    }
+
+    /// The post-quantum component secret key. See [`Self::classical_bytes`]
+    /// for why this is exposed and to whom.
+    pub(crate) fn pq_secret_key(&self) -> &<S::Pq as PqStatefulScheme>::SecretKey {
+        &self.pq
+    }
+
     /// The next unused leaf this key will spend.
     ///
     /// Read this after [`Self::import`] and compare it against the journal
@@ -650,6 +666,26 @@ mod tests {
             Choice::from(1u8)
         }
         fn verify_stateless(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
+            Choice::from(1u8)
+        }
+        // This module's tests never exercise the rotation gate (see
+        // `rotation.rs` for that); these two are here only to satisfy the
+        // trait.
+        fn sign_stateless_rotation(
+            _sk: &Self::SecretKey,
+            _payload: &crate::rotation::RotationPayload,
+            _m_prime_rotation: &[u8],
+            sig_out: &mut [u8],
+        ) -> Result<usize> {
+            sig_out.fill(0);
+            Ok(1)
+        }
+        fn verify_stateless_rotation(
+            _vk: &[u8],
+            _payload: &crate::rotation::RotationPayload,
+            _m_prime_rotation: &[u8],
+            _sig: &[u8],
+        ) -> Choice {
             Choice::from(1u8)
         }
     }

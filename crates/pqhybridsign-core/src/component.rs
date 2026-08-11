@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+use crate::rotation::RotationPayload;
 use crate::Result;
 use subtle::Choice;
 
@@ -223,6 +224,46 @@ pub trait PqStatefulScheme {
     fn verify_stateful(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice;
     /// Verify a stateless signature against the verify key `vk`.
     fn verify_stateless(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice;
+
+    /// Sign `m_prime_rotation` on the stateless path, for a key-rotation or
+    /// -recovery authorization (specification section 19.2). Spends no leaf,
+    /// like [`sign_stateless`](Self::sign_stateless). Returns the number of
+    /// bytes written into `sig_out`.
+    ///
+    /// `payload` is the same [`RotationPayload`] `m_prime_rotation` was built
+    /// from; both are supplied so the implementation can derive a domain
+    /// separator that binds `payload.next_classical_pk` and `payload.kind`
+    /// into the signature itself, not only into `m_prime_rotation`'s bytes.
+    /// **This binding is the whole point of a separate method rather than
+    /// reusing [`sign_stateless`](Self::sign_stateless):** without it, a
+    /// stateless rotation signature produced for one `NextClassicalPK`
+    /// verifies just as well paired with a classical co-signature over a
+    /// different one, letting a holder of a compromised current classical
+    /// key front-run an honest recovery by splicing their own key in
+    /// alongside the honest new stateful tree. See section 19.2 for the
+    /// full attack.
+    fn sign_stateless_rotation(
+        sk: &Self::SecretKey,
+        payload: &RotationPayload,
+        m_prime_rotation: &[u8],
+        sig_out: &mut [u8],
+    ) -> Result<usize>;
+
+    /// Verify a
+    /// [`sign_stateless_rotation`](Self::sign_stateless_rotation) signature
+    /// against the verify key `vk`.
+    ///
+    /// Returns a `Choice`, never a `bool`, for the same reason as every
+    /// other verify method here: the composite rotation gate
+    /// (`crate::rotation::verify_rotation`) combines this with the classical
+    /// half's result by bitwise `&`, never `&&`, so neither the result nor
+    /// the running time reveals which half rejected.
+    fn verify_stateless_rotation(
+        vk: &[u8],
+        payload: &RotationPayload,
+        m_prime_rotation: &[u8],
+        sig: &[u8],
+    ) -> Choice;
 }
 
 #[cfg(test)]

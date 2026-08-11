@@ -27,6 +27,7 @@
 use hashsigs_rs::shrincs::{
     Keys, PublicKey as ShrincsBundlePublicKey, ShrincsSigner, ShrincsVerifier,
 };
+use pqhybridsign_core::rotation::RotationPayload;
 use pqhybridsign_core::{Error, PqStatefulScheme, Result};
 use subtle::Choice;
 use zeroize::Zeroize;
@@ -288,6 +289,62 @@ impl PqStatefulScheme for ShrincsScheme {
             &shrincs_sig,
         )))
     }
+
+    /// Signs on the stateless path, same as [`Self::sign_stateless`], but
+    /// with `action_ctx.domain_separator` replacing
+    /// [`action::HYBRID_DOMAIN_SEPARATOR`] with
+    /// [`action::rotation_domain_separator`] -- bound to
+    /// `payload.next_classical_pk` and `payload.kind`. That binding is what
+    /// makes the resulting signature unusable against a different
+    /// `NextClassicalPK`; see `crate::action::to_rotation_action_context`
+    /// and specification section 19.2.
+    fn sign_stateless_rotation(
+        sk: &Self::SecretKey,
+        payload: &RotationPayload,
+        m_prime_rotation: &[u8],
+        sig_out: &mut [u8],
+    ) -> Result<usize> {
+        let action_ctx = action::to_rotation_action_context(
+            m_prime_rotation,
+            &payload.next_classical_pk,
+            payload.kind,
+            [0u8; 32],
+            [0u8; 32],
+        );
+        let keys = sk.keys()?;
+        let commitment = *keys.public_key_commitment().as_bytes();
+        let message = ShrincsVerifier::new().stateless_action_message_hash(commitment, &action_ctx);
+        let sig =
+            ShrincsSigner::sign_stateless_raw(keys, &message).ok_or(Error::ComponentFailure)?;
+        write_flat_stateless(&sig, sig_out)
+    }
+
+    fn verify_stateless_rotation(
+        vk: &[u8],
+        payload: &RotationPayload,
+        m_prime_rotation: &[u8],
+        sig: &[u8],
+    ) -> Choice {
+        let Some((commitment, public_key)) = verify_bundle_self_consistent(vk) else {
+            return Choice::from(0u8);
+        };
+        let Some(shrincs_sig) = read_flat_stateless(sig) else {
+            return Choice::from(0u8);
+        };
+        let action_ctx = action::to_rotation_action_context(
+            m_prime_rotation,
+            &payload.next_classical_pk,
+            payload.kind,
+            [0u8; 32],
+            [0u8; 32],
+        );
+        Choice::from(u8::from(ShrincsVerifier::new().verify_stateless(
+            commitment,
+            &public_key,
+            &action_ctx,
+            &shrincs_sig,
+        )))
+    }
 }
 
 /// Flatten a `hashsigs_rs::shrincs::PublicKey` into the
@@ -536,5 +593,71 @@ mod tests {
         // Wiping twice is not an error.
         sk.zeroize();
         assert_eq!(ShrincsScheme::leaf_capacity(&sk), 0);
+    }
+
+    /// Specification section 19.2: the rotation domain separator must bind
+    /// `next_classical_pk` and `kind` *independently* of whatever message
+    /// bytes a caller passes as `m_prime_rotation`.
+    ///
+    /// `pqhybridsign_core::rotation::verify_rotation` always builds
+    /// `m_prime_rotation` itself, from the one `RotationPayload` both halves
+    /// share, so its own front-running test cannot distinguish this
+    /// method's domain-separator binding from the message-hash binding
+    /// `m_prime_rotation` already provides -- confirmed by a manual
+    /// mutation check (replacing this method's domain separator with the
+    /// fixed `HYBRID_DOMAIN_SEPARATOR` left that test passing, since
+    /// `m_prime_rotation` alone already differs whenever
+    /// `next_classical_pk` does, for any caller that goes through
+    /// `verify_rotation`). This test instead calls
+    /// `sign_stateless_rotation`/`verify_stateless_rotation` directly with
+    /// **identical** `m_prime_rotation` bytes across two different
+    /// `next_classical_pk` values -- modelling a caller who (incorrectly)
+    /// built the message from only the commitments, the exact failure mode
+    /// section 19.2 warns about -- to prove the domain separator alone,
+    /// not the message hash, is what closes it.
+    #[test]
+    fn domain_separator_alone_prevents_reuse_across_next_classical_pk() {
+        use pqhybridsign_core::rotation::RotationKind;
+
+        let seed = [0x55u8; 32];
+        let mut vk = [0u8; bundle::BUNDLE_LEN];
+        let sk = ShrincsScheme::keygen_from_seed(&seed, 1, &mut vk).expect("keygen");
+
+        // Deliberately identical for both payloads below.
+        let m_prime_rotation = b"commitments only, no next_classical_pk bound in";
+
+        let payload_a = RotationPayload {
+            kind: RotationKind::FullSwap,
+            current_commitment: [1u8; 32],
+            next_commitment: [2u8; 32],
+            next_classical_pk: [0xAAu8; 32],
+        };
+        let mut payload_b = payload_a;
+        payload_b.next_classical_pk = [0xBBu8; 32];
+
+        let mut sig = vec![0u8; ShrincsScheme::STATELESS_SIG_LEN];
+        ShrincsScheme::sign_stateless_rotation(&sk, &payload_a, m_prime_rotation, &mut sig)
+            .expect("sign_stateless_rotation");
+
+        assert!(
+            bool::from(ShrincsScheme::verify_stateless_rotation(
+                &vk,
+                &payload_a,
+                m_prime_rotation,
+                &sig
+            )),
+            "the honest signature must still verify against its own payload"
+        );
+        assert!(
+            !bool::from(ShrincsScheme::verify_stateless_rotation(
+                &vk,
+                &payload_b,
+                m_prime_rotation,
+                &sig
+            )),
+            "the same signature, over byte-for-byte identical message bytes, \
+             must not verify once next_classical_pk changes -- the domain \
+             separator, not the message hash, is what must catch this"
+        );
     }
 }
