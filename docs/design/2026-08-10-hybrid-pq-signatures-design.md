@@ -206,6 +206,13 @@ Three rules become structural instead of documentary:
    below: such a system authenticates and rate-limits a request before the
    signer ever sees it.
 
+   Validation still runs, but after the signature exists rather than before.
+   The component signs, which spends the leaf and advances both counters,
+   and then checks the message. A message that fails becomes an explicit
+   error instead of a signature that could never verify. The leaf stays
+   spent. Placing the same check earlier would recreate the hazard, because
+   the call would then return with the counter unmoved.
+
    `precheck` remains on the component trait, but it guards the stateless
    path, where no leaf exists, and `verify`, where a message no honest
    signer could have produced is refused before any cryptography runs.

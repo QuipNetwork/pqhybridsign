@@ -265,6 +265,12 @@ pub enum ReplayRejected {
 /// This is a policy a verifier opts into. It is not part of signature
 /// verification, and a signature this refuses may still be perfectly valid --
 /// that is the point. Replay is not a property the cryptography can decide.
+///
+/// This function is the whole of the `MonotonicIndex` policy. A verifier
+/// choosing between `MonotonicIndex`, `LeafBitmap`, and `RecoveryRotation`
+/// per key epoch, with the freeze and recovery rules the spec layers on top,
+/// wants [`crate::policy::LeafPolicyMachine`] instead, whose
+/// `MonotonicIndex` arm calls this function unchanged.
 pub fn accept_monotonic_leaf<S: LeafIndexStore>(
     store: &mut S,
     leaf: u32,

@@ -10,16 +10,26 @@
 //! across every H5/H6 suite and profile combination rather than varying per
 //! suite.
 //!
-//! # Leaf-consuming signatures: validate before signing
+//! # Leaf-consuming signatures: the attempt spends the leaf
 //!
 //! `hashsigs_rs::shrincs::ShrincsSigner::sign_stateful_action` does not
 //! validate its `ActionContext` argument before signing (confirmed by
-//! reading the upstream source, see [`valid_action_context`] below). Stateful
-//! signing consumes a one-time leaf from a budget of at most 4096; signing an
-//! invalid context permanently destroys that leaf and produces a signature
-//! the verifier will always reject, with no way to recover the leaf. Callers
-//! MUST run [`valid_action_context`] on the context returned by
-//! [`to_action_context`] before passing it to `sign_stateful_action`.
+//! reading the upstream source, see [`valid_action_context`] below), and it
+//! spends the leaf either way. That is correct, and this crate matches it:
+//! a signing path that can return without advancing the counter is a
+//! leaf-reuse hazard, and reuse is total security failure for the key, while
+//! a spent leaf is only availability loss.
+//!
+//! So callers MUST NOT treat [`valid_action_context`] as a guard that saves
+//! a leaf, and MUST NOT run it before `sign_stateful_action`. Doing so would
+//! create a signing path that returns without advancing the counter, which
+//! is the hazard this ordering removes.
+//!
+//! On the stateful path the check runs **after** the signature is produced,
+//! so that the leaf is already spent and both counters have advanced. It
+//! turns a signature that could never verify into an explicit error. The
+//! leaf stays spent either way. On the stateless path, where no leaf exists,
+//! and in verification, the check runs first as an ordinary precondition.
 
 use hashsigs_rs::shrincs::ActionContext;
 use sha3::{Digest, Keccak256};

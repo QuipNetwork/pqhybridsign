@@ -1,0 +1,43 @@
+# cargo-deny configuration. Run `cargo deny check`.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# The workspace is AGPL-3.0-or-later. Dependencies must be licensed
+# permissively enough to combine with it.
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# One rand_core major version across the graph. Two would mean two
+# incompatible CryptoRngCore traits and a component that cannot be handed the
+# caller's RNG.
+deny = []
+
+[[bans.skip-tree]]
+crate = "windows-sys"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# hashsigs-rs is consumed from its GitLab repository at a pinned revision.
+allow-git = ["https://gitlab.com/quip.network/hashsigs-rs.git"]

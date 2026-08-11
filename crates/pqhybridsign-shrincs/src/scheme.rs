@@ -230,14 +230,20 @@ impl PqStatefulScheme for ShrincsScheme {
     ) -> Result<usize> {
         let public_key = parse_bundle(vk)?;
         let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
-        // `sign_stateful_action` does not validate its `ActionContext`
-        // itself (see `action` module docs), and nothing validates it ahead
-        // of this call either. That is deliberate: the leaf is already
-        // committed by the time control reaches here, and an invalid
-        // context must consume it like any other attempt rather than get a
-        // free retry.
+        // Nothing validates the `ActionContext` ahead of this call, and that
+        // is deliberate: `sign_stateful_action` spends the leaf, and an
+        // invalid context must consume it like any other attempt rather than
+        // get a free retry. Validating first would create a signing path
+        // that returns without advancing the counter, which is the
+        // leaf-reuse hazard this ordering exists to remove.
         let sig = ShrincsSigner::sign_stateful_action(sk.keys_mut()?, &public_key, &action_ctx)
             .ok_or(Error::ComponentFailure)?;
+        // The leaf is spent now, and both counters have advanced. Validate
+        // here so the caller gets a real error instead of a signature that
+        // could never verify. The leaf stays spent either way.
+        if !action::valid_action_context(&action_ctx) {
+            return Err(Error::ComponentFailure);
+        }
         write_flat_stateful(&sig, sig_out)
     }
 

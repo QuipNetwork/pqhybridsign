@@ -14,6 +14,8 @@ pub mod composite;
 pub mod derive;
 pub mod encoding_path;
 pub mod message;
+pub mod policy;
+pub mod rotation;
 pub mod stateful;
 #[cfg(feature = "alloc")]
 pub mod stateful_composite;
