@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/pqhybridsign-core", "crates/pqhybridsign", "crates/pqhybridsign-shrincs"]
+members = [
+    "crates/pqhybridsign-core",
+    "crates/pqhybridsign",
+    "crates/pqhybridsign-shrincs",
+    "crates/pqhybridsign-abi",
+]
 
 [workspace.package]
 version = "0.1.0"

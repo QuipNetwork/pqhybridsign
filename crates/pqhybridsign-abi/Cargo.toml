@@ -1,0 +1,17 @@
+[package]
+name = "pqhybridsign-abi"
+description = "Type-erased, runtime-dispatched API over the pqhybridsign suites, the foundation for the C, WebAssembly and Python bindings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+pqhybridsign = { path = "../pqhybridsign" }
+pqhybridsign-core = { path = "../pqhybridsign-core" }
+pqhybridsign-shrincs = { path = "../pqhybridsign-shrincs" }
+rand_core.workspace = true
+
+[dev-dependencies]
+rand_core = { version = "0.6.4", features = ["getrandom"] }

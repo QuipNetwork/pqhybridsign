@@ -424,6 +424,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pqhybridsign-abi"
+version = "0.1.0"
+dependencies = [
+ "pqhybridsign",
+ "pqhybridsign-core",
+ "pqhybridsign-shrincs",
+ "rand_core",
+]
+
+[[package]]
 name = "pqhybridsign-core"
 version = "0.1.0"
 dependencies = [
