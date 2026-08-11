@@ -107,6 +107,10 @@ pub trait PqStatefulScheme {
     /// `PUBLIC_KEY_LEN`: a commitment alone is not enough to verify
     /// against).
     const VERIFY_KEY_LEN: usize;
+    /// Length of the component secret key in its exported form (see
+    /// [`export_secret_key`]).
+    ///
+    /// [`export_secret_key`]: PqStatefulScheme::export_secret_key
     const SECRET_KEY_LEN: usize;
     /// Upper bound on the one-time leaf budget a key can be given.
     const LEAF_CAPACITY_LIMIT: u32;
@@ -134,6 +138,52 @@ pub trait PqStatefulScheme {
     fn leaf_capacity(sk: &Self::SecretKey) -> u32;
     /// The next unspent leaf.
     fn next_leaf(sk: &Self::SecretKey) -> u32;
+
+    /// Write the component secret key into `out` in its exported form.
+    ///
+    /// The component owns this layout: the generic composite layer only
+    /// concatenates the result and never looks inside it. Two obligations
+    /// bind every implementation.
+    ///
+    /// The exported form MUST carry the leaf counter exactly as it stands,
+    /// including the exhausted value that a fully spent key holds. A form
+    /// that loses the counter turns restore into re-keygen, which reissues
+    /// every leaf already spent.
+    ///
+    /// A key whose material has been wiped MUST export as an error, never as
+    /// zeros. A blob of zeros is a blob that looks importable, and importing
+    /// it would produce a key with a counter no signer ever reached.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `out` is not exactly [`SECRET_KEY_LEN`] bytes,
+    /// [`Error::ComponentFailure`] if the key has been wiped.
+    ///
+    /// [`Error::BadLength`]: crate::Error::BadLength
+    /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure
+    /// [`SECRET_KEY_LEN`]: PqStatefulScheme::SECRET_KEY_LEN
+    fn export_secret_key(sk: &Self::SecretKey, out: &mut [u8]) -> Result<()>;
+
+    /// Rebuild a component secret key from [`export_secret_key`] output.
+    ///
+    /// This is a *validating* import, not a parse. An implementation MUST
+    /// reject a blob whose public part disagrees with its private part
+    /// (re-deriving the public part is the usual way to check this), and
+    /// MUST reject a leaf counter outside the range a signer for this key
+    /// can actually reach. Splicing a field from one key into another, or
+    /// editing the counter to point at a leaf outside the tree, must fail
+    /// here rather than produce a key that signs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `bytes` is not exactly [`SECRET_KEY_LEN`]
+    /// bytes, [`Error::ComponentFailure`] if validation rejects the blob.
+    ///
+    /// [`export_secret_key`]: PqStatefulScheme::export_secret_key
+    /// [`Error::BadLength`]: crate::Error::BadLength
+    /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure
+    /// [`SECRET_KEY_LEN`]: PqStatefulScheme::SECRET_KEY_LEN
+    fn import_secret_key(bytes: &[u8]) -> Result<Self::SecretKey>;
 
     /// Scheme-specific precondition on the message to be signed, checked
     /// BEFORE any leaf is spent. Returning `false` MUST cost nothing: no

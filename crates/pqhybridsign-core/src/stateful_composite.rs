@@ -82,6 +82,11 @@ impl<S: StatefulSuite> PublicKey<S> {
 /// Deliberately **not** `Clone`: a cloned copy would be a second holder of
 /// the same one-time leaf budget (see
 /// [`StatefulHybridSignatureScheme::SecretKey`]).
+///
+/// [`keygen`] and [`SecretKey::import`] are the only two ways to obtain one.
+/// [`SecretKey::export`] is the persistence path a stateful signer needs:
+/// restoring a signer by re-running [`keygen`] on the master seed resets the
+/// leaf counter and reissues leaves the key already spent.
 pub struct SecretKey<S: StatefulSuite> {
     classical: Vec<u8>,
     pq: <S::Pq as PqStatefulScheme>::SecretKey,
@@ -98,6 +103,141 @@ impl<S: StatefulSuite> Zeroize for SecretKey<S> {
         self.classical.zeroize();
         self.pq.zeroize();
         // `pq_verify_key` is public data; no need to wipe it.
+    }
+}
+
+/// Width of the leaf-counter field inside an exported [`SecretKey`].
+const COUNTER_FIELD_LEN: usize = 4;
+
+impl<S: StatefulSuite> SecretKey<S> {
+    /// Length of the blob [`SecretKey::export`] produces and
+    /// [`SecretKey::import`] accepts.
+    ///
+    /// The layout is
+    ///
+    /// ```text
+    /// ClassicalSK || PqSecretKey || nextLeaf(4, big-endian) || PqVerifyKey
+    /// ```
+    ///
+    /// The first two fields are the composite secret key itself
+    /// ([`StatefulSuite::SECRET_KEY_LEN`] bytes); the trailer carries the
+    /// state and the cached public verify key that [`keygen`] would
+    /// otherwise be the only source of.
+    pub fn exported_len() -> usize {
+        <S::Classical as ClassicalScheme>::SECRET_KEY_LEN
+            + <S::Pq as PqStatefulScheme>::SECRET_KEY_LEN
+            + COUNTER_FIELD_LEN
+            + <S::Pq as PqStatefulScheme>::VERIFY_KEY_LEN
+    }
+
+    /// Serialize this key, its post-quantum half, and the leaf counter as one
+    /// blob, so the parts cannot be restored out of step with each other.
+    ///
+    /// The result is secret material. It carries the classical secret key and
+    /// the post-quantum secret key in the clear; the caller owns wiping it
+    /// (`zeroize`) and protecting it at rest.
+    ///
+    /// Persisting this blob is the **only** correct way to restore a stateful
+    /// signer. Re-running [`keygen`] from the master seed rebuilds the same
+    /// key with the counter back at the first leaf, and every leaf the
+    /// original spent would then be issued a second time.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ComponentFailure`] if the component's own export fails. That
+    /// is what a wiped key ([`Zeroize::zeroize`]) reports:
+    /// [`PqStatefulScheme::export_secret_key`] is required to fail on wiped
+    /// material rather than hand back zeros, and this function has no other
+    /// way to tell wiped material from live material.
+    pub fn export(&self) -> Result<Vec<u8>> {
+        let classical_len = <S::Classical as ClassicalScheme>::SECRET_KEY_LEN;
+        let pq_len = <S::Pq as PqStatefulScheme>::SECRET_KEY_LEN;
+        // Defensive: both fields are fixed-width by construction (`keygen`
+        // and `import` are the only two ways to build this type), so a
+        // mismatch means the invariant is already broken. Refuse rather than
+        // index past the end.
+        if self.classical.len() != classical_len
+            || self.pq_verify_key.len() != <S::Pq as PqStatefulScheme>::VERIFY_KEY_LEN
+        {
+            return Err(Error::ComponentFailure);
+        }
+
+        let mut out = alloc::vec![0u8; Self::exported_len()];
+        out[..classical_len].copy_from_slice(&self.classical);
+        if let Err(e) = <S::Pq as PqStatefulScheme>::export_secret_key(
+            &self.pq,
+            &mut out[classical_len..][..pq_len],
+        ) {
+            out.zeroize();
+            return Err(e);
+        }
+        let counter_at = classical_len + pq_len;
+        let next_leaf = <S::Pq as PqStatefulScheme>::next_leaf(&self.pq);
+        out[counter_at..counter_at + COUNTER_FIELD_LEN].copy_from_slice(&next_leaf.to_be_bytes());
+        out[counter_at + COUNTER_FIELD_LEN..].copy_from_slice(&self.pq_verify_key);
+        Ok(out)
+    }
+
+    /// Rebuild a key from [`SecretKey::export`] output, rejecting a blob whose
+    /// parts do not belong together.
+    ///
+    /// This is the only way to reconstruct a [`SecretKey`] other than
+    /// [`keygen`], because the type is deliberately not `Clone`.
+    ///
+    /// **An export followed by two imports is a forked leaf budget.** Two
+    /// restored keys hold the same counter and will spend the same one-time
+    /// leaves on different messages, which is the exact failure that makes a
+    /// stateful hash-based key insecure. Treat the exported blob as a
+    /// single-holder token: import it once, and destroy the blob (or keep it
+    /// only as a backup that is never imported while another holder is live).
+    ///
+    /// Validation has two layers. The component validates its own half (see
+    /// [`PqStatefulScheme::import_secret_key`]: for a real component this
+    /// re-derives the public part from the private part, so a tampered or
+    /// spliced blob and an out-of-range counter are rejected). This function
+    /// then checks the counter field against the counter the imported
+    /// component key actually holds, so a blob whose recorded state disagrees
+    /// with its key material is refused rather than restored.
+    ///
+    /// The cached verify key is public data and is taken as given: pairing a
+    /// valid secret key with a different key's verify key produces a signer
+    /// whose signatures do not verify, but it cannot cause leaf reuse.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `bytes` is not [`SecretKey::exported_len`]
+    /// bytes. [`Error::ComponentFailure`] if the component rejects its half,
+    /// or if the counter field disagrees with it.
+    pub fn import(bytes: &[u8]) -> Result<Self> {
+        let expected = Self::exported_len();
+        if bytes.len() != expected {
+            return Err(Error::BadLength {
+                expected,
+                actual: bytes.len(),
+            });
+        }
+        let classical_len = <S::Classical as ClassicalScheme>::SECRET_KEY_LEN;
+        let pq_len = <S::Pq as PqStatefulScheme>::SECRET_KEY_LEN;
+        let counter_at = classical_len + pq_len;
+
+        let mut pq =
+            <S::Pq as PqStatefulScheme>::import_secret_key(&bytes[classical_len..][..pq_len])?;
+
+        let recorded = u32::from_be_bytes(
+            bytes[counter_at..counter_at + COUNTER_FIELD_LEN]
+                .try_into()
+                .map_err(|_| Error::ComponentFailure)?,
+        );
+        if recorded != <S::Pq as PqStatefulScheme>::next_leaf(&pq) {
+            pq.zeroize();
+            return Err(Error::ComponentFailure);
+        }
+
+        Ok(Self {
+            classical: bytes[..classical_len].to_vec(),
+            pq,
+            pq_verify_key: bytes[counter_at + COUNTER_FIELD_LEN..].to_vec(),
+        })
     }
 }
 
@@ -384,9 +524,23 @@ mod tests {
     // is the "leaf-burning guard" test: it cannot be exercised through a
     // real component's public API, because a real component's `precheck`
     // is built to accept every message an honest caller can construct.
-    #[derive(Default, zeroize::Zeroize)]
+    /// Mirrors the real component's shape: the material lives in an
+    /// `Option` so that `zeroize` can take it, and every accessor fails
+    /// closed once it is gone. Without that, a wiped fake would be
+    /// indistinguishable from a fresh one and could not stand in for a wiped
+    /// key in the export test.
+    #[derive(Default)]
     pub struct FakeSecretKey {
-        leaf: u32,
+        leaf: Option<u32>,
+    }
+
+    impl zeroize::Zeroize for FakeSecretKey {
+        fn zeroize(&mut self) {
+            if let Some(leaf) = self.leaf.as_mut() {
+                leaf.zeroize();
+            }
+            self.leaf = None;
+        }
     }
 
     pub struct FakePq;
@@ -396,7 +550,7 @@ mod tests {
         const SEED_LEN: usize = 1;
         const PUBLIC_KEY_LEN: usize = 1;
         const VERIFY_KEY_LEN: usize = 1;
-        const SECRET_KEY_LEN: usize = 1;
+        const SECRET_KEY_LEN: usize = 4;
         const LEAF_CAPACITY_LIMIT: u32 = 8;
         const FIXED_STATEFUL_SIG_LEN: usize = 0;
         const STATELESS_SIG_LEN: usize = 1;
@@ -409,13 +563,39 @@ mod tests {
             vk_out: &mut [u8],
         ) -> Result<Self::SecretKey> {
             vk_out.fill(0);
-            Ok(FakeSecretKey { leaf: 0 })
+            Ok(FakeSecretKey { leaf: Some(0) })
         }
-        fn leaf_capacity(_sk: &Self::SecretKey) -> u32 {
-            4
+        fn leaf_capacity(sk: &Self::SecretKey) -> u32 {
+            // A wiped key has no budget left, matching the real component.
+            sk.leaf.map_or(0, |_| 4)
         }
         fn next_leaf(sk: &Self::SecretKey) -> u32 {
-            sk.leaf
+            sk.leaf.unwrap_or(0)
+        }
+        fn export_secret_key(sk: &Self::SecretKey, out: &mut [u8]) -> Result<()> {
+            if out.len() != Self::SECRET_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: Self::SECRET_KEY_LEN,
+                    actual: out.len(),
+                });
+            }
+            let leaf = sk.leaf.ok_or(Error::ComponentFailure)?;
+            out.copy_from_slice(&leaf.to_be_bytes());
+            Ok(())
+        }
+        fn import_secret_key(bytes: &[u8]) -> Result<Self::SecretKey> {
+            let raw: [u8; 4] = bytes.try_into().map_err(|_| Error::BadLength {
+                expected: Self::SECRET_KEY_LEN,
+                actual: bytes.len(),
+            })?;
+            let leaf = u32::from_be_bytes(raw);
+            // Stand-in for a real component's re-derivation check. The fake
+            // budget is a fixed 4, so 4 (exhausted) is the largest counter a
+            // signer can reach and anything above it is out of range.
+            if leaf > 4 {
+                return Err(Error::ComponentFailure);
+            }
+            Ok(FakeSecretKey { leaf: Some(leaf) })
         }
         fn precheck(msg: &[u8]) -> bool {
             // `msg` here is the built `M'`, not the raw application message;
@@ -432,7 +612,7 @@ mod tests {
             _msg: &[u8],
             sig_out: &mut [u8],
         ) -> Result<usize> {
-            sk.leaf += 1;
+            sk.leaf = Some(sk.leaf.ok_or(Error::ComponentFailure)? + 1);
             // `FIXED_STATEFUL_SIG_LEN` is 0, so a signature carrying exactly
             // one authentication-path node (32 bytes, `leaf_count = 1`) is
             // the smallest one `encoding_path` accepts (leaf count >= 1).
@@ -556,6 +736,153 @@ mod tests {
         FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("sign");
         assert_eq!(state.borrow().committed, alloc::vec![0]);
         assert_eq!(<FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq), 1);
+    }
+
+    /// Offset of the 4-byte leaf-counter field inside an exported
+    /// `SecretKey<FakeH>`, per the layout documented on
+    /// `SecretKey::exported_len`.
+    const FAKE_COUNTER_AT: usize = <FakeClassical as crate::ClassicalScheme>::SECRET_KEY_LEN
+        + <FakePq as crate::PqStatefulScheme>::SECRET_KEY_LEN;
+
+    #[test]
+    fn export_import_round_trip_carries_every_part_of_the_key() {
+        let (mut sk, pk) = keygen::<FakeH>(&[3u8; 32], 4).expect("keygen");
+        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        FakeH::sign_stateful(&mut sk, &mut journal, b"one", b"").expect("sign");
+        FakeH::sign_stateful(&mut sk, &mut journal, b"two", b"").expect("sign");
+
+        let blob = sk.export().expect("export");
+        assert_eq!(blob.len(), SecretKey::<FakeH>::exported_len());
+
+        let mut restored = SecretKey::<FakeH>::import(&blob).expect("import");
+        assert_eq!(
+            <FakePq as crate::PqStatefulScheme>::next_leaf(&restored.pq),
+            2,
+            "the restored key resumes at the leaf the original stopped at"
+        );
+        assert_eq!(restored.classical, sk.classical);
+        assert_eq!(restored.pq_verify_key, sk.pq_verify_key);
+
+        // Import then export is byte-identical, so the blob is a stable
+        // record of the state and not a re-encoding that drifts.
+        assert_eq!(restored.export().expect("export"), blob);
+
+        // The restored key is a working signer: it continues the journal it
+        // left off with, rather than starting the budget over.
+        let sig = FakeH::sign_stateful(&mut restored, &mut journal, b"three", b"").expect("sign");
+        assert!(FakeH::verify(&pk, b"three", b"", &sig));
+        assert_eq!(journal.next_leaf(), 3);
+    }
+
+    /// The exhausted counter is the one value a restore must not round down:
+    /// a key that reports a fresh budget is a key that reissues every leaf.
+    #[test]
+    fn export_import_preserves_the_exhausted_counter() {
+        let (mut sk, _pk) = keygen::<FakeH>(&[4u8; 32], 4).expect("keygen");
+        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        for msg in [b"a".as_slice(), b"b", b"c", b"d"] {
+            FakeH::sign_stateful(&mut sk, &mut journal, msg, b"").expect("sign");
+        }
+        let capacity = <FakePq as crate::PqStatefulScheme>::leaf_capacity(&sk.pq);
+        assert_eq!(
+            <FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq),
+            capacity,
+            "the budget is spent"
+        );
+
+        let restored = SecretKey::<FakeH>::import(&sk.export().expect("export")).expect("import");
+        assert_eq!(
+            <FakePq as crate::PqStatefulScheme>::next_leaf(&restored.pq),
+            capacity
+        );
+
+        // And the restored key stays exhausted: the driver refuses to sign.
+        let mut restored = restored;
+        assert!(FakeH::sign_stateful(&mut restored, &mut journal, b"e", b"").is_err());
+    }
+
+    /// The counter field and the component key are two records of the same
+    /// state. If they disagree, the blob was edited, and importing it would
+    /// restore a signer whose state nobody vouches for.
+    #[test]
+    fn import_rejects_a_counter_field_that_disagrees_with_the_component_key() {
+        let (mut sk, _pk) = keygen::<FakeH>(&[5u8; 32], 4).expect("keygen");
+        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        FakeH::sign_stateful(&mut sk, &mut journal, b"one", b"").expect("sign");
+        let blob = sk.export().expect("export");
+
+        for rewritten in [0u32, 2, u32::MAX] {
+            let mut tampered = blob.clone();
+            tampered[FAKE_COUNTER_AT..FAKE_COUNTER_AT + 4]
+                .copy_from_slice(&rewritten.to_be_bytes());
+            assert_eq!(
+                SecretKey::<FakeH>::import(&tampered).err(),
+                Some(Error::ComponentFailure),
+                "counter field rewritten to {rewritten} must be rejected"
+            );
+        }
+    }
+
+    /// The component's own validation must be reachable through the composite
+    /// import, not bypassed by it.
+    #[test]
+    fn import_propagates_the_components_rejection_of_its_own_half() {
+        let (sk, _pk) = keygen::<FakeH>(&[6u8; 32], 4).expect("keygen");
+        let mut blob = sk.export().expect("export");
+
+        // Out of range for the fake component's fixed budget of 4. Written to
+        // both the component half and the counter field, so the only check
+        // that can reject it is the component's.
+        let out_of_range = 5u32.to_be_bytes();
+        blob[FAKE_COUNTER_AT - 4..FAKE_COUNTER_AT].copy_from_slice(&out_of_range);
+        blob[FAKE_COUNTER_AT..FAKE_COUNTER_AT + 4].copy_from_slice(&out_of_range);
+
+        assert_eq!(
+            SecretKey::<FakeH>::import(&blob).err(),
+            Some(Error::ComponentFailure)
+        );
+    }
+
+    #[test]
+    fn import_rejects_a_blob_of_the_wrong_length() {
+        let (sk, _pk) = keygen::<FakeH>(&[7u8; 32], 4).expect("keygen");
+        let blob = sk.export().expect("export");
+        let expected = SecretKey::<FakeH>::exported_len();
+
+        assert_eq!(
+            SecretKey::<FakeH>::import(&blob[..blob.len() - 1]).err(),
+            Some(Error::BadLength {
+                expected,
+                actual: expected - 1
+            })
+        );
+
+        let mut long = blob.clone();
+        long.push(0);
+        assert_eq!(
+            SecretKey::<FakeH>::import(&long).err(),
+            Some(Error::BadLength {
+                expected,
+                actual: expected + 1
+            })
+        );
+        assert_eq!(
+            SecretKey::<FakeH>::import(&[]).err(),
+            Some(Error::BadLength {
+                expected,
+                actual: 0
+            })
+        );
+    }
+
+    /// A wiped key must fail to export rather than export a well-formed blob
+    /// of zeros, which would import as a key with a counter no signer reached.
+    #[test]
+    fn a_wiped_key_fails_to_export() {
+        let (mut sk, _pk) = keygen::<FakeH>(&[8u8; 32], 4).expect("keygen");
+        assert!(sk.export().is_ok());
+        sk.zeroize();
+        assert_eq!(sk.export().err(), Some(Error::ComponentFailure));
     }
 
     /// The two halves must combine without a short circuit: a failed

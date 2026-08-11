@@ -177,6 +177,42 @@ impl PqStatefulScheme for ShrincsScheme {
         }
     }
 
+    /// Exports upstream's own `Keys::to_bytes` form: `stateful(136) ||
+    /// stateless(128)`, where the stateful half ends in `maxSignatures(4) ||
+    /// nextLeafIndex(4)`. The counter travels inside that blob verbatim, so
+    /// an exhausted key exports its exhausted counter.
+    fn export_secret_key(sk: &Self::SecretKey, out: &mut [u8]) -> Result<()> {
+        if out.len() != Self::SECRET_KEY_LEN {
+            return Err(Error::BadLength {
+                expected: Self::SECRET_KEY_LEN,
+                actual: out.len(),
+            });
+        }
+        // `keys()` is what makes a wiped key export as an error rather than
+        // as zeros.
+        let mut blob = sk.keys()?.to_bytes();
+        out.copy_from_slice(&blob);
+        blob.zeroize();
+        Ok(())
+    }
+
+    /// Validation is upstream's `Keys::import`, which re-derives the
+    /// hypertree root and the stateless public key from the private seeds
+    /// the blob carries and compares them against the public fields it also
+    /// carries. A tampered root, a field spliced in from another key, and a
+    /// counter outside `1..=maxSignatures + 1` are all rejected there. This
+    /// crate does not re-implement any of it.
+    fn import_secret_key(bytes: &[u8]) -> Result<Self::SecretKey> {
+        if bytes.len() != Self::SECRET_KEY_LEN {
+            return Err(Error::BadLength {
+                expected: Self::SECRET_KEY_LEN,
+                actual: bytes.len(),
+            });
+        }
+        let keys = Keys::import(bytes).ok_or(Error::ComponentFailure)?;
+        Ok(ShrincsSecretKey { keys: Some(keys) })
+    }
+
     fn precheck(msg: &[u8]) -> bool {
         let ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
         action::valid_action_context(&ctx)

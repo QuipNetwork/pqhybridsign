@@ -166,10 +166,10 @@ fn fixture() -> &'static Fixture {
     })
 }
 
-/// Upstream `Keys` values, for the import and export tests. The composite
-/// `SecretKey<S>` has no import or export surface of its own (see the report
-/// for this task), so the counter round trip is exercised at the layer that
-/// does: `hashsigs_rs::shrincs::Keys`.
+/// Upstream `Keys` values, for the import and export tests. These pin the
+/// properties at the layer that implements them, `hashsigs_rs::shrincs::Keys`.
+/// The same properties at this crate's own layer -- `ShrincsScheme` and the
+/// composite `SecretKey<S>` blob -- are covered in `stateful_export.rs`.
 struct UpstreamKeys {
     keys: Keys,
     public_key: ShrincsBundlePublicKey,
@@ -506,8 +506,8 @@ fn signing_past_the_budget_yields_leaves_exhausted_and_consumes_nothing() {
 // 20 to 23. Import and export of the leaf counter.
 //
 // These run against `hashsigs_rs::shrincs::Keys`, the layer that owns the
-// counter and the only one with an import path. The composite
-// `SecretKey<S>` exposes neither export nor import; see the task report.
+// counter and implements the validation. `stateful_export.rs` covers the
+// composite `SecretKey<S>` export and import that build on top of them.
 // ---------------------------------------------------------------------
 
 #[test]
