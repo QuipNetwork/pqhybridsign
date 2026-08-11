@@ -581,6 +581,11 @@ mod tests {
     /// `zeroize` must actually drop the key material, not merely satisfy the
     /// trait. Wiping is observable only through behaviour, so this asserts
     /// the fail-closed contract every accessor promises.
+    ///
+    /// Calls `keygen_from_seed`, which costs about 47 seconds at the 128s
+    /// profiles. The fail-closed contract does not depend on the parameter
+    /// set, so this test runs under the default profile only.
+    #[cfg(feature = "profile-256s")]
     #[test]
     fn zeroize_wipes_the_key_and_every_accessor_fails_closed() {
         let mut vk = [0u8; bundle::BUNDLE_LEN];
@@ -621,6 +626,11 @@ mod tests {
     /// fields (not from `STATELESS_KEY_MATERIAL_OFFSET`), so a later change
     /// to the bundle layout that moves this range breaks this test loudly
     /// instead of silently keying the budget to the wrong bytes.
+    ///
+    /// Calls `keygen_from_seed`, which costs about 47 seconds at the 128s
+    /// profiles. Bundle layout offsets are profile-independent at the
+    /// composition layer checked here.
+    #[cfg(feature = "profile-256s")]
     #[test]
     fn stateless_key_material_is_pk_seed_concatenated_with_hypertree_root() {
         let mut vk = [0u8; bundle::BUNDLE_LEN];
@@ -667,6 +677,11 @@ mod tests {
     /// built the message from only the commitments, the exact failure mode
     /// section 19.2 warns about -- to prove the domain separator alone,
     /// not the message hash, is what closes it.
+    ///
+    /// Calls `keygen_from_seed` and `sign_stateless_rotation`, which cost
+    /// minutes at the 128s profiles. Domain-separator binding does not
+    /// depend on the SHRINCS parameter set.
+    #[cfg(feature = "profile-256s")]
     #[test]
     fn domain_separator_alone_prevents_reuse_across_next_classical_pk() {
         use pqhybridsign_core::rotation::RotationKind;

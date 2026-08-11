@@ -11,6 +11,10 @@
 //! SHRINCS keygen is slow, so every test here shares one key. Nothing in
 //! this file calls `sign_stateless`, which grinds for minutes.
 
+// Composite export and import round trips exercise the composition blob, not
+// the SHRINCS parameter set.
+#![cfg(feature = "profile-256s")]
+
 use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_core::stateful_composite::SecretKey;
 use pqhybridsign_core::{Error, PqStatefulScheme};
@@ -79,23 +83,9 @@ const COUNTER_AT: usize = PQ_AT + <ShrincsScheme as PqStatefulScheme>::SECRET_KE
 /// re-derives on import.
 const ROOT_AT: usize = PQ_AT + 96;
 
-#[test]
-fn the_blob_layout_is_the_documented_one() {
-    let blob = &fixture().blob;
-    assert_eq!(blob.len(), SecretKey::<H5>::exported_len());
-    assert_eq!(
-        blob.len(),
-        <H5 as pqhybridsign_core::StatefulSuite>::SECRET_KEY_LEN
-            + 4
-            + <ShrincsScheme as PqStatefulScheme>::VERIFY_KEY_LEN,
-        "the composite secret key, then the counter, then the cached verify key"
-    );
-    assert_eq!(
-        &blob[COUNTER_AT + 4..],
-        fixture().public_key.pq_verify_key(),
-        "the trailing field is the same verify key the public key carries"
-    );
-}
+// Blob layout length and trailing verify-key field live in
+// `profile_conformance.rs` so they run under every profile against the
+// fixture export blob without importing it.
 
 /// The property that makes export a restore path at all: the restored signer
 /// resumes at the leaf the original stopped at, instead of at the first leaf

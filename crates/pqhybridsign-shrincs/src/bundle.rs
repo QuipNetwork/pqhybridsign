@@ -126,128 +126,136 @@ pub fn max_signatures(bundle: &[u8]) -> Result<u32, BundleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hashsigs_rs::shrincs::ShrincsSigner;
-
-    /// Build a raw 164-byte bundle from a generated `PublicKey`'s fields, in
-    /// the order the spec defines: statefulPublicKey || commitment || pkSeed
-    /// || hypertreeRoot. This is a flat concatenation, not the crate's ABI
-    /// encoding (`PublicKey::to_bytes`), matching the on-chain bundle format.
-    fn build_bundle(public_key: &PublicKey) -> Vec<u8> {
-        let mut bundle = Vec::with_capacity(BUNDLE_LEN);
-        bundle.extend_from_slice(&public_key.stateful_public_key);
-        bundle.extend_from_slice(&public_key.public_key_commitment);
-        bundle.extend_from_slice(&public_key.pk_seed);
-        bundle.extend_from_slice(&public_key.hypertree_root);
-        bundle
-    }
-
-    fn generate(seed: &[u8], max_signatures: u32) -> ([u8; 32], PublicKey) {
-        let (keys, public_key) = ShrincsSigner::keygen(seed, max_signatures)
-            .expect("keygen with valid seed/max must succeed");
-        let stored_commitment = *keys.public_key_commitment().as_bytes();
-        (stored_commitment, public_key)
-    }
-
-    #[test]
-    fn round_trip_recomputes_stored_commitment() {
-        let (stored_commitment, public_key) = generate(b"bundle round trip seed", 4);
-        let bundle = build_bundle(&public_key);
-        assert_eq!(bundle.len(), BUNDLE_LEN);
-
-        let recovered =
-            verify_bundle(&bundle, &stored_commitment).expect("valid bundle must verify");
-
-        assert_eq!(
-            recovered.stateful_public_key,
-            public_key.stateful_public_key
-        );
-        assert_eq!(recovered.public_key_commitment, stored_commitment.to_vec());
-        assert_eq!(recovered.pk_seed, public_key.pk_seed);
-        assert_eq!(recovered.hypertree_root, public_key.hypertree_root);
-    }
-
-    #[test]
-    fn single_byte_flip_anywhere_is_rejected() {
-        let (stored_commitment, public_key) = generate(b"bundle byte flip seed", 4);
-        let bundle = build_bundle(&public_key);
-
-        // Sample several positions across each of the four fields, not one
-        // hand-picked byte: first, middle, and last byte of each field.
-        let field_bounds = [
-            (0usize, STATEFUL_PUBLIC_KEY_LEN),
-            (STATEFUL_PUBLIC_KEY_LEN, PK_SEED_OFFSET),
-            (PK_SEED_OFFSET, HYPERTREE_ROOT_OFFSET),
-            (HYPERTREE_ROOT_OFFSET, BUNDLE_LEN),
-        ];
-
-        let mut positions = Vec::new();
-        for (start, end) in field_bounds {
-            positions.push(start);
-            positions.push(start + (end - start) / 2);
-            positions.push(end - 1);
-        }
-
-        for position in positions {
-            let mut tampered = bundle.clone();
-            tampered[position] ^= 0x01;
-            assert_eq!(
-                verify_bundle(&tampered, &stored_commitment),
-                Err(BundleError::CommitmentMismatch),
-                "flipping byte at position {position} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn all_zero_stored_commitment_is_rejected_outright() {
-        let (_stored_commitment, public_key) = generate(b"bundle zero commitment seed", 4);
-        let bundle = build_bundle(&public_key);
-
-        assert_eq!(
-            verify_bundle(&bundle, &[0u8; 32]),
-            Err(BundleError::ZeroCommitment)
-        );
-    }
-
-    #[test]
-    fn wrong_length_is_rejected_before_hashing() {
-        let (_stored_commitment, public_key) = generate(b"bundle wrong length seed", 4);
-        let mut bundle = build_bundle(&public_key);
-        bundle.pop();
-
-        // Pair the short bundle with an all-zero stored commitment: if the
-        // length check did not run first (i.e. hashing were attempted
-        // first), the zero-commitment guard would fire instead and this
-        // would observe `ZeroCommitment` rather than `InvalidLength`.
-        assert_eq!(
-            verify_bundle(&bundle, &[0u8; 32]),
-            Err(BundleError::InvalidLength)
-        );
-
-        let mut too_long = build_bundle(&public_key);
-        too_long.push(0);
-        assert_eq!(
-            verify_bundle(&too_long, &[0u8; 32]),
-            Err(BundleError::InvalidLength)
-        );
-    }
-
-    #[test]
-    fn max_signatures_recovered_from_big_endian_bytes() {
-        let (_stored_commitment, public_key) = generate(b"bundle max signatures seed", 4);
-        let bundle = build_bundle(&public_key);
-
-        // Independently decode bytes 64..68 of statefulPublicKey to cross
-        // check against the helper under test.
-        let expected =
-            u32::from_be_bytes(public_key.stateful_public_key[64..68].try_into().unwrap());
-        assert_eq!(expected, 4);
-
-        assert_eq!(max_signatures(&bundle).unwrap(), expected);
-    }
 
     #[test]
     fn max_signatures_rejects_wrong_length() {
         assert_eq!(max_signatures(&[0u8; 10]), Err(BundleError::InvalidLength));
     }
+
+    // The remaining tests call `ShrincsSigner::keygen`, which costs about 47
+    // seconds at the 128s profiles. Commitment recomputation and length
+    // checks do not depend on the SHRINCS parameter set.
+    #[cfg(feature = "profile-256s")]
+    mod with_keygen {
+        use super::*;
+        use hashsigs_rs::shrincs::ShrincsSigner;
+
+        /// Build a raw 164-byte bundle from a generated `PublicKey`'s fields, in
+        /// the order the spec defines: statefulPublicKey || commitment || pkSeed
+        /// || hypertreeRoot. This is a flat concatenation, not the crate's ABI
+        /// encoding (`PublicKey::to_bytes`), matching the on-chain bundle format.
+        fn build_bundle(public_key: &PublicKey) -> Vec<u8> {
+            let mut bundle = Vec::with_capacity(BUNDLE_LEN);
+            bundle.extend_from_slice(&public_key.stateful_public_key);
+            bundle.extend_from_slice(&public_key.public_key_commitment);
+            bundle.extend_from_slice(&public_key.pk_seed);
+            bundle.extend_from_slice(&public_key.hypertree_root);
+            bundle
+        }
+
+        fn generate(seed: &[u8], max_signatures: u32) -> ([u8; 32], PublicKey) {
+            let (keys, public_key) = ShrincsSigner::keygen(seed, max_signatures)
+                .expect("keygen with valid seed/max must succeed");
+            let stored_commitment = *keys.public_key_commitment().as_bytes();
+            (stored_commitment, public_key)
+        }
+
+        #[test]
+        fn round_trip_recomputes_stored_commitment() {
+            let (stored_commitment, public_key) = generate(b"bundle round trip seed", 4);
+            let bundle = build_bundle(&public_key);
+            assert_eq!(bundle.len(), BUNDLE_LEN);
+
+            let recovered =
+                verify_bundle(&bundle, &stored_commitment).expect("valid bundle must verify");
+
+            assert_eq!(
+                recovered.stateful_public_key,
+                public_key.stateful_public_key
+            );
+            assert_eq!(recovered.public_key_commitment, stored_commitment.to_vec());
+            assert_eq!(recovered.pk_seed, public_key.pk_seed);
+            assert_eq!(recovered.hypertree_root, public_key.hypertree_root);
+        }
+
+        #[test]
+        fn single_byte_flip_anywhere_is_rejected() {
+            let (stored_commitment, public_key) = generate(b"bundle byte flip seed", 4);
+            let bundle = build_bundle(&public_key);
+
+            // Sample several positions across each of the four fields, not one
+            // hand-picked byte: first, middle, and last byte of each field.
+            let field_bounds = [
+                (0usize, STATEFUL_PUBLIC_KEY_LEN),
+                (STATEFUL_PUBLIC_KEY_LEN, PK_SEED_OFFSET),
+                (PK_SEED_OFFSET, HYPERTREE_ROOT_OFFSET),
+                (HYPERTREE_ROOT_OFFSET, BUNDLE_LEN),
+            ];
+
+            let mut positions = Vec::new();
+            for (start, end) in field_bounds {
+                positions.push(start);
+                positions.push(start + (end - start) / 2);
+                positions.push(end - 1);
+            }
+
+            for position in positions {
+                let mut tampered = bundle.clone();
+                tampered[position] ^= 0x01;
+                assert_eq!(
+                    verify_bundle(&tampered, &stored_commitment),
+                    Err(BundleError::CommitmentMismatch),
+                    "flipping byte at position {position} must be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn all_zero_stored_commitment_is_rejected_outright() {
+            let (_stored_commitment, public_key) = generate(b"bundle zero commitment seed", 4);
+            let bundle = build_bundle(&public_key);
+
+            assert_eq!(
+                verify_bundle(&bundle, &[0u8; 32]),
+                Err(BundleError::ZeroCommitment)
+            );
+        }
+
+        #[test]
+        fn wrong_length_is_rejected_before_hashing() {
+            let (_stored_commitment, public_key) = generate(b"bundle wrong length seed", 4);
+            let mut bundle = build_bundle(&public_key);
+            bundle.pop();
+
+            // Pair the short bundle with an all-zero stored commitment: if the
+            // length check did not run first (i.e. hashing were attempted
+            // first), the zero-commitment guard would fire instead and this
+            // would observe `ZeroCommitment` rather than `InvalidLength`.
+            assert_eq!(
+                verify_bundle(&bundle, &[0u8; 32]),
+                Err(BundleError::InvalidLength)
+            );
+
+            let mut too_long = build_bundle(&public_key);
+            too_long.push(0);
+            assert_eq!(
+                verify_bundle(&too_long, &[0u8; 32]),
+                Err(BundleError::InvalidLength)
+            );
+        }
+
+        #[test]
+        fn max_signatures_recovered_from_big_endian_bytes() {
+            let (_stored_commitment, public_key) = generate(b"bundle max signatures seed", 4);
+            let bundle = build_bundle(&public_key);
+
+            // Independently decode bytes 64..68 of statefulPublicKey to cross
+            // check against the helper under test.
+            let expected =
+                u32::from_be_bytes(public_key.stateful_public_key[64..68].try_into().unwrap());
+            assert_eq!(expected, 4);
+
+            assert_eq!(max_signatures(&bundle).unwrap(), expected);
+        }
+    } // mod with_keygen
 }

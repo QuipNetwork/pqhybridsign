@@ -9,26 +9,26 @@
 //! against.
 //!
 //! This test supplies the missing half. It prints a fingerprint derived from
-//! a fixed seed under whichever profile is active. Continuous integration
-//! runs it once per profile and asserts the fingerprints differ; see the
-//! `cross-profile` job in `.gitlab-ci.yml`. Running it in a single build
-//! proves only that the fingerprint is derivable, which is why the assertions
-//! here are limited to that.
+//! the per-profile fixture public key under whichever profile is active.
+//! Continuous integration runs it once per profile and asserts the
+//! fingerprints differ; see the `cross-profile` job in `.gitlab-ci.yml`.
+//! Running it in a single build proves only that the fingerprint is
+//! derivable, which is why the assertions here are limited to that.
 //!
-//! Cost: one keygen, no signing. Stateful signing is cheap but unnecessary
-//! here. Stateless signing grinds: 1.16 s at `profile-256s` in release,
+//! Cost: public-key reconstruction from fixture bytes, no keygen and no
+//! signing. Stateless signing grinds: 1.16 s at `profile-256s` in release,
 //! 176.60 s at `profile-128s-q18`, and roughly 70 times those figures in a
-//! debug build. Keygen alone is 0.09 s at `profile-256s` but 46.85 s at
-//! `profile-128s-q18`, which sets this test's cost under those profiles.
+//! debug build. Keygen and `SecretKey::import` both cost about 47 s at the
+//! 128s profiles; the fixture path keeps this test under a second at every
+//! profile.
+
+// Shared loader exposes fields for every consumer. This binary only needs
+// the H5 public key, so the rest is unused here.
+#[allow(dead_code)]
+mod fixture;
+
 use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
-use pqhybridsign_shrincs::{keygen, H5};
-
-/// Fixed seed. The value does not matter; holding it constant across profiles
-/// does, since that is what makes differing fingerprints attributable to the
-/// profile rather than to the input.
-const SEED: [u8; 32] = [0x42; 32];
-
-const MAX_SIGNATURES: u32 = 4;
+use pqhybridsign_shrincs::{PublicKey, H5};
 
 /// Prefix that the continuous integration job greps for. Changing it breaks
 /// the `cross-profile` job.
@@ -36,7 +36,8 @@ const MARKER: &str = "CROSS_PROFILE_FINGERPRINT";
 
 #[test]
 fn print_the_cross_profile_fingerprint() {
-    let (_sk, pk) = keygen::<H5>(&SEED, MAX_SIGNATURES).expect("keygen from the fixed seed");
+    let f = fixture::h5();
+    let pk = PublicKey::<H5>::from_bytes(&f.public_key).expect("public key from fixture");
 
     // Same stored form the golden vectors pin: classical public key followed
     // by the 32-byte SHRINCS commitment out of the bundle.

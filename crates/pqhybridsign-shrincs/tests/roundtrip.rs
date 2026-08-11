@@ -3,6 +3,10 @@
 //! SHRINCS): keygen, stateful signing with a durable leaf journal, stateless
 //! signing, and verification.
 
+// Round trips call keygen and sign_stateless; the composition behaviour under
+// test does not depend on the SHRINCS parameter set.
+#![cfg(feature = "profile-256s")]
+
 use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_shrincs::{keygen, H5, H6};
 use std::cell::RefCell;
@@ -56,25 +60,8 @@ fn h6_stateful_round_trip_verifies() {
     assert!(H6::verify(&pk, b"hello H6", b"ctx", &sig));
 }
 
-// 2. Composite sizes are exactly 64 / 196 / 328 (specification section 4).
-
-#[test]
-fn composite_sizes_match_the_specification() {
-    use pqhybridsign_core::StatefulSuite;
-
-    // Stored form (classical 32 + SHRINCS commitment 32).
-    assert_eq!(H5::STORED_PUBLIC_KEY_LEN, 64);
-    // Verify form (classical 32 + SHRINCS bundle 164).
-    assert_eq!(H5::VERIFY_PUBLIC_KEY_LEN, 196);
-    // Secret key (classical 64 + SHRINCS Keys 264).
-    assert_eq!(H5::SECRET_KEY_LEN, 328);
-    assert_eq!(H6::STORED_PUBLIC_KEY_LEN, 64);
-    assert_eq!(H6::VERIFY_PUBLIC_KEY_LEN, 196);
-    assert_eq!(H6::SECRET_KEY_LEN, 328);
-
-    let (_sk, pk) = keygen::<H5>(&[2u8; 32], 4).expect("keygen");
-    assert_eq!(pk.as_ref().len(), 196);
-}
+// 2. Composite sizes live in `profile_conformance.rs` so they run under every
+//    profile against the verify-only fixtures.
 
 // 3. Two successive stateful signatures consume leaves 1 then 2, and both
 //    verify.

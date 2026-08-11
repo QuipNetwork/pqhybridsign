@@ -22,9 +22,11 @@
 //!   rewound and never forked -- plus, on the verifying side, an index
 //!   policy the integrator supplies (see `MonotonicIndex` below).
 
-use hashsigs_rs::shrincs::{
-    Keys, PublicKey as ShrincsBundlePublicKey, ShrincsSigner, PROFILE_NAME,
-};
+// Spec section 17 composition properties (leaf budgets, journals, encoding
+// negatives) do not depend on the SHRINCS parameter set.
+#![cfg(feature = "profile-256s")]
+
+use hashsigs_rs::shrincs::{Keys, PublicKey as ShrincsBundlePublicKey, ShrincsSigner};
 use pqhybridsign_core::encoding_path::{
     decode_path_selected, PathBody, PathProfile, TrustedMaxSignatures, AUTH_PATH_NODE_LEN,
     CLASSICAL_SIG_LEN, LEAF_COUNT_LEN, SELECTOR_LEN, SELECTOR_STATEFUL,
@@ -32,7 +34,6 @@ use pqhybridsign_core::encoding_path::{
 use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme, StatefulSignError};
 use pqhybridsign_core::{m_prime, Error, PqStatefulScheme, StatefulSuite};
 use pqhybridsign_shrincs::{action, keygen, PublicKey, ShrincsScheme, H5};
-use sha3::{Digest, Keccak256};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -717,51 +718,8 @@ fn any_single_byte_flip_in_the_bundle_fails_verification() {
     // attacker-supplied bundle actually arrives.
 }
 
-#[test]
-fn the_commitment_binds_the_profile_name() {
-    // Cross-profile separation cannot be tested inside one build: exactly one
-    // `profile-*` feature compiles, so the wrong-profile key does not exist
-    // here as a type. What can be tested, and is the mechanism that makes a
-    // wrong-profile key fail, is that the active profile name is bound into
-    // the commitment: two keys built from identical seeds under different
-    // profiles commit to different values, so neither can verify against the
-    // other's stored commitment.
-    let fixture = fixture();
-    let vk = fixture.public_key.pq_verify_key();
-    let (stateful_public_key, rest) = vk.split_at(68);
-    let carried_commitment = &rest[..32];
-    let pk_seed = &rest[32..64];
-    let hypertree_root = &rest[64..96];
-
-    let commitment = |profile: &str| -> [u8; 32] {
-        let mut hasher = Keccak256::new();
-        hasher.update(b"shrincs-public-key/");
-        hasher.update(profile.as_bytes());
-        hasher.update(stateful_public_key);
-        hasher.update(pk_seed);
-        hasher.update(hypertree_root);
-        hasher.finalize().into()
-    };
-
-    // The active profile reproduces the commitment the key actually carries,
-    // which is what makes the next assertion meaningful.
-    assert_eq!(
-        commitment(PROFILE_NAME).as_slice(),
-        carried_commitment,
-        "the commitment preimage is keccak256(prefix || profile || fields)"
-    );
-
-    for other in ["shrincs-128s-q18", "shrincs-256s-sha2", "shrincs-256s"] {
-        if other == PROFILE_NAME {
-            continue;
-        }
-        assert_ne!(
-            commitment(other).as_slice(),
-            carried_commitment,
-            "profile {other} must commit to a different value from identical fields"
-        );
-    }
-}
+// Commitment binding of the profile name lives in `profile_conformance.rs`
+// so it runs under every profile against the verify-only fixtures.
 
 // ---------------------------------------------------------------------
 // 27 to 30. Composite encoding negatives, rejected before any cryptography.

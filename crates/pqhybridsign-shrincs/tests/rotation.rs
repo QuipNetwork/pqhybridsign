@@ -12,6 +12,10 @@
 //! cheap, fake-component equivalent of every case here lives in
 //! `pqhybridsign-core/src/rotation.rs`'s own test module.
 
+// Rotation AND-gate and payload binding are composition-layer behaviour and
+// do not depend on the SHRINCS parameter set.
+#![cfg(feature = "profile-256s")]
+
 use pqhybridsign_core::encoding_path;
 use pqhybridsign_core::rotation::{self, NextStoredPublicKey, RotationKind, RotationPayload};
 use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
