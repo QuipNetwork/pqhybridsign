@@ -1,0 +1,19 @@
+[package]
+name = "pqhybridsign-cffi"
+description = "C ABI binding over pqhybridsign-abi: extern \"C\" entry points for the six hybrid suites"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "pqhybridsign_cffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+pqhybridsign-abi = { path = "../pqhybridsign-abi" }
+rand_core = { workspace = true, features = ["getrandom"] }
+
+[dev-dependencies]
+cbindgen = "0.29.4"
