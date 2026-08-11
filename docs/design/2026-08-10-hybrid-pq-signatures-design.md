@@ -204,8 +204,38 @@ The composite also cross-checks the journal against the component counter
 before it spends a leaf, which catches a journal that has drifted out of step
 with the key.
 
-The core crate defines the `LeafJournal` port only. The crypto crates do no
-input or output.
+The core crate defines two ports and no input or output of its own.
+`LeafJournal` is the signer side. `LeafIndexStore`, with
+`accept_monotonic_leaf`, is the verifier side: it refuses a leaf index that
+is not above every index already accepted, before any cryptography runs.
+
+Both are needed. A signer journal stops one signer from reissuing a leaf. It
+cannot stop a copied key, or a signer restored from a seed backup, from
+reissuing the first leaf with a signature that is cryptographically valid.
+Only a verifier that remembers rejects that. Acceptance requires strictly
+increasing indices rather than merely unseen ones, because a set of seen
+indices grows without bound and a verifier that must remember every index
+forever eventually forgets.
+
+### Persistence
+
+`SecretKey::export` and `SecretKey::import` are the only correct way to
+restore a stateful signer. The blob is
+
+```text
+ClassicalSK || PqSecretKey || nextLeaf(4, big-endian) || PqVerifyKey
+```
+
+Import validates in two layers. The component validates its own half, which
+for SHRINCS means upstream re-derives the root from the private seeds and so
+rejects a tampered root, a spliced field, and an out-of-range counter. The
+composite then cross-checks its counter field against the counter the
+imported component key holds, so the parts cannot be restored out of step.
+`SecretKey::next_leaf` lets an integrator reconcile against the journal at
+restore time rather than discovering drift at signing time.
+
+The blob is plaintext secret material, and an export followed by two imports
+is a forked leaf budget. Treat it as a single-holder token.
 
 Verification combines the two component results with a bitwise `&` on
 `subtle::Choice` and returns `bool`. The short-circuiting `&&` is wrong here:
