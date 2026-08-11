@@ -185,10 +185,18 @@ pub trait PqStatefulScheme {
     /// [`SECRET_KEY_LEN`]: PqStatefulScheme::SECRET_KEY_LEN
     fn import_secret_key(bytes: &[u8]) -> Result<Self::SecretKey>;
 
-    /// Scheme-specific precondition on the message to be signed, checked
-    /// BEFORE any leaf is spent. Returning `false` MUST cost nothing: no
-    /// leaf may be touched on the strength of a message that fails this
-    /// check.
+    /// Scheme-specific precondition on the message to be signed.
+    ///
+    /// This is **not** a guard that saves a leaf. The stateful signing path
+    /// never calls it: every attempt to sign burns a leaf, including an
+    /// attempt the component goes on to refuse. A signing path that can
+    /// return without advancing the counter is a leaf-reuse hazard, and
+    /// reuse is total security failure for the key, while a burned leaf is
+    /// only availability loss.
+    ///
+    /// The composite calls this on the stateless path, where no leaf
+    /// exists, and in `verify`, so that a message no honest signer could
+    /// have produced is refused before any cryptography runs.
     fn precheck(msg: &[u8]) -> bool;
 
     /// Upper bound on the stateful signature length for a key with this

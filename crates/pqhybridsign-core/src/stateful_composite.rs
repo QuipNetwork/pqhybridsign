@@ -383,11 +383,13 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
     ) -> core::result::Result<Self::Signature, StatefulSignError> {
         let m_prime = m_prime(S::LABEL, ctx, msg).map_err(|_| StatefulSignError::SigningFailed)?;
 
-        // Step 1 of the ordering contract: validate before any leaf is
-        // touched.
-        if !<S::Pq as PqStatefulScheme>::precheck(&m_prime) {
-            return Err(StatefulSignError::SigningFailed);
-        }
+        // No message validation runs here, deliberately. Every attempt to
+        // sign burns a leaf, including an attempt that the component will
+        // refuse. A signing path that can return without advancing the
+        // counter is a leaf-reuse hazard, and reuse is total security
+        // failure for the key, while a burned leaf is only availability
+        // loss. `precheck` therefore belongs on the stateless path and in
+        // `verify`, never in front of this commit.
 
         let leaf_capacity = <S::Pq as PqStatefulScheme>::leaf_capacity(&sk.pq);
         let pq_next = <S::Pq as PqStatefulScheme>::next_leaf(&sk.pq);
@@ -533,11 +535,11 @@ mod tests {
     static VERIFY_STATEFUL_CALLS: AtomicUsize = AtomicUsize::new(0);
 
     // A minimal fake `PqStatefulScheme` + `StatefulSuite`, to prove the
-    // generic driver's ordering (precheck before `sign_after_commit`, so a
-    // rejected message burns no leaf) without any real cryptography. This
-    // is the "leaf-burning guard" test: it cannot be exercised through a
-    // real component's public API, because a real component's `precheck`
-    // is built to accept every message an honest caller can construct.
+    // generic driver's ordering (commit the leaf, then attempt the
+    // component signature, so a refused message still burns its leaf)
+    // without any real cryptography. A real component cannot be driven
+    // into this state through its public API, because a real component
+    // accepts every message an honest caller can construct.
     /// Mirrors the real component's shape: the material lives in an
     /// `Option` so that `zeroize` can take it, and every accessor fails
     /// closed once it is gone. Without that, a wiped fake would be
@@ -623,10 +625,16 @@ mod tests {
         fn sign_stateful(
             sk: &mut Self::SecretKey,
             _vk: &[u8],
-            _msg: &[u8],
+            msg: &[u8],
             sig_out: &mut [u8],
         ) -> Result<usize> {
+            // The counter advances before the message is judged, mirroring
+            // upstream: a component spends the leaf on the attempt itself,
+            // not on the attempt succeeding.
             sk.leaf = Some(sk.leaf.ok_or(Error::ComponentFailure)? + 1);
+            if !Self::precheck(msg) {
+                return Err(Error::ComponentFailure);
+            }
             // `FIXED_STATEFUL_SIG_LEN` is 0, so a signature carrying exactly
             // one authentication-path node (32 bytes, `leaf_count = 1`) is
             // the smallest one `encoding_path` accepts (leaf count >= 1).
@@ -724,21 +732,31 @@ mod tests {
     }
 
     #[test]
-    fn precheck_failure_burns_no_leaf() {
+    fn a_refused_message_still_burns_its_leaf() {
         let (mut sk, _pk) = keygen::<FakeH>(&[1u8; 32], 4).expect("keygen");
         let state = Rc::new(RefCell::new(JournalState::default()));
         let mut journal = MemoryJournal(Rc::clone(&state));
 
-        // `0xFF` as the first message byte is rigged, in `FakePq::precheck`
-        // above, to fail. A real message can never trigger this class of
-        // failure (see the module doc on why), but the driver's ordering
-        // guarantee does not care why `precheck` failed -- only that it
-        // runs first.
+        // `0xFF` anywhere in the message is rigged, in `FakePq`, to be
+        // refused by the component after it has already spent the leaf. A
+        // real message cannot trigger this class of failure (see the module
+        // comment on why), but the property under test does not care why
+        // the attempt failed -- only that the leaf is gone either way.
         let outcome = FakeH::sign_stateful(&mut sk, &mut journal, &[0xFFu8], b"");
 
-        assert_eq!(outcome, Err(StatefulSignError::SigningFailed));
-        assert!(state.borrow().committed.is_empty(), "no leaf was committed");
-        assert_eq!(journal.next_leaf(), 0, "no leaf was consumed");
+        assert_eq!(outcome, Err(StatefulSignError::GrindAbort));
+        assert_eq!(
+            state.borrow().committed,
+            alloc::vec![0],
+            "the leaf was committed before the attempt, so it is spent"
+        );
+        assert_eq!(journal.next_leaf(), 1, "the journal advanced");
+        assert_eq!(
+            <FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq),
+            1,
+            "the component counter advanced in lockstep, so the two agree \
+             and the next signature uses a fresh leaf"
+        );
     }
 
     #[test]

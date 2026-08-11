@@ -134,14 +134,14 @@ fn tampering_either_half_fails_verification() {
     assert!(!H5::verify(&pk, b"tamper me", b"", &shrincs_tampered));
 }
 
-// 6. The leaf-burning guard (an invalid precondition must be rejected
-//    before any leaf is consumed) is covered as a driver-level unit test in
-//    `pqhybridsign_core::stateful_composite::tests::precheck_failure_burns_no_leaf`,
-//    using a fake `PqStatefulScheme` whose `precheck` can be made to fail.
-//    A real message can never fail SHRINCS's own `precheck`
+// 6. The leaf-burning rule (every signing attempt spends its leaf, even one
+//    the component refuses) is covered as a driver-level unit test in
+//    `pqhybridsign_core::stateful_composite::tests::a_refused_message_still_burns_its_leaf`,
+//    using a fake `PqStatefulScheme` rigged to refuse a sentinel message
+//    after it has spent the leaf. A real message cannot make SHRINCS refuse
 //    (`ShrincsScheme::precheck`, `crates/pqhybridsign-shrincs/src/scheme.rs`)
 //    -- it maps to an `ActionContext` whose required fields are fixed
-//    non-zero constants -- so the guard is not reachable through this
+//    non-zero constants -- so the case is not reachable through this
 //    crate's public API, and is proven once, generically, at the driver
 //    level instead.
 

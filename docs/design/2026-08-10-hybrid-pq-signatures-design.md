@@ -191,14 +191,24 @@ Three rules become structural instead of documentary:
    takes a `&mut impl LeafJournal`. It commits the advanced leaf index through
    that port before it builds the returned signature. A caller cannot hold a
    signature whose leaf is not already durable.
-3. **A rejected message costs no leaf.** `precheck` is a trait obligation on
-   the component, not a check inside its signing function. The generic
-   composite calls it before it commits anything, so a message the component
-   would refuse never reaches the journal. Placing the check inside the
-   signing function would be too late: the leaf is already committed by then.
-   Upstream `sign_stateful_action` does not validate its `ActionContext` and
-   spends a leaf on one that can never verify, so the obligation sits at this
-   layer. Tracked upstream as `pqhs-bz1.10`.
+3. **Every signing attempt burns a leaf.** `sign_stateful` commits the
+   advanced leaf index before it attempts the component signature, and it
+   validates nothing beforehand. An attempt the component then refuses still
+   spends its leaf. The rule is deliberate: a signing path that can return
+   without advancing the counter is a leaf-reuse hazard, and reuse is total
+   security failure for the key, while a burned leaf is only availability
+   loss. Upstream `sign_stateful_action` behaves the same way, which is
+   correct rather than a defect.
+
+   The cost is real. A caller who can hand arbitrary messages to a stateful
+   signer can exhaust its leaf budget. That is accepted, and it is another
+   reason the stateful suites suit only the transactional systems described
+   below: such a system authenticates and rate-limits a request before the
+   signer ever sees it.
+
+   `precheck` remains on the component trait, but it guards the stateless
+   path, where no leaf exists, and `verify`, where a message no honest
+   signer could have produced is refused before any cryptography runs.
 
 The composite also cross-checks the journal against the component counter
 before it spends a leaf, which catches a journal that has drifted out of step
@@ -396,13 +406,20 @@ the per-suite label (`pqhs-8ep.9`). The `fips204` deterministic call is
 confirmed (`pqhs-8ep.10`). The dependency graph resolves to one `rand_core`
 major version, and continuous integration asserts it (`pqhs-8ep.11`).
 
-Two remain, both about documents rather than code:
+Two more were raised against Cycle 2 and resolved on 2026-08-10. Neither was
+a defect. Both readings are recorded here because the implementation depends
+on them.
 
 1. Specification section 8 writes the deterministic nonce as
-   `k = H(sk || nonce || msg)`. The ed25519 component cannot implement it,
-   because `ed25519-zebra` derives its nonce internally from the expanded
-   secret key and accepts no external `k`. The implementable reading shipped.
-   Tracked as `pqhs-8ep.19`.
+   `k = H(sk || nonce || msg)`. The requirement is secure determinism, not an
+   externally injected `k`. ed25519 already meets it: RFC 8032 derives the
+   nonce from the expanded secret key and the message, so
+   `Ed25519::sign_deterministic` ignores its `nonce` argument and remains
+   compliant. sr25519 offers no native equivalent, so `classical/sr25519.rs`
+   implements section 8 literally, seeding a deterministic RNG from
+   `H(sk || nonce || msg)` and denying `schnorrkel` any access to the
+   operating-system RNG. Closed as `pqhs-8ep.19`.
 2. Upstream `sign_stateful_action` spends a leaf on an `ActionContext` it
-   never validates. The `precheck` obligation defends against it here, and the
-   fix belongs upstream. Tracked as `pqhs-bz1.10`.
+   never validates. This is the intended behaviour, for the reason given in
+   the third structural rule above, and the composite now matches it. Closed
+   as `pqhs-bz1.10`.

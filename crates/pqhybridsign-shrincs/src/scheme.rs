@@ -231,9 +231,11 @@ impl PqStatefulScheme for ShrincsScheme {
         let public_key = parse_bundle(vk)?;
         let action_ctx = action::to_action_context(msg, [0u8; 32], [0u8; 32]);
         // `sign_stateful_action` does not validate its `ActionContext`
-        // itself (see `action` module docs); the generic driver already ran
-        // `precheck` (== `valid_action_context`) before calling here, so
-        // this call only ever sees a valid context.
+        // itself (see `action` module docs), and nothing validates it ahead
+        // of this call either. That is deliberate: the leaf is already
+        // committed by the time control reaches here, and an invalid
+        // context must consume it like any other attempt rather than get a
+        // free retry.
         let sig = ShrincsSigner::sign_stateful_action(sk.keys_mut()?, &public_key, &action_ctx)
             .ok_or(Error::ComponentFailure)?;
         write_flat_stateful(&sig, sig_out)
