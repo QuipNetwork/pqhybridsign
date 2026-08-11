@@ -32,3 +32,6 @@ fips204 = { version = "0.4.6", default-features = false, features = ["ml-dsa-44"
 fn-dsa = { version = "0.4.0", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hashsigs-rs = { git = "https://gitlab.com/quip.network/hashsigs-rs.git", rev = "833de08d618b7e42b7991f7c684571133c3d88ab", default-features = false, features = ["std"] }
+
+[profile.dev.package."*"]
+opt-level = 3
