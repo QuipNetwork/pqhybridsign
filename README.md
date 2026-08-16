@@ -188,12 +188,17 @@ what it was chosen to do.
 path is the rotation and recovery path, so a recovery runbook for a 128s
 deployment must budget minutes, not milliseconds.
 
-**Stateless signing time varies widely between messages at 128s.** A
-signature is about 47 seconds of fixed work plus about 128 seconds of
-grinding, on average. The fixed part builds a 262,144-leaf subtree, the same
-tree key generation builds, and no message avoids it. The grinding has two
-independent stages, FORS-C and a WOTS-C target sum. Plan for the average
-rather than the best case.
+**A 128s stateless signature is tree building, not grinding.** Of about 176
+seconds, roughly 117 seconds builds the five FORS trees of 2^24 leaves each,
+about 47 seconds builds the 262,144-leaf hypertree subtree, and 11.3 seconds
+is the FORS-C counter grind. No message avoids the tree work, so the time is
+stable rather than variable. Plan for the measured figure.
+
+**About 1 stateless signature in 9 million fails at 128s.** The FORS-C
+counter search gives up at 2^28 attempts and returns an error. The outcome is
+deterministic for one key, message and context, so retrying the same message
+does not help. Changing the message does. The failure is loud and
+carries no security consequence. `DESIGN.md` records the analysis.
 
 **Restoring a signer from a stored key is not a fast path.**
 `SecretKey::import` costs about the same as `keygen` at 128s, because it
@@ -222,8 +227,11 @@ delivers.
 - **The Python binding accepts `bytes` and `bytearray`, not arbitrary buffer
   objects.** The `abi3-py39` stable ABI cannot reach the buffer-protocol C API
   below CPython 3.11.
-- **Golden vectors exist only for `profile-256s`.** The other three profiles
-  have no pinned wire format.
+- **Golden vectors pin every profile, but only against this implementation.**
+  All four profiles carry verify-only vectors in
+  `crates/pqhybridsign-shrincs/tests/vectors/`. Live re-signing runs under
+  `profile-256s` alone, because obtaining a secret key at 128s costs about 47
+  seconds.
 
 ## License
 

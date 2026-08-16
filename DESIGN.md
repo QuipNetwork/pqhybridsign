@@ -1,7 +1,7 @@
 # Design: Rust hybrid post-quantum signature crates
 
-**Status:** Approved for planning
-**Date:** 2026-08-10
+**Status:** Implemented through Cycle 5
+**Date:** 2026-08-10, revised 2026-08-16
 **Source specification:** Hybrid Post-Quantum Signature Constructions, version 2.0, 2026-07-18
 **Tracker:** beads prefix `pqhs`
 
@@ -37,8 +37,12 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | Crate | Contents | Dependencies |
 |-------|----------|--------------|
 | `pqhybridsign-core` | Component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port | `subtle`, `zeroize`, `hkdf`, `sha2` |
-| `pqhybridsign` | H1 and H3 | core, `ed25519-zebra`, `schnorrkel`, `fips204` |
+| `pqhybridsign` | H1 through H4 | core, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa` |
 | `pqhybridsign-shrincs` | H5 and H6 | core, `hashsigs-rs` pinned by revision |
+| `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter | core, `pqhybridsign`, `pqhybridsign-shrincs` |
+| `pqhybridsign-cffi` | C ABI, with a checked-in header | abi |
+| `pqhybridsign-wasm` | WebAssembly and npm package, H1 through H4 only | abi |
+| `pqhybridsign-py` | Python wheel on the `abi3-py39` stable ABI | abi |
 
 Every library crate sets `#![forbid(unsafe_code)]`. The core and lattice
 crates build for `wasm32-unknown-unknown` without an allocator. The SHRINCS
@@ -163,7 +167,7 @@ must use the stateless path or a lattice suite:
 | Stateless service, replicated signer, or any signer restored from a seed backup | Stateless path, or H1 or H3 |
 
 The library cannot check this property, so it is stated here and in the crate
-documentation. `docs/design` is the normative statement.
+documentation. This file is the normative statement.
 
 ### Layers
 
@@ -319,9 +323,10 @@ Measured in release, one H5 key with four leaves, by
 Debug builds run about 70 times slower. Never quote a debug figure as a
 performance characteristic.
 
-The cause is hypertree geometry, not grinding. The parameter sets, from the
-SHRINCS Implementations overview, which is the authority shared by the
-Solidity and Rust implementations:
+Key generation costs hypertree geometry. Stateless signing costs FORS
+geometry. Grinding is a small part of each, which the next subsection
+measures. The parameter sets, from the SHRINCS Implementations overview,
+which is the authority shared by the Solidity and Rust implementations:
 
 | Parameter | `256s`, `256s-sha2` | `128s-q18`, `128s-q20` |
 |---|---|---|
@@ -345,6 +350,38 @@ nodes, about 18.4 kB, against 1 × 1024 B plus 18 nodes, about 1.6 kB, at
 128s. Add the FORS-C part (21 revealed trees of height 14, against 5 of
 height 24) and the totals land on the 29,157 B and 5,769 B actually measured.
 
+#### Where a 128s stateless signature spends its time
+
+Measured 2026-08-16, and recorded for the same reason as the rest of this
+section: so that nobody derives it a fourth time.
+
+The FORS-C grind rate comes from the upstream
+`measure_128_fors_signature_success_rate` test. That test uses a placeholder
+hypertree root, so it times the grind alone: 74,983,923 counter attempts in
+50.63 seconds, which is 1,481,018 attempts per second, or 675 nanoseconds
+each.
+
+| Component | Cost | Why |
+|---|---|---|
+| FORS tree construction | about 117 s | 5 signed trees of 2^24 leaves |
+| Hypertree subtree | about 47 s | 2^18 leaves in one layer |
+| FORS-C counter grind | 11.3 s | mean 2^24 attempts |
+| WOTS-C target-sum grind | under 0.1 s | mean 65.7 attempts |
+
+**Grinding is about 6 percent of the cost, not the bulk of it.** The WOTS-C
+target sum is not a rare event either: `WOTS_TARGET_SUM` is 240, the exact
+mean of the sum of 32 base-16 digits, so each attempt succeeds with
+probability 0.0152. Both source papers choose the target sum that way on
+purpose, to minimise the search.
+
+The `a = 24` FORS tree height drives everything above. It sets the grind
+exponent, the 2^24-leaf trees, and the memory the upstream crate had to fix
+with a streaming treehash. It is also **taller than any FORS tree in either
+source paper**: SPHINCS+C tops out at a removed-tree height of 19, and
+Kudinov and Nick use `a` between 14 and 16 across every parameter set,
+including the ones for 2^20 signatures. The 256s profiles, at `a = 14`, sit
+inside that range and sign in about a second.
+
 **The internal documents record the parameter values, not the reason for
 them.** `hashsigs-rs` states only that its constants mirror the Solidity
 `SHRINCSParams` libraries. The reading above follows from the structure of
@@ -365,9 +402,16 @@ Two consequences for this crate:
   are otherwise identical. This crate exposes both, so that caveat travels
   with it.
 
-References: SHRINCS is Kudinov and Nick, *Hash-based Signature Schemes for
-Bitcoin*, ePrint 2025/2203, with UXMSS in its appendix B.3. SPHINCS+C is
-Kudinov, Hülsing, Ronen and Yogev, ePrint 2022/778.
+References: the constructions come from Kudinov, Hülsing, Ronen and Yogev,
+*SPHINCS+C: Compressing SPHINCS+ With (Almost) No Cost*, ePrint 2022/778,
+and from Kudinov and Nick, *Hash-based Signature Schemes for Bitcoin*,
+ePrint 2025/2203.
+
+Checked on 2026-08-16: **neither paper uses the name SHRINCS or the name
+UXMSS.** Both supply the theory that SHRINCS instantiates. Neither supplies
+its names. An earlier revision of this section cited 2025/2203 as the
+definition of SHRINCS, with UXMSS in its appendix B.3. That citation does
+not hold, and no public document defines SHRINCS by name.
 
 ### Verifier-side acceptance policy
 
@@ -447,6 +491,57 @@ Write the tests before the code they cover.
   skipped check is the dangerous failure.
 - Add `trybuild` compile-fail tests for the negative guarantees: no `Clone` on
   secret keys, and no `PartialEq` on secret types.
+
+### Test suite runtime
+
+The suite runs under a fixed budget: 30 seconds per test as a target and 120
+seconds as an absolute ceiling, with 4 minutes for the whole suite and 2
+minutes preferred. Five choices hold it there.
+
+**Dependencies build optimised, workspace crates do not.** The workspace
+`Cargo.toml` sets `opt-level = 3` for `profile.dev.package."*"`. Hash-heavy
+code runs about 67 times slower when its dependencies compile unoptimised,
+which is what made one test binary take 184.80 seconds. Cargo still passes
+`-C debug-assertions=on`, so the `subtle` assertions that the debug job
+exists to exercise still run.
+
+**Per-profile fixtures replace live signing.** Each profile has a fixture in
+`crates/pqhybridsign-shrincs/tests/vectors/` holding the exported secret key,
+the public key, and one signature of each kind. Tests verify stored
+signatures instead of producing them, and verification costs under 0.01
+seconds at every profile. `tests/generate_fixtures.rs` regenerates them and
+carries `#[ignore]`. A missing fixture is a compile error and a mismatched
+one panics with the regenerate command. Neither falls back to key
+generation, because a fallback restores the cost silently.
+
+**`SecretKey::import` is not a shortcut at 128s.** Upstream `Keys::import`
+re-derives the hypertree root to validate the blob, so it costs about what
+`keygen` costs. A test that needs a live secret key at 128s calls `keygen`
+instead: the price is the same and the coverage is better. The stored blob
+serves the 256s profiles and the scheduled job.
+
+**Tests tier by whether they depend on the profile.** Tests of the
+composition layer, covering leaf budgets, journals, the rotation gate and
+tamper rejection, behave identically under every parameter set. They gate to
+the default profile with `#![cfg(feature = "profile-256s")]` and run once.
+Running them under four profiles tests `hashsigs-rs` four times rather than
+this crate. Profile-dependent assertions live in
+`tests/profile_conformance.rs` and run everywhere.
+
+**One real 128s operation survives per commit.** `tests/smoke_128s.rs`
+generates a key under `profile-128s-q18` and compares the public key against
+pinned fixture bytes, which covers the whole 2^18 hypertree root derivation.
+It carries `#[ignore]`, and a dedicated job runs it. Adding `q20` buys no
+coverage, because the two profiles differ only in the stateless budget.
+
+Measured cost per commit: 16.5 seconds for the workspace, 8.2 seconds for
+the four-profile matrix, and 46.3 seconds for the smoke test. About 71
+seconds in total.
+
+What this gives up: no per-commit run produces a 128s stateless signature, so
+the FORS-C grind, the WOTS-C grind and hypertree signing wait for the
+scheduled `regenerate-fixtures` job. That job is also the only detector of
+fixture staleness on the signing paths.
 
 ## Findings from the specification review
 
@@ -539,26 +634,38 @@ stateful secret key has a validating export and import path (`pqhs-utz`), the
 continuous integration runs a cross-profile job that compares commitments
 rather than labels (`pqhs-yn0`).
 
-### Next
-
 Cycle 4: H2 and H4, over `fn-dsa` 0.4.0. The maintainer decided on 2026-08-10
 to ship these now rather than wait for a final FIPS 206, having been told that
 the standard may change the wire format and that signatures made before then
 could stop verifying. The dependency lifts the workspace Rust floor to 1.82.
 
-Cycle 5: the language bindings. A type-erased API over a runtime suite enum
-comes first. No C header, JavaScript function, or Python module can name a
-type parameter, so every binding needs a runtime enum underneath it. The C
-ABI, the WebAssembly package, and the Python wheel sit on top.
+Cycle 5: the language bindings, all on `pqhybridsign-abi`. The C ABI with a
+checked-in header, the WebAssembly and npm package, and the Python wheel.
+
+The WebAssembly binding exposes H1 through H4 only. A JavaScript object
+holding a stateful secret key can be structured-cloned, and a clone forks the
+leaf counter. H5 and H6 reach JavaScript by no path at all. The C ABI and the
+Python binding carry them instead.
 
 Rotation and the policy machine stay out of the binding surface for the first
 release candidate. Both need registry state that lives in the integrator's
 system, and exposing half a state machine across a C boundary invites the
 misuse the state machine exists to prevent.
 
+### Next
+
+Two defects block a first crates.io release. Both are tracked, and the
+upstream merge request this crate pins resolves neither.
+
+- `pqhs-eig`: no crate that resolves a dependency from a git source can be
+  published. crates.io serves `hashsigs-rs` 0.0.1 and 0.0.2, which predate
+  SHRINCS and declare no features at all.
+- `pqhs-4kc`: the 128s FORS-C grind cap. See the open question below.
+
 ### Later
 
-Nothing is gated on an external event any more.
+Both items above wait on upstream `hashsigs-rs`. Nothing else is gated on an
+external event.
 
 ## Out of scope
 
@@ -592,3 +699,32 @@ on them.
    never validates. This is the intended behaviour, for the reason given in
    the third structural rule above, and the composite now matches it. Closed
    as `pqhs-bz1.10`.
+
+### The 128s FORS-C grind cap, open as `pqhs-4kc`
+
+`FORS_C_MAX_GRIND_COUNTER` is 2^28 at both 128s profiles. The FORS-C search
+succeeds with probability 2^-24 per attempt, so the cap gives up on a
+fraction `exp(-16)` of messages, about 1 in 9 million. That failure is
+deterministic for one key and message, because the randomizer is a pure
+function of both, so a retry of the same message cannot succeed. It is loud,
+returning `Error::ComponentFailure`, and it carries no security consequence.
+The cost is availability on the rotation and recovery path.
+
+Both source papers bound the search, and both put the bound above the value
+in use:
+
+| Source | Convention | Required cap at `a = 24` |
+|---|---|---|
+| SPHINCS+C, section 6.2 | worked example at `p = 2^-32` | 2^28.47 |
+| Kudinov and Nick, tables 1 and 2 | tabulated at `p = 2^-30` | 2^28.38 |
+
+2^29 is the smallest power of two that satisfies both conventions, and it
+puts the failure rate at 2^-46. Raising the cap does not change the expected
+signing time, which stays at 2^24 attempts either way. It doubles the worst
+case, and the worst case is reached only on a message that fails today.
+
+**The position as of 2026-08-16 is to accept the limitation and not act.**
+The evidence is recorded so that the choice stays deliberate rather than
+inherited. Note that neither paper specifies a cap at all: the bound is an
+addition by `hashsigs-rs`, and section 6.2 of SPHINCS+C is the formula for
+setting one.
