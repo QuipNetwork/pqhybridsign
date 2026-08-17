@@ -3,8 +3,11 @@
 // Signs and verifies for every suite this binding exposes (H1-H4),
 // confirms H5/H6 are refused with an explanatory error rather than
 // silently mishandled, and confirms a tampered message and a
-// wrong-suite signature both fail verification. Run against a
-// `nodejs`-target build assembled by ../../scripts/build-npm.sh:
+// wrong-suite signature both fail verification. Also exercises
+// verifyWithStoredPublicKey/storedPublicKeyLen, the one H5/H6 entry point
+// this binding does expose (see lib.rs for why verification is safe where
+// signing is not). Run against a `nodejs`-target build assembled by
+// ../../scripts/build-npm.sh:
 //
 //   ../../scripts/build-npm.sh
 //   node tests/node/sign_and_verify.mjs
@@ -13,6 +16,8 @@
 // continuous integration directly.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import * as pqhs from "../../npm/node/pqhybridsign_wasm.js";
 
 const SUITES = ["H1", "H2", "H3", "H4"];
@@ -113,6 +118,84 @@ for (const suite of SUITES) {
         }
     });
 }
+
+// Fixture for verifyWithStoredPublicKey, generated once with the Python
+// binding against Suite.H5 (see the task-4 report: no binding derives the
+// stored form from a verify-form public key, so this crate cannot generate
+// its own fixture without a stateful keygen it deliberately does not
+// expose). `stored` is the small form a verifier installs; `bundle` is the
+// signer-supplied commitment bundle for the same key; `attackerBundle` is
+// the bundle of an unrelated key that signs the same message.
+const fixturePath = fileURLToPath(
+    new URL("./verify_with_stored_public_key.fixture.json", import.meta.url),
+);
+const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+const hex = (s) => Uint8Array.from(Buffer.from(s, "hex"));
+const STORED = hex(fixture.stored);
+const BUNDLE = hex(fixture.bundle);
+const ATTACKER_BUNDLE = hex(fixture.attackerBundle);
+const STORED_MSG = hex(fixture.msg);
+const STORED_CTX = hex(fixture.ctx);
+const STORED_SIG = hex(fixture.sig);
+
+check("storedPublicKeyLen(H5) matches the fixture's stored form", () => {
+    assert.equal(pqhs.storedPublicKeyLen("H5"), fixture.storedLen);
+    assert.equal(STORED.length, fixture.storedLen);
+});
+
+check("H1-H4 are refused by storedPublicKeyLen and verifyWithStoredPublicKey", () => {
+    for (const suite of SUITES) {
+        assert.throws(() => pqhs.storedPublicKeyLen(suite));
+        assert.throws(() =>
+            pqhs.verifyWithStoredPublicKey(suite, STORED, BUNDLE, STORED_MSG, STORED_CTX, STORED_SIG),
+        );
+    }
+});
+
+check("verifyWithStoredPublicKey accepts the bundle the stored key names", () => {
+    assert.equal(
+        pqhs.verifyWithStoredPublicKey(
+            "H5",
+            STORED,
+            BUNDLE,
+            STORED_MSG,
+            STORED_CTX,
+            STORED_SIG,
+        ),
+        true,
+    );
+});
+
+check("verifyWithStoredPublicKey refuses a bundle the stored key does not name", () => {
+    // The attacker's own bundle verifies the same signature's message and
+    // context perfectly well as a self-consistent key; what it fails is
+    // the binding to the *stored* commitment, which is what this entry
+    // point exists to check.
+    assert.equal(
+        pqhs.verifyWithStoredPublicKey(
+            "H5",
+            STORED,
+            ATTACKER_BUNDLE,
+            STORED_MSG,
+            STORED_CTX,
+            STORED_SIG,
+        ),
+        false,
+    );
+});
+
+check("verifyWithStoredPublicKey returns false and does not throw for malformed lengths", () => {
+    for (const bad of MALFORMED) {
+        assert.equal(
+            pqhs.verifyWithStoredPublicKey("H5", bad, BUNDLE, STORED_MSG, STORED_CTX, STORED_SIG),
+            false,
+        );
+        assert.equal(
+            pqhs.verifyWithStoredPublicKey("H5", STORED, bad, STORED_MSG, STORED_CTX, STORED_SIG),
+            false,
+        );
+    }
+});
 
 if (failures > 0) {
     console.error(`${failures} check(s) failed`);

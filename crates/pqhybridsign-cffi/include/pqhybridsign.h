@@ -752,6 +752,25 @@ int pqhs_secret_key_len(uint8_t suite, size_t *out);
 int pqhs_signature_len(uint8_t suite, size_t *out);
 
 /**
+ * Write the stored public key length for `suite`, in bytes, into `*out`.
+ *
+ * H5 and H6 only: the small on-storage form (`ClassicalPK || commitment`)
+ * a verifier installs and hands to
+ * [`pqhs_verify_with_stored_public_key`](crate::pqhs_verify_with_stored_public_key),
+ * not the verify-form length [`pqhs_public_key_len`] reports.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null.
+ *
+ * # Safety
+ *
+ * `out`, if non-null, must be a valid, writable `usize` pointer.
+ */
+int pqhs_stored_public_key_len(uint8_t suite, size_t *out);
+
+/**
  * Bind `journal` to the key `key` names, unless it already belongs to a
  * different key.
  *
@@ -971,6 +990,65 @@ int pqhs_sign_stateless(uint8_t suite,
                         uint8_t *sig_out,
                         size_t sig_out_len,
                         size_t *sig_written);
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
+ * signer-supplied verify key that must be the one `stored_public_key`
+ * commits to.
+ *
+ * This is the entry point for the deployment H5 and H6 are built for: the
+ * verifier stores the small form (`ClassicalPK || commitment`,
+ * [`pqhs_stored_public_key_len`](crate::pqhs_stored_public_key_len) bytes
+ * -- 64 for both suites) and the signer supplies the full 164-byte
+ * commitment bundle alongside every signature, because the bundle is too
+ * large to keep on an account. `stored_public_key` is trusted;
+ * `pq_verify_key` is not: the commitment is recomputed from
+ * `pq_verify_key` and matched against the stored one before anything is
+ * verified, and the classical public key is taken from `stored_public_key`,
+ * so nothing the signer supplied can substitute a key of their own.
+ *
+ * [`pqhs_verify`](crate::pqhs_verify) is the other shape: it takes one
+ * whole verify-form public key and checks no commitment, because it has
+ * nothing to check one against. Use it only where the verify key itself
+ * came from a trusted place.
+ *
+ * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
+ * cases: a commitment that does not match, a malformed key or a malformed
+ * signature all fail to verify rather than error, on the same grounds as
+ * [`pqhs_verify`](crate::pqhs_verify). `*valid_out` is set to `false`
+ * before anything else happens, so it is `false` on every path that
+ * returns a code other than `PQHS_OK` too.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: their public key is a
+ * single form with no commitment in it, so there is nothing for this
+ * entry point to bind; use [`pqhs_verify`](crate::pqhs_verify).
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+ * null, or if `valid_out` is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for reads for
+ * exactly its paired length in bytes (a write, for `valid_out`), and must
+ * not be aliased by another live pointer for the duration of this call. A
+ * null pointer is only valid when its paired length is `0`; `valid_out`
+ * has no paired length and must be a valid, non-null, writable `bool`
+ * pointer.
+ */
+int pqhs_verify_with_stored_public_key(uint8_t suite,
+                                       const uint8_t *stored_public_key,
+                                       size_t stored_public_key_len,
+                                       const uint8_t *pq_verify_key,
+                                       size_t pq_verify_key_len,
+                                       const uint8_t *msg,
+                                       size_t msg_len,
+                                       const uint8_t *ctx,
+                                       size_t ctx_len,
+                                       const uint8_t *sig,
+                                       size_t sig_len,
+                                       bool *valid_out);
 
 #ifdef __cplusplus
 }  // extern "C"

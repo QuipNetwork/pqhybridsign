@@ -53,9 +53,11 @@ pub use error::{
 pub use keygen::{pqhs_keygen_from_seed, pqhs_keygen_stateful_from_seed};
 pub use profile::pqhs_profile_name;
 pub use sign::{pqhs_sign, pqhs_sign_deterministic, pqhs_verify};
-pub use sizes::{pqhs_public_key_len, pqhs_secret_key_len, pqhs_signature_len};
+pub use sizes::{
+    pqhs_public_key_len, pqhs_secret_key_len, pqhs_signature_len, pqhs_stored_public_key_len,
+};
 pub use stateful::{
     pqhs_adopt_key, pqhs_key_identity, pqhs_key_identity_from_secret_key, pqhs_sign_stateful,
-    pqhs_sign_stateless, PqhsLeafJournal, PqhsStatelessBudget, PQHS_BUDGET_KEY_LEN,
-    PQHS_KEY_IDENTITY_LEN,
+    pqhs_sign_stateless, pqhs_verify_with_stored_public_key, PqhsLeafJournal, PqhsStatelessBudget,
+    PQHS_BUDGET_KEY_LEN, PQHS_KEY_IDENTITY_LEN,
 };

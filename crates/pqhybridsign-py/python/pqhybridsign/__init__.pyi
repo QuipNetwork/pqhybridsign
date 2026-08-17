@@ -310,3 +310,37 @@ def profile_name() -> str:
     `"shrincs-256s"`. A key, signature or verify key produced by a build
     against one profile is not interchangeable with one from a build
     against another."""
+
+def stored_public_key_len(suite: Suite) -> int:
+    """The stored public key length for `suite` (H5 or H6), in bytes.
+
+    The small on-storage form (`ClassicalPK || commitment`) a verifier
+    installs and passes to `verify_with_stored_public_key`, not the
+    verify-form length a `keygen_stateful_from_seed` public key uses."""
+
+def verify_with_stored_public_key(
+    suite: Suite,
+    stored_public_key: ReadableBuffer,
+    pq_verify_key: ReadableBuffer,
+    msg: ReadableBuffer,
+    ctx: ReadableBuffer,
+    sig: ReadableBuffer,
+) -> bool:
+    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (H5 or
+    H6), against a signer-supplied verify key that must be the one
+    `stored_public_key` commits to.
+
+    `stored_public_key` is trusted (`stored_public_key_len(suite)` bytes,
+    the small on-storage form a verifier installs); `pq_verify_key` is not
+    (the larger commitment bundle the signer supplies alongside every
+    signature). The commitment is recomputed from `pq_verify_key` and
+    matched against the stored one before anything is verified, and the
+    classical public key is taken from `stored_public_key`, so nothing the
+    signer supplied can substitute a key of their own.
+
+    `verify` is the other shape: it takes one whole verify-form public key
+    and checks no commitment. Use it only where the verify key itself came
+    from a trusted place.
+
+    Returns `False`, never raises, for a commitment that does not match, a
+    malformed key or a malformed signature."""
