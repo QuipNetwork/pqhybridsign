@@ -237,6 +237,34 @@ pub trait PqStatefulScheme {
     /// worst case.
     fn max_stateful_sig_len(max_signatures: u32) -> usize;
 
+    /// The largest leaf index this verify key can ever have signed.
+    ///
+    /// Required, and deliberately without a default. A default returning
+    /// `u32::MAX` would restore the very no-op this method exists to
+    /// remove, silently, for any implementor that did not notice it.
+    ///
+    /// The value comes from the verify key's own material, which is why
+    /// this takes the key rather than a caller-supplied number:
+    /// [`TrustedMaxSignatures`] exists so that no caller can name a bound
+    /// without saying where it came from.
+    ///
+    /// The returned bound is in the wire [`LeafCount`] space, which is
+    /// one-based: `1..=bound` is the accepted range. It is not the
+    /// zero-based index a [`LeafJournal`] records.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `verify_key` is not
+    /// [`Self::VERIFY_KEY_LEN`] bytes. [`Error::ComponentFailure`] if the
+    /// key declares a bound this component cannot represent.
+    ///
+    /// [`TrustedMaxSignatures`]: crate::encoding_path::TrustedMaxSignatures
+    /// [`LeafCount`]: crate::encoding_path
+    /// [`LeafJournal`]: crate::stateful::LeafJournal
+    /// [`Error::BadLength`]: crate::Error::BadLength
+    /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure
+    fn max_signatures_from_vk(verify_key: &[u8]) -> Result<u32>;
+
     /// Sign `msg` with the next unused leaf, advancing this component's own
     /// leaf counter on success. Returns the number of bytes written into
     /// `sig_out`.
