@@ -140,12 +140,13 @@
 #define PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL 3
 
 /**
- * A soft derivation junction was supplied. Mirrors
- * `AbiError::SoftJunctionRejected`.
- */
-#define PQHS_ERR_SOFT_JUNCTION_REJECTED 4
-
-/**
+ * Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: junction
+ * derivation has no entry point in this crate, so no library code could
+ * ever return it. The number is left unassigned rather than reused by the
+ * next code added, so a caller already compiled against an older header
+ * that still branches on `4` keeps reading it as unknown rather than
+ * colliding with a future code's meaning.
+ *
  * A path-selected signature (H5/H6) carried an unknown selector. Mirrors
  * `AbiError::BadPathSelector`.
  */

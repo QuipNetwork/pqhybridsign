@@ -27,8 +27,6 @@ pub enum Error {
         /// The number of bytes the caller's buffer actually held.
         actual: usize,
     },
-    /// A soft derivation junction was supplied. Only hard junctions exist.
-    SoftJunctionRejected,
     /// A path-selected signature carried a selector other than `0x01`
     /// (stateful) or `0x02` (stateless).
     BadPathSelector {
@@ -96,12 +94,6 @@ impl fmt::Display for Error {
                 write!(
                     f,
                     "output buffer too small: need {needed} bytes, got {actual}"
-                )
-            }
-            Self::SoftJunctionRejected => {
-                write!(
-                    f,
-                    "soft derivation junctions are rejected for every hybrid suite"
                 )
             }
             Self::BadPathSelector { selector } => {

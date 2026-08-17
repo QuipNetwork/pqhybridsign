@@ -36,10 +36,6 @@ sub_exception!(
     "An internal output buffer was too small for this signature."
 );
 sub_exception!(
-    SoftJunctionRejectedError,
-    "A soft derivation junction was supplied."
-);
-sub_exception!(
     BadPathSelectorError,
     "A path-selected signature (H5/H6) carried an unknown selector."
 );
@@ -124,7 +120,6 @@ pub(crate) fn to_py_err(e: AbiError) -> PyErr {
         AbiError::BadLength => BadLengthError::new_err(msg),
         AbiError::ContextTooLong => ContextTooLongError::new_err(msg),
         AbiError::OutputBufferTooSmall => OutputBufferTooSmallError::new_err(msg),
-        AbiError::SoftJunctionRejected => SoftJunctionRejectedError::new_err(msg),
         AbiError::BadPathSelector => BadPathSelectorError::new_err(msg),
         AbiError::LeafCountOutOfRange => LeafCountOutOfRangeError::new_err(msg),
         AbiError::TrailingBytes => TrailingBytesError::new_err(msg),
@@ -154,10 +149,6 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     m.add(
         "OutputBufferTooSmallError",
         py.get_type::<OutputBufferTooSmallError>(),
-    )?;
-    m.add(
-        "SoftJunctionRejectedError",
-        py.get_type::<SoftJunctionRejectedError>(),
     )?;
     m.add(
         "BadPathSelectorError",

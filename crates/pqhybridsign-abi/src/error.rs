@@ -35,9 +35,12 @@ pub enum AbiError {
     /// A caller-supplied output buffer was too small. Mirrors
     /// [`CoreError::OutputBufferTooSmall`].
     OutputBufferTooSmall = 3,
-    /// A soft derivation junction was supplied. Mirrors
-    /// [`CoreError::SoftJunctionRejected`].
-    SoftJunctionRejected = 4,
+    // Code 4 was `SoftJunctionRejected`, removed: junction derivation has no
+    // entry point in this crate, so no library code could ever construct
+    // it. The discriminant is left unassigned rather than reused, so a
+    // caller compiled against an older header that still branches on `4`
+    // keeps reading it as "unknown" instead of colliding with whatever code
+    // 4 might mean in a future release.
     /// A path-selected signature (H5/H6) carried an unknown selector.
     /// Mirrors [`CoreError::BadPathSelector`].
     BadPathSelector = 5,
@@ -146,7 +149,6 @@ impl fmt::Display for AbiError {
             Self::BadLength => "a byte string had the wrong length",
             Self::ContextTooLong => "the application context exceeded 255 bytes",
             Self::OutputBufferTooSmall => "the output buffer was too small",
-            Self::SoftJunctionRejected => "soft derivation junctions are rejected",
             Self::BadPathSelector => "the signature carried an unknown path selector",
             Self::LeafCountOutOfRange => "the declared leaf count was out of range",
             Self::TrailingBytes => "the signature carried trailing bytes",
@@ -184,7 +186,6 @@ impl From<CoreError> for AbiError {
             CoreError::BadLength { .. } => Self::BadLength,
             CoreError::ContextTooLong => Self::ContextTooLong,
             CoreError::OutputBufferTooSmall { .. } => Self::OutputBufferTooSmall,
-            CoreError::SoftJunctionRejected => Self::SoftJunctionRejected,
             CoreError::BadPathSelector { .. } => Self::BadPathSelector,
             CoreError::LeafCountOutOfRange { .. } => Self::LeafCountOutOfRange,
             CoreError::TrailingBytes { .. } => Self::TrailingBytes,
@@ -232,7 +233,8 @@ mod tests {
         assert_eq!(AbiError::BadLength.code(), 1);
         assert_eq!(AbiError::ContextTooLong.code(), 2);
         assert_eq!(AbiError::OutputBufferTooSmall.code(), 3);
-        assert_eq!(AbiError::SoftJunctionRejected.code(), 4);
+        // Code 4 was `SoftJunctionRejected`, removed; the gap is left
+        // unfilled rather than closed.
         assert_eq!(AbiError::BadPathSelector.code(), 5);
         assert_eq!(AbiError::LeafCountOutOfRange.code(), 6);
         assert_eq!(AbiError::TrailingBytes.code(), 7);
@@ -270,10 +272,6 @@ mod tests {
                 actual: 0
             }),
             AbiError::OutputBufferTooSmall
-        );
-        assert_eq!(
-            AbiError::from(CoreError::SoftJunctionRejected),
-            AbiError::SoftJunctionRejected
         );
         assert_eq!(
             AbiError::from(CoreError::BadPathSelector { selector: 0x99 }),

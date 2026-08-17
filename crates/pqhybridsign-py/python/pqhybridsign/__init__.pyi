@@ -15,9 +15,6 @@ class ContextTooLongError(PqHybridSignError):
 class OutputBufferTooSmallError(PqHybridSignError):
     """An internal output buffer was too small for this signature."""
 
-class SoftJunctionRejectedError(PqHybridSignError):
-    """A soft derivation junction was supplied."""
-
 class BadPathSelectorError(PqHybridSignError):
     """A path-selected signature (H5/H6) carried an unknown selector."""
 
