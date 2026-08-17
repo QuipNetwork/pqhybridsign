@@ -26,7 +26,8 @@ const EMPTY_DOMAIN: DomainContext<'static> = DOMAIN_NONE;
 
 /// Domain separator for the deterministic nonce seed. Distinct from the
 /// sr25519 one so a seed derived for one component can never be mistaken
-/// for the other's.
+/// for the other's. Trailing NUL follows the suite-label convention
+/// (`hybrid-<classical>-<pq>-v1\0`), matching `sr25519`'s domain constant.
 const NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/fn-dsa-512/v1\0";
 
 impl PqScheme for Falcon512 {
@@ -69,25 +70,11 @@ impl PqScheme for Falcon512 {
         result
     }
 
-    /// `k = H(domain || len(sk) || sk || len(nonce) || nonce || len(msg) || msg)`,
-    /// the same construction `Sr25519` uses: the secret key always takes
-    /// part, so the nonce seed cannot be recovered from public data alone,
-    /// and each variable-length field is length-prefixed so that no pair of
-    /// (nonce, msg) values can be re-cut into another pair with the same
-    /// concatenation.
+    /// See [`nonce_seed`] for the seed construction: the same length-prefixed
+    /// layout `Sr25519` uses, with a domain constant distinct to this
+    /// component.
     fn sign_deterministic(sk: &[u8], msg: &[u8], nonce: &[u8], sig_out: &mut [u8]) -> Result<()> {
-        let mut hasher = Sha512::new();
-        hasher.update(NONCE_SEED_DOMAIN);
-        hasher.update((sk.len() as u64).to_be_bytes());
-        hasher.update(sk);
-        hasher.update((nonce.len() as u64).to_be_bytes());
-        hasher.update(nonce);
-        hasher.update((msg.len() as u64).to_be_bytes());
-        hasher.update(msg);
-        let mut digest = hasher.finalize();
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&digest[..32]);
-        digest.zeroize();
+        let mut seed = nonce_seed(sk, nonce, msg);
         let result = sign_with_seed(sk, msg, &seed, sig_out);
         seed.zeroize();
         result
@@ -119,6 +106,33 @@ fn check_len(buf: &[u8], want: usize) -> Result<()> {
             actual: buf.len(),
         })
     }
+}
+
+/// The deterministic nonce seed:
+/// `SHA-512(NONCE_SEED_DOMAIN || u64_be(len(sk)) || sk || u64_be(len(nonce))
+/// || nonce || u64_be(len(msg)) || msg)`, truncated to 32 bytes.
+///
+/// Each variable-length field is length-prefixed so that no pair of
+/// (nonce, msg) values can be re-cut into another pair with the same
+/// concatenation; the same discipline `KeyIdentity::derive` and `M'`
+/// already use. Lengths are `u64` big-endian, not `usize`: `usize` is
+/// 4 bytes on a 32-bit target and 8 on a 64-bit one, and a nonce seed
+/// that depended on the pointer width of the machine that computed it
+/// would not survive being written down.
+fn nonce_seed(sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha512::new();
+    hasher.update(NONCE_SEED_DOMAIN);
+    hasher.update((sk.len() as u64).to_be_bytes());
+    hasher.update(sk);
+    hasher.update((nonce.len() as u64).to_be_bytes());
+    hasher.update(nonce);
+    hasher.update((msg.len() as u64).to_be_bytes());
+    hasher.update(msg);
+    let mut digest = hasher.finalize();
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&digest[..32]);
+    digest.zeroize();
+    seed
 }
 
 /// A deterministic RNG seeded from a 32-byte value, expanded by repeated
@@ -279,6 +293,37 @@ mod tests {
             left.as_slice(),
             right.as_slice(),
             "a re-cut of the same concatenation must not reach the same nonce seed"
+        );
+    }
+
+    /// The defect this construction fixes is only observable in the seed:
+    /// `fn-dsa` hedges the salt with the message representative, so a
+    /// signature comparison cannot see it either. Without the length
+    /// prefixes, ("ab", "c") and ("a", "bc") both hash sk || "abc" and reach
+    /// one seed.
+    #[test]
+    fn a_re_cut_of_the_same_concatenation_gives_a_different_nonce_seed() {
+        let sk = [7u8; Falcon512::SECRET_KEY_LEN];
+        assert_ne!(
+            nonce_seed(&sk, b"ab", b"c"),
+            nonce_seed(&sk, b"a", b"bc"),
+            "the length prefixes must separate the nonce from the message"
+        );
+    }
+
+    /// Known answers computed independently of this code. They pin the
+    /// domain string, the field order and the 8-byte big-endian widths, so
+    /// a 32-bit target that silently used `usize` would fail here too.
+    #[test]
+    fn the_nonce_seed_layout_is_pinned() {
+        let sk = [7u8; Falcon512::SECRET_KEY_LEN];
+        assert_eq!(
+            hex::encode(nonce_seed(&sk, b"ab", b"c")),
+            "544ae45d91fdb54d9e3eba31c5430579a7e73604ed3326e77110ecf836cc5524"
+        );
+        assert_eq!(
+            hex::encode(nonce_seed(&sk, b"a", b"bc")),
+            "2cfa34a60d0ca4a1e7c22135e83dd1ec6532609c07b02c699766ab05da9a7aeb"
         );
     }
 }
