@@ -312,11 +312,16 @@ def profile_name() -> str:
     against another."""
 
 def stored_public_key_len(suite: Suite) -> int:
-    """The stored public key length for `suite` (H5 or H6), in bytes.
+    """The stored public key length for `suite`, in bytes: the form a
+    verifier keeps, which is what `verify_with_stored_public_key` takes as
+    `stored_public_key`.
 
-    The small on-storage form (`ClassicalPK || commitment`) a verifier
-    installs and passes to `verify_with_stored_public_key`, not the
-    verify-form length a `keygen_stateful_from_seed` public key uses."""
+    For H5 and H6 this is the classical public key and a 32-byte commitment
+    to the post-quantum verify key, smaller than the verify-form length
+    `keygen_stateful_from_seed`'s public key uses, because the verify key
+    itself is supplied per signature rather than stored. For H1 through H4
+    the stored and verify forms are the same bytes, so this equals the
+    public key length for `suite`; there is no error case for any suite."""
 
 def verify_with_stored_public_key(
     suite: Suite,

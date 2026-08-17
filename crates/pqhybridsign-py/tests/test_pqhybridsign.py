@@ -214,7 +214,8 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
 
 # Offset of the 32-byte commitment inside a SHRINCS bundle
 # (statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot),
-# mirroring pqhybridsign_shrincs::bundle::BUNDLE_COMMITMENT_OFFSET and
+# mirroring the private BUNDLE_COMMITMENT_OFFSET constant at
+# crates/pqhybridsign-shrincs/src/scheme.rs:45 and
 # pqhybridsign_abi::stateful_suites::tests::COMMITMENT_AT. This is
 # spec-fixed layout shared by every SHRINCS instance (H5 and H6 alike), not
 # a per-profile detail.
@@ -266,6 +267,16 @@ def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
 
     assert phs.verify_with_stored_public_key(
         suite, stored, _bundle(suite, pk), b"message", b"ctx", sig
+    )
+
+    # The path selector this entry point sees differs by which of the two
+    # SHRINCS paths signed: 0x02 (stateless) above, 0x01 (stateful, one
+    # leaf spent) here. The commitment check does not branch on it, but
+    # nothing else in this test suite exercises the stateful selector
+    # through verify_with_stored_public_key.
+    stateful_sig = sk.sign_stateful(b"stateful message", b"ctx")
+    assert phs.verify_with_stored_public_key(
+        suite, stored, _bundle(suite, pk), b"stateful message", b"ctx", stateful_sig
     )
 
     other_journal, other_budget = MemoryJournal(), MemoryBudget()

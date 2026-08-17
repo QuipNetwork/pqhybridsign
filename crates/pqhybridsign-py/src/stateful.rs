@@ -700,15 +700,16 @@ fn load_stateful_secret_key(
     })
 }
 
-/// The stored public key length for `suite`, in bytes.
+/// The stored public key length for `suite`, in bytes: the form a verifier
+/// keeps, which is what `verify_with_stored_public_key` takes as
+/// `stored_public_key`.
 ///
-/// H5 and H6 only: the small on-storage form (`ClassicalPK || commitment`)
-/// a verifier installs and passes to `verify_with_stored_public_key`, not
-/// the verify-form length a `keygen_stateful_from_seed` public key uses.
-///
-/// # Errors
-///
-/// `WrongEntryPointForSuiteError` for H1 through H4.
+/// For H5 and H6 this is the classical public key and a 32-byte commitment
+/// to the post-quantum verify key, smaller than the verify-form length
+/// `keygen_stateful_from_seed`'s public key uses, because the verify key
+/// itself is supplied per signature rather than stored. For H1 through H4
+/// the stored and verify forms are the same bytes, so this equals the
+/// public key length for `suite`; there is no error case for any suite.
 #[pyfunction]
 fn stored_public_key_len(suite: PySuite) -> usize {
     pqhybridsign_abi::stored_public_key_len(suite.into())

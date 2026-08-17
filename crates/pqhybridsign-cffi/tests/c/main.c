@@ -294,6 +294,40 @@ static int check_h5(void) {
     failures += expect_rc("h5 verify call", rc, PQHS_OK);
     failures += expect_true("h5 stateful signature verified", valid);
 
+    /* pqhs_stored_public_key_len and pqhs_verify_with_stored_public_key,
+     * against the same key and signature check_h5 already built: `pk` is
+     * `ClassicalPK || PqVerifyKey` (see pqhs_public_key_len); the stored
+     * form is `ClassicalPK || commitment`, where the 32-byte commitment
+     * sits at a fixed offset (68) inside the bundle that follows the
+     * classical prefix -- the SHRINCS `statefulPublicKey(68) ||
+     * commitment(32) || pkSeed || hypertreeRoot` layout, the same one
+     * pqhybridsign-abi's own stateful_suites tests use. */
+    size_t stored_len = 0;
+    rc = pqhs_stored_public_key_len(5, &stored_len);
+    if (rc != PQHS_OK) {
+        failures += fail("h5 stored_public_key_len", rc);
+        goto done;
+    }
+    size_t classical_len = stored_len - 32;
+    size_t bundle_len = pk_len - classical_len;
+    uint8_t *stored = calloc(1, stored_len);
+    if (!stored) {
+        fprintf(stderr, "FAIL: h5 stored allocation\n");
+        failures = 1;
+        goto done;
+    }
+    memcpy(stored, pk, classical_len);
+    memcpy(stored + classical_len, pk + classical_len + 68, 32);
+    const uint8_t *bundle = pk + classical_len;
+
+    bool stored_valid = false;
+    rc = pqhs_verify_with_stored_public_key(5, stored, stored_len, bundle, bundle_len, msg,
+                                             sizeof(msg), NULL, 0, sig, sig_len, &stored_valid);
+    failures += expect_rc("h5 verify_with_stored_public_key call", rc, PQHS_OK);
+    failures += expect_true("h5 stateful signature verified against its stored form",
+                            stored_valid);
+    free(stored);
+
 done:
     free(sk);
     free(pk);

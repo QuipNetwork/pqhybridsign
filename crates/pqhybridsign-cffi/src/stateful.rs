@@ -2326,6 +2326,56 @@ mod tests {
         };
         assert_eq!(rc, PQHS_OK);
         assert!(valid);
+
+        // Every case above signed through the stateless path (`PathSelector`
+        // 0x02). `verify_with_stored_public_key` does not branch on the
+        // selector, but nothing else here exercises the stateful path
+        // (0x01, one leaf spent) through it.
+        provision_journal(5, &victim_pk);
+        let journal = test_journal();
+        let mut stateful_sig =
+            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sk_out = victim_sk.clone();
+        let mut n = 0usize;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                victim_sk.as_ptr(),
+                victim_sk.len(),
+                &journal,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                stateful_sig.as_mut_ptr(),
+                stateful_sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let mut stateful_valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                victim_bundle.as_ptr(),
+                victim_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                stateful_sig.as_ptr(),
+                n,
+                &mut stateful_valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(stateful_valid);
     }
 
     #[test]
