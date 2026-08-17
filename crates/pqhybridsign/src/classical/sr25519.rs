@@ -11,6 +11,11 @@ use zeroize::Zeroize;
 #[derive(Clone, Copy, Debug)]
 pub struct Sr25519;
 
+/// Domain separator for the deterministic nonce seed. Distinct from the
+/// FN-DSA one so a seed derived for one component can never be mistaken
+/// for the other's.
+const NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/sr25519/v1\0";
+
 /// Holds a schnorrkel key so that its wipe happens on drop.
 ///
 /// schnorrkel 0.11.5 implements `Drop` only for `Keypair` (`src/keys.rs`);
@@ -141,10 +146,23 @@ impl ClassicalScheme for Sr25519 {
         sig_out: &mut [u8],
     ) -> Result<()> {
         check_len(sk, Self::SECRET_KEY_LEN)?;
-        // k = H(sk || nonce || msg). The secret key always takes part.
+        // k = H(domain || len(sk) || sk || len(nonce) || nonce || len(msg) || msg).
+        // The secret key always takes part. Each variable-length field is
+        // length-prefixed so that no pair of (nonce, msg) values can be
+        // re-cut into another pair with the same concatenation; the same
+        // discipline `KeyIdentity::derive` and `M'` already use.
+        //
+        // Lengths are u64 big-endian, not usize: usize is 4 bytes on a
+        // 32-bit target and 8 on a 64-bit one, and a nonce seed that
+        // depended on the pointer width of the machine that computed it
+        // would not survive being written down.
         let mut hasher = Sha512::new();
+        hasher.update(NONCE_SEED_DOMAIN);
+        hasher.update((sk.len() as u64).to_be_bytes());
         hasher.update(sk);
+        hasher.update((nonce.len() as u64).to_be_bytes());
         hasher.update(nonce);
+        hasher.update((msg.len() as u64).to_be_bytes());
         hasher.update(msg);
         let mut digest = hasher.finalize();
         let mut seed = [0u8; 32];
@@ -246,5 +264,24 @@ mod tests {
     #[test]
     fn derivation_is_deterministic() {
         assert_eq!(keypair(4), keypair(4));
+    }
+
+    /// `(nonce, msg)` pairs that concatenate to the same bytes must not
+    /// derive the same nonce seed. Without a length prefix
+    /// ("ab", "c") and ("a", "bc") both hash sk || "abc".
+    #[test]
+    fn split_ambiguous_nonce_and_message_produce_different_signatures() {
+        let sk = [7u8; Sr25519::SECRET_KEY_LEN];
+        let mut left = [0u8; Sr25519::SIGNATURE_LEN];
+        let mut right = [0u8; Sr25519::SIGNATURE_LEN];
+
+        Sr25519::sign_deterministic(&sk, b"c", b"ab", H3, &mut left).expect("sign left");
+        Sr25519::sign_deterministic(&sk, b"bc", b"a", H3, &mut right).expect("sign right");
+
+        assert_ne!(
+            left.as_slice(),
+            right.as_slice(),
+            "a re-cut of the same concatenation must not reach the same nonce seed"
+        );
     }
 }

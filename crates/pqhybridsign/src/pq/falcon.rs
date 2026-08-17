@@ -24,6 +24,11 @@ pub struct Falcon512;
 /// unspecified separation layer, mirroring `MlDsa44::EMPTY_CTX`.
 const EMPTY_DOMAIN: DomainContext<'static> = DOMAIN_NONE;
 
+/// Domain separator for the deterministic nonce seed. Distinct from the
+/// sr25519 one so a seed derived for one component can never be mistaken
+/// for the other's.
+const NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/fn-dsa-512/v1\0";
+
 impl PqScheme for Falcon512 {
     const NAME: &'static str = "falcon512";
     const PUBLIC_KEY_LEN: usize = vrfy_key_size(FN_DSA_LOGN_512);
@@ -64,13 +69,20 @@ impl PqScheme for Falcon512 {
         result
     }
 
-    /// `k = H(sk || nonce || msg)`, the same construction `Sr25519` uses:
-    /// the secret key always takes part, so the nonce seed cannot be
-    /// recovered from public data alone.
+    /// `k = H(domain || len(sk) || sk || len(nonce) || nonce || len(msg) || msg)`,
+    /// the same construction `Sr25519` uses: the secret key always takes
+    /// part, so the nonce seed cannot be recovered from public data alone,
+    /// and each variable-length field is length-prefixed so that no pair of
+    /// (nonce, msg) values can be re-cut into another pair with the same
+    /// concatenation.
     fn sign_deterministic(sk: &[u8], msg: &[u8], nonce: &[u8], sig_out: &mut [u8]) -> Result<()> {
         let mut hasher = Sha512::new();
+        hasher.update(NONCE_SEED_DOMAIN);
+        hasher.update((sk.len() as u64).to_be_bytes());
         hasher.update(sk);
+        hasher.update((nonce.len() as u64).to_be_bytes());
         hasher.update(nonce);
+        hasher.update((msg.len() as u64).to_be_bytes());
         hasher.update(msg);
         let mut digest = hasher.finalize();
         let mut seed = [0u8; 32];
@@ -249,5 +261,24 @@ mod tests {
         let mut c = [0u8; Falcon512::SIGNATURE_LEN];
         Falcon512::sign_deterministic(&sk, b"m", b"n2", &mut c).expect("sign");
         assert_ne!(a, c, "a different nonce must change the signature");
+    }
+
+    /// `(nonce, msg)` pairs that concatenate to the same bytes must not
+    /// derive the same nonce seed. Without a length prefix
+    /// ("ab", "c") and ("a", "bc") both hash sk || "abc".
+    #[test]
+    fn split_ambiguous_nonce_and_message_produce_different_signatures() {
+        let (sk, _) = keypair(5);
+        let mut left = [0u8; Falcon512::SIGNATURE_LEN];
+        let mut right = [0u8; Falcon512::SIGNATURE_LEN];
+
+        Falcon512::sign_deterministic(&sk, b"c", b"ab", &mut left).expect("sign left");
+        Falcon512::sign_deterministic(&sk, b"bc", b"a", &mut right).expect("sign right");
+
+        assert_ne!(
+            left.as_slice(),
+            right.as_slice(),
+            "a re-cut of the same concatenation must not reach the same nonce seed"
+        );
     }
 }
