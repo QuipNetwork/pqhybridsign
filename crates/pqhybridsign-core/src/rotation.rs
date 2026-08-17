@@ -419,10 +419,9 @@ pub fn sign_rotation<S: StatefulSuite>(
 /// Returns `None` on any rejection: a bad signature length, a `ctx` over 255
 /// bytes, a `current_commitment` that is not this key's, or a failed gate.
 /// Returns `Some(next)` only when both halves verify, with `next` built
-/// directly from `payload`'s already-checked
-/// fields -- there is no path that returns a partially built
-/// `NextStoredPublicKey`, and no separate "then install" step that a caller
-/// could invoke without having verified anything.
+/// directly from `payload`'s already-checked fields -- there is no path that
+/// returns a partially built `NextStoredPublicKey`, and no separate "then
+/// install" step that a caller could invoke without having verified anything.
 #[cfg(feature = "alloc")]
 pub fn verify_rotation<S: StatefulSuite>(
     current_pk: &stateful_composite::PublicKey<S>,
@@ -438,6 +437,13 @@ where
         return None;
     }
 
+    // `RotationPayload`'s commitment fields are a fixed 32 bytes
+    // (specification section 19.2), so a suite whose stored public key is a
+    // different width cannot appear in a rotation at all. Without this, such
+    // a suite compiles and then refuses every rotation at runtime with a
+    // bare `None`.
+    const { assert!(FIELD_LEN == <S::Pq as PqStatefulScheme>::PUBLIC_KEY_LEN) };
+
     // The commitment is what binds this authorization to one specific
     // current key. Without it the field is decorative: an authorization
     // issued under key A verifies under key B, and within one epoch two
@@ -445,11 +451,16 @@ where
     // presents one first wins.
     //
     // Recomputed from the verify key and compared against the payload's
-    // trusted side. An early return here leaks nothing: the commitment is
-    // public, the caller already holds it, and the length check above
-    // returns early on the same terms. The constant-time discipline that
-    // matters is between the two signature halves below, which stay
-    // unconditional and stay combined with a bitwise `&`.
+    // trusted side. The early return leaks nothing because both operands are
+    // public: the attacker supplies `current_commitment`, and the key's own
+    // commitment is a deterministic function of the public verify key, which
+    // they can recompute offline. The distinction this creates is therefore
+    // one they could already make without asking. What the bitwise `&` below
+    // protects is different and untouched -- which of the two hybrid halves
+    // rejected, an answer that would hand out a per-half forgery oracle. A
+    // rejection here happens before either half runs, so there is no such
+    // answer to leak. Both halves stay unconditional and stay combined
+    // with `&`.
     if <S::Pq as stateful_composite::CommittedVerifyKey>::verify_committed_key(
         &payload.current_commitment,
         current_pk.pq_verify_key(),

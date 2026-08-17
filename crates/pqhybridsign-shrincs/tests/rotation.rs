@@ -4,11 +4,15 @@
 //!
 //! The stateless SHRINCS signature (`PqStatefulScheme::sign_stateless_rotation`)
 //! grinds a target sum and costs seconds to produce. This file signs
-//! exactly once, in `fixture()` below, shared across every `#[test]` here
-//! through a `OnceLock`: every scenario reuses that one signature's
-//! stateless half, and where a scenario needs an ordinary (non-rotation)
-//! classical signature it reuses one cheap *stateful* composite signature
-//! computed in the same fixture (stateful signing does not grind). The
+//! exactly twice, both in `fixture()` below, shared across every `#[test]`
+//! here through a `OnceLock`: every scenario reuses one of those two
+//! signatures' stateless halves, and where a scenario needs an ordinary
+//! (non-rotation) classical signature it reuses one cheap *stateful*
+//! composite signature computed in the same fixture (stateful signing does
+//! not grind). The second rotation signature exists because
+//! `current_commitment` is inside the signed message, so the only way to
+//! test a payload naming the wrong key while both halves stay genuinely
+//! valid is to sign that payload for real -- see `wrong_key_sig`. The
 //! cheap, fake-component equivalent of every case here lives in
 //! `pqhybridsign-core/src/rotation.rs`'s own test module.
 
@@ -32,6 +36,15 @@ const MAX_SIGNATURES: u32 = 1;
 /// bundle, the same window the golden-vector tests read to build a stored
 /// public key. This is the value an owner installed and therefore the value
 /// a rotation authorization against `pk` must name.
+///
+/// Reading the bundle's own carried field is fixture convenience, not a
+/// verification shortcut, and it cannot mask a failure. `bundle::verify_bundle`
+/// recomputes the commitment from `statefulPublicKey`, `pkSeed` and
+/// `hypertreeRoot` and rejects a bundle whose carried field disagrees with
+/// that recomputation, so a wrong value here would make the honest rotation
+/// test fail loudly rather than let a bad one pass. The gate never trusts
+/// this field; only this fixture reads it, standing in for what an owner
+/// installed.
 fn stored_commitment(pk: &PublicKey<H5>) -> [u8; 32] {
     pk.pq_verify_key()[68..100]
         .try_into()
@@ -103,6 +116,13 @@ struct Fixture {
     /// ordinary classical signature, used by the splice test below without
     /// any extra stateless (expensive) SHRINCS signing.
     ordinary_sig: Vec<u8>,
+    /// A payload identical to `payload_a` except that `current_commitment`
+    /// names no key at all, rather than the key that signs it.
+    payload_wrong_key: RotationPayload,
+    /// A genuine rotation signature over `payload_wrong_key`: both halves
+    /// valid, made by the same secret key over exactly those bytes. The
+    /// second (and last) expensive signature in this file.
+    wrong_key_sig: Vec<u8>,
     /// Retained so the attack/tamper cases can build fresh, cheap classical
     /// co-signatures with `rotation::sign_rotation_classical_half`.
     sk: SecretKey<H5>,
@@ -124,6 +144,22 @@ fn fixture() -> &'static Fixture {
         )
         .expect("sign_rotation");
 
+        // The same authorization against a commitment that is not this
+        // key's, signed for real so neither half can be what rejects it.
+        let payload_wrong_key = RotationPayload {
+            current_commitment: [0x11u8; 32],
+            ..payload_a
+        };
+        let mut wrong_key_sig = vec![0u8; rotation::rotation_signature_len::<H5>()];
+        rotation::sign_rotation::<H5>(
+            &sk,
+            &mut MemoryBudget::default(),
+            CTX,
+            &payload_wrong_key,
+            &mut wrong_key_sig,
+        )
+        .expect("sign_rotation");
+
         let mut journal = MemoryJournal::adopted(sk.key_identity());
         let ordinary_sig = H5::sign_stateful(&mut sk, &mut journal, b"ordinary message", CTX)
             .expect("sign_stateful");
@@ -133,6 +169,8 @@ fn fixture() -> &'static Fixture {
             payload_a,
             honest_sig,
             ordinary_sig,
+            payload_wrong_key,
+            wrong_key_sig,
             sk,
         }
     })
@@ -282,6 +320,42 @@ fn install_returns_the_next_stored_key_differing_from_current_in_both_halves() {
     assert_ne!(
         installed.next_commitment, f.payload_a.current_commitment,
         "the commitment half must differ from the current stored key"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 8. A payload naming a different current key is refused, against the real
+//    commitment scheme.
+// ---------------------------------------------------------------------
+
+/// The core-crate twin of this test proves the same property against a fake
+/// component. This one proves it against the real
+/// `ShrincsScheme::verify_committed_key` and `bundle::verify_bundle`, so the
+/// gate is not merely a test double agreeing with itself.
+///
+/// `current_commitment` sits inside `M'_rotation`, so a payload naming a
+/// different key cannot be produced by mutating a signed one -- that would
+/// break both halves and the test would pass without the commitment check
+/// ever running. The fixture therefore signs `payload_wrong_key` for real.
+/// Both halves are valid by construction, over exactly these bytes, under
+/// the same secret key whose honest rotation
+/// `a_valid_rotation_verifies_and_installs_atomically` shows verifying. The
+/// commitment is the only thing that differs, so it is the only thing left
+/// that can reject.
+#[test]
+fn a_payload_naming_a_different_current_key_is_refused() {
+    let f = fixture();
+
+    assert_ne!(
+        f.payload_wrong_key.current_commitment, f.payload_a.current_commitment,
+        "the forged payload must actually name a different key"
+    );
+
+    assert!(
+        rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_wrong_key, &f.wrong_key_sig)
+            .is_none(),
+        "a payload whose current_commitment is not this key's must be refused, \
+         even though both signatures over it are valid"
     );
 }
 
