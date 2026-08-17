@@ -10,14 +10,105 @@
 //! This module holds no I/O. The integrator supplies durability through
 //! [`LeafJournal`], and [`sign_after_commit`] is the one flow that orders the
 //! journal write ahead of signature construction.
+//!
+//! # Durability is not enough on its own
+//!
+//! A journal that durably records leaves still cannot say *whose* leaves they
+//! are. Hand one key to two journals that have each recorded nothing and both
+//! report that leaf `0` is next -- truthfully, for a journal that has never
+//! seen this key, and identically to what one correctly reopened journal
+//! reports for a key that has spent nothing. No comparison of counters can
+//! separate those two situations, so a journal also records a
+//! [`KeyIdentity`]: a public name for the key it belongs to, written once by
+//! [`adopt_key`] and checked on every signature by [`require_bound_key`].
 
 use core::fmt;
 
-/// A durable record of consumed leaves.
+use sha2::{Digest, Sha256};
+
+/// Width of a [`KeyIdentity`] in bytes.
+pub const KEY_IDENTITY_LEN: usize = 32;
+
+/// Domain separator for the key-identity hash. Versioned, because changing
+/// the derivation orphans every journal record already written under the old
+/// one.
+const KEY_IDENTITY_DOMAIN: &[u8] = b"pqhybridsign/leaf-journal/key-identity/v1";
+
+/// A fixed-width, public name for one stateful key.
+///
+/// A [`LeafJournal`] stores this alongside its counter so that the pairing of
+/// a key with a journal is a fact the storage records, rather than something
+/// re-guessed on every restart. Counters alone cannot express it: two
+/// journals that have never seen any key both honestly report leaf `0`, which
+/// is indistinguishable from one journal correctly reopened for a key that
+/// has spent nothing.
+///
+/// # This is public data
+///
+/// It is a hash over the suite label and the post-quantum **verify key** --
+/// material a verifier already holds and a signature already travels with.
+/// No secret key byte reaches the hash, and the value discloses nothing about
+/// one. It may be logged, stored in the clear, and compared with a plain
+/// `==`: there is no secret for a timing difference to leak, which is why
+/// this type uses ordinary [`Eq`] rather than the `subtle::Choice`
+/// comparisons the secret-bearing paths in this crate use.
+///
+/// An identity is not a capability. Holding one lets a caller name a key, not
+/// sign for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyIdentity([u8; KEY_IDENTITY_LEN]);
+
+impl KeyIdentity {
+    /// Derive the identity of the key whose suite label is `suite_label` and
+    /// whose post-quantum verify key is `pq_verify_key`.
+    ///
+    /// Both inputs are public. The label is included so that two suites over
+    /// one component key material cannot collide, and both fields are
+    /// length-prefixed so that no pair of (label, verify key) values can be
+    /// re-cut into another pair with the same concatenation.
+    ///
+    /// Lengths are written as `u64` big-endian: `usize` is 4 bytes on a
+    /// 32-bit target and 8 on a 64-bit one, and an identity that depended on
+    /// the pointer width of the machine that computed it would not survive
+    /// being written down.
+    #[must_use]
+    pub fn derive(suite_label: &[u8], pq_verify_key: &[u8]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(KEY_IDENTITY_DOMAIN);
+        hasher.update((suite_label.len() as u64).to_be_bytes());
+        hasher.update(suite_label);
+        hasher.update((pq_verify_key.len() as u64).to_be_bytes());
+        hasher.update(pq_verify_key);
+        Self(hasher.finalize().into())
+    }
+
+    /// Rebuild an identity from the bytes a journal wrote down.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; KEY_IDENTITY_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The bytes to write down.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; KEY_IDENTITY_LEN] {
+        &self.0
+    }
+}
+
+/// A durable record of consumed leaves, and of the one key those leaves
+/// belong to.
 ///
 /// The crypto crates never do I/O. The integrator implements this over
 /// whatever storage can honour the durability promise below: an fsynced file,
 /// a transactional database row, an HSM counter.
+///
+/// A journal records two facts, and both must be durable: *how far* the key
+/// has spent ([`next_leaf`](Self::next_leaf)) and *which key* it is spending
+/// for ([`bound_key`](Self::bound_key)). The second exists because the first
+/// cannot distinguish a journal correctly reopened for its own key from a
+/// brand-new journal handed the same key by mistake -- both report `0` for a
+/// key that has spent nothing, and signing under the second reissues every
+/// leaf the first already spent.
 pub trait LeafJournal {
     /// Whatever the backing store reports. It is never returned to the
     /// caller of a signing routine, which sees only
@@ -41,6 +132,102 @@ pub trait LeafJournal {
     /// For a fresh key this is `0`. After a successful `commit(n)` it is
     /// `n + 1`, and it must survive a restart.
     fn next_leaf(&self) -> u32;
+
+    /// The key this journal belongs to, or `None` if it has never been bound
+    /// to one.
+    ///
+    /// This must be read from the same durable storage the counter lives in,
+    /// and it must survive a restart. A journal that forgets which key it
+    /// belongs to is a journal that will accept any key, which is the whole
+    /// of the hazard this method exists to close.
+    ///
+    /// `None` means "never bound", not "unknown". An implementation that
+    /// cannot read its storage MUST NOT report `None`: that is the answer
+    /// [`adopt_key`] treats as an invitation to bind, and binding over a
+    /// record that already exists is what forks the leaf budget. Fail the
+    /// read at construction time instead, before a journal value exists.
+    fn bound_key(&self) -> Option<KeyIdentity>;
+
+    /// Durably record that this journal belongs to `key`.
+    ///
+    /// The same durability promise [`commit`](Self::commit) makes: returning
+    /// `Ok` means the binding survives a crash on the next instruction, and
+    /// returning `Err` means nothing was written.
+    ///
+    /// Implementations do not have to check whether a binding already
+    /// exists -- [`adopt_key`] is the only caller in this crate and it checks
+    /// first -- but an implementation that can enforce write-once in its
+    /// storage (a `UNIQUE` column, an `O_EXCL` create) should, because that
+    /// enforcement survives a caller who reaches past this crate.
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error>;
+}
+
+/// Bind `journal` to `key`, unless it already belongs to a different key.
+///
+/// This is the **explicit** act of declaring "this journal is the durable
+/// leaf record for this key". Signing never does it implicitly, and that is
+/// the point: an unbound journal paired with an existing key is the
+/// silent-fork case, and turning it into an error the integrator has to
+/// answer for by writing this call is the whole of the fix.
+///
+/// Three outcomes:
+///
+/// * Never bound: `key` is written durably and this returns `Ok`.
+/// * Already bound to `key`: nothing is written and this returns `Ok`, so
+///   an idempotent provisioning step is safe to re-run.
+/// * Already bound to a different key: nothing is written and this returns
+///   [`StatefulSignError::JournalKeyMismatch`]. A journal belongs to one key
+///   for its whole life; the leaf numbers in it mean nothing under another.
+///
+/// # Call this once, per key, at provisioning time
+///
+/// Calling it on a fresh journal every time a process restarts reinstates the
+/// defect it closes: each restart would mint a new binding and each new
+/// journal would start the budget over. The binding belongs with the durable
+/// store, created when the key is created.
+///
+/// # Errors
+///
+/// [`StatefulSignError::JournalKeyMismatch`] if `journal` already belongs to
+/// another key. [`StatefulSignError::JournalFailed`] if the write did not
+/// become durable; nothing was bound and nothing was spent.
+pub fn adopt_key<J>(journal: &mut J, key: KeyIdentity) -> Result<(), StatefulSignError>
+where
+    J: LeafJournal + ?Sized,
+{
+    match journal.bound_key() {
+        None => journal
+            .bind_key(key)
+            .map_err(|_| StatefulSignError::JournalFailed),
+        Some(bound) if bound == key => Ok(()),
+        Some(_) => Err(StatefulSignError::JournalKeyMismatch),
+    }
+}
+
+/// Refuse `journal` unless it is already durably bound to `key`.
+///
+/// The read-only half of [`adopt_key`], and the check every signing path
+/// runs. It binds nothing: a journal that has never been bound is refused
+/// here exactly as one bound to another key is, because the two are
+/// indistinguishable in the way that matters -- neither is a record of what
+/// this key has spent.
+///
+/// A caller that wants to tell the two apart calls
+/// [`LeafJournal::bound_key`] and looks at the `Option`.
+///
+/// # Errors
+///
+/// [`StatefulSignError::JournalKeyMismatch`] if `journal` is unbound or bound
+/// to a different key.
+pub fn require_bound_key<J>(journal: &J, key: KeyIdentity) -> Result<(), StatefulSignError>
+where
+    J: LeafJournal + ?Sized,
+{
+    match journal.bound_key() {
+        None => Err(StatefulSignError::JournalKeyMismatch),
+        Some(bound) if bound == key => Ok(()),
+        Some(_) => Err(StatefulSignError::JournalKeyMismatch),
+    }
 }
 
 /// Why a stateful signing attempt produced no signature.
@@ -64,6 +251,64 @@ pub enum StatefulSignError {
     /// consumed and no signature was released, so the same leaf is still
     /// available once the storage fault is repaired.
     JournalFailed,
+    /// The key's own leaf counter and the durable journal no longer agree.
+    ///
+    /// The two counters advance together, through
+    /// [`StatefulHybridSignatureScheme::sign_stateful`] alone, so a
+    /// disagreement means one advanced without the other. Two causes reach
+    /// this: a key and a journal restored from different sessions, and a
+    /// component failure raised after the journal already committed the leaf
+    /// (see [`GrindAbort`](Self::GrindAbort), which spends the leaf).
+    ///
+    /// Permanent, and fail-closed: the key signs nothing further, because
+    /// signing past a divergence is what would reissue a spent leaf. Recover
+    /// by rotating to a new key. Do not "repair" the counters by hand --
+    /// whichever counter is behind names a leaf the other may already have
+    /// spent.
+    CountersDiverged,
+    /// The journal is not this key's journal: it has never been bound to any
+    /// key, or it is durably bound to a different one.
+    ///
+    /// Distinct from [`CountersDiverged`](Self::CountersDiverged), which is
+    /// about two counters that were once in step. This one fires even when
+    /// the counters agree perfectly, and agreement is exactly what makes the
+    /// case dangerous: a never-used journal reports leaf `0`, an exported key
+    /// that has spent nothing also reports leaf `0`, and signing on that
+    /// agreement is how one key's leaf budget gets spent twice under two
+    /// different messages.
+    ///
+    /// Permanent for this pairing, and fail-closed. It is **not** a reason to
+    /// rotate the key. The key is intact; what is wrong is which journal it
+    /// was handed. Recover by reopening the durable journal that belongs to
+    /// this key. Only if no such journal exists -- a genuinely new store for
+    /// a key whose spending history is known by other means -- call
+    /// [`adopt_key`], and understand that doing so on a key that has signed
+    /// before, against a journal that does not know it, reissues every leaf.
+    JournalKeyMismatch,
+    /// The few-time stateless budget for this key's stateless material is
+    /// spent (specification section 21).
+    ///
+    /// Distinct from [`LeavesExhausted`](Self::LeavesExhausted), which is
+    /// about the stateful path's one-time leaves. The two budgets are
+    /// separate and are exhausted by separate things: ordinary application
+    /// signing spends leaves and never touches this one, while stateless
+    /// signing, rotation authorization and recovery all draw on this one and
+    /// never touch leaves.
+    ///
+    /// Permanent for this stateless material, and fail-closed. Nothing was
+    /// spent on the refused attempt. The remedy is a rotation that actually
+    /// changes `pkSeed || hypertreeRoot`; a rotation that leaves the
+    /// stateless material as it stands does not refill it, by design.
+    StatelessBudgetExhausted,
+    /// The caller's [`crate::budget::StatelessBudgetStore`] could not
+    /// durably record the spend. No budget was consumed and no signature was
+    /// released, so the same unit is still available once the storage fault
+    /// is repaired.
+    ///
+    /// The stateless counterpart of
+    /// [`JournalFailed`](Self::JournalFailed), and transient on the same
+    /// terms.
+    BudgetStoreFailed,
     /// A genuinely internal or transient failure inside the signing
     /// primitive, including rejected inputs.
     SigningFailed,
@@ -82,6 +327,22 @@ impl fmt::Display for StatefulSignError {
             Self::JournalFailed => write!(
                 f,
                 "leaf journal could not durably commit; no leaf consumed, no signature released"
+            ),
+            Self::CountersDiverged => write!(
+                f,
+                "key counter and leaf journal diverged; this key can sign no more, rotate it"
+            ),
+            Self::JournalKeyMismatch => write!(
+                f,
+                "this leaf journal does not belong to this key; reopen the key's own journal"
+            ),
+            Self::StatelessBudgetExhausted => write!(
+                f,
+                "few-time stateless budget exhausted for this key's stateless material"
+            ),
+            Self::BudgetStoreFailed => write!(
+                f,
+                "stateless budget store could not durably record; nothing consumed"
             ),
             Self::SigningFailed => write!(f, "signing failed"),
         }
@@ -113,7 +374,9 @@ pub trait StatefulHybridSignatureScheme {
     /// An implementation MUST follow this order, and [`sign_after_commit`]
     /// exists so that it does not have to be re-derived:
     ///
-    /// 1. Validate the inputs and the remaining leaf budget.
+    /// 1. Check that `journal` is durably bound to this key
+    ///    ([`require_bound_key`]), then validate the inputs and the remaining
+    ///    leaf budget.
     /// 2. Call [`LeafJournal::commit`] for the leaf about to be spent, and
     ///    observe that it returned `Ok`.
     /// 3. Only then construct the signature.
@@ -131,6 +394,11 @@ pub trait StatefulHybridSignatureScheme {
     /// detected before any commit, so it consumes nothing either.
     /// [`StatefulSignError::GrindAbort`] is raised after the commit, so it
     /// wastes the leaf, and it MUST NOT be retried with the same message.
+    /// [`StatefulSignError::CountersDiverged`] means the key and the journal
+    /// no longer agree on the next leaf; the key is finished and must be
+    /// rotated. [`StatefulSignError::JournalKeyMismatch`] means the journal
+    /// is not this key's journal at all; the key is fine and the pairing is
+    /// not, so nothing is consumed.
     fn sign_stateful(
         sk: &mut Self::SecretKey,
         journal: &mut impl LeafJournal,
@@ -138,18 +406,51 @@ pub trait StatefulHybridSignatureScheme {
         ctx: &[u8],
     ) -> Result<Self::Signature, StatefulSignError>;
 
-    /// Sign `msg` under `ctx` without consuming leaf state.
+    /// Sign `msg` under `ctx` without consuming leaf state, spending one
+    /// unit of the few-time stateless budget instead.
     ///
     /// Available only for schemes whose signature does not spend a one-time
     /// key. A stateful-only scheme returns
     /// [`StatefulSignError::SigningFailed`].
     ///
+    /// # `budget` is required, and that is the point
+    ///
+    /// The stateless path has a hard security bound of its own
+    /// ([`crate::PqStatefulScheme::STATELESS_BUDGET`], specification section
+    /// 21), shared with rotation and recovery, and exceeding it degrades the
+    /// underlying few-time scheme's security assumption. It is therefore not
+    /// a bound a caller may opt into: this method cannot be called without a
+    /// durable store to charge, exactly as
+    /// [`sign_stateful`](Self::sign_stateful) cannot be called without a
+    /// [`LeafJournal`]. See [`crate::budget`] for the store contract.
+    ///
+    /// # Ordering contract
+    ///
+    /// The same shape [`sign_stateful`](Self::sign_stateful) follows, with
+    /// the budget standing in for the journal:
+    ///
+    /// 1. Validate the inputs.
+    /// 2. Call [`crate::budget::spend_stateless_budget`] against the key's
+    ///    stateless material, and observe that it returned `Ok`.
+    /// 3. Only then construct the signature.
+    ///
+    /// A crash between steps 2 and 3 wastes one unit of budget. That is
+    /// acceptable. Releasing a stateless signature whose spend is not yet
+    /// durable is not: a restart would hand the same unit out again, and the
+    /// bound would be exceeded by however many signatures the lost writes
+    /// covered.
+    ///
     /// # Errors
     ///
-    /// Returns a [`StatefulSignError`] if the primitive rejects the inputs or
-    /// fails internally.
+    /// [`StatefulSignError::StatelessBudgetExhausted`] if the budget for
+    /// this key's stateless material is spent; nothing is recorded and no
+    /// signature is built. [`StatefulSignError::BudgetStoreFailed`] if the
+    /// store could not durably record the spend; nothing is recorded either.
+    /// Otherwise a [`StatefulSignError`] if the primitive rejects the inputs
+    /// or fails internally.
     fn sign_stateless(
         sk: &Self::SecretKey,
+        budget: &mut impl crate::budget::StatelessBudgetStore,
         msg: &[u8],
         ctx: &[u8],
     ) -> Result<Self::Signature, StatefulSignError>;
@@ -164,6 +465,12 @@ pub trait StatefulHybridSignatureScheme {
 /// Spend the next leaf, then build the signature: the reference flow for
 /// [`StatefulHybridSignatureScheme::sign_stateful`].
 ///
+/// `key` names the key whose leaf is about to be spent. `journal` must
+/// already be durably bound to it ([`adopt_key`]); this is checked first, ahead
+/// of the budget and ahead of any commit, because a journal that does not
+/// belong to this key holds counters that mean nothing for it and must not be
+/// read as a budget.
+///
 /// `leaf_capacity` is the total number of leaves the key holds, so valid
 /// leaves are `0 .. leaf_capacity`. It is a `u64` because a full `u32` leaf
 /// space has a capacity one past `u32::MAX`.
@@ -176,6 +483,9 @@ pub trait StatefulHybridSignatureScheme {
 ///
 /// # Errors
 ///
+/// - [`StatefulSignError::JournalKeyMismatch`] if `journal` is not bound to
+///   `key`. Nothing is read as a budget, nothing is committed, and `build`
+///   does not run.
 /// - [`StatefulSignError::LeavesExhausted`] if the journal is at or past
 ///   `leaf_capacity`. Nothing is committed and `build` does not run.
 /// - [`StatefulSignError::JournalFailed`] if the commit fails. Nothing is
@@ -183,6 +493,7 @@ pub trait StatefulHybridSignatureScheme {
 /// - Whatever `build` returns, if it fails. The leaf is spent regardless.
 pub fn sign_after_commit<J, S, F>(
     journal: &mut J,
+    key: KeyIdentity,
     leaf_capacity: u64,
     build: F,
 ) -> Result<S, StatefulSignError>
@@ -190,6 +501,8 @@ where
     J: LeafJournal + ?Sized,
     F: FnOnce(u32) -> Result<S, StatefulSignError>,
 {
+    // Step 0: this journal is this key's journal, or there is no step 1.
+    require_bound_key(journal, key)?;
     let leaf = journal.next_leaf();
     if u64::from(leaf) >= leaf_capacity {
         return Err(StatefulSignError::LeavesExhausted);
@@ -298,12 +611,23 @@ mod tests {
     use std::rc::Rc;
     use std::vec::Vec;
 
+    /// Two distinct stand-in identities, so a test can pair a journal with
+    /// the wrong key.
+    fn key_a() -> KeyIdentity {
+        KeyIdentity::derive(b"suite-a\0", &[0xAA; 4])
+    }
+    fn key_b() -> KeyIdentity {
+        KeyIdentity::derive(b"suite-b\0", &[0xBB; 4])
+    }
+
     /// Everything the mock journal and the signing closure share.
     #[derive(Default)]
     struct JournalState {
         committed: Vec<u32>,
         log: Vec<Event>,
         fail_commit: bool,
+        bound: Option<KeyIdentity>,
+        fail_bind: bool,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,6 +663,28 @@ mod tests {
             let state = self.state.borrow();
             state.committed.iter().copied().max().map_or(0, |m| m + 1)
         }
+
+        fn bound_key(&self) -> Option<KeyIdentity> {
+            self.state.borrow().bound
+        }
+
+        fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+            let mut state = self.state.borrow_mut();
+            if state.fail_bind {
+                return Err(MockJournalError);
+            }
+            state.bound = Some(key);
+            Ok(())
+        }
+    }
+
+    /// A journal already bound to [`key_a`], the ordinary starting point for
+    /// the tests below.
+    fn bound_journal(state: &Rc<RefCell<JournalState>>) -> MockJournal {
+        state.borrow_mut().bound = Some(key_a());
+        MockJournal {
+            state: Rc::clone(state),
+        }
     }
 
     /// Records the produce event, then returns a signature naming its leaf.
@@ -357,11 +703,9 @@ mod tests {
             fail_commit: true,
             ..JournalState::default()
         }));
-        let mut journal = MockJournal {
-            state: Rc::clone(&state),
-        };
+        let mut journal = bound_journal(&state);
 
-        let outcome = sign_after_commit(&mut journal, 8, |leaf| Ok(produce(&state, leaf)));
+        let outcome = sign_after_commit(&mut journal, key_a(), 8, |leaf| Ok(produce(&state, leaf)));
 
         assert_eq!(outcome, Err(StatefulSignError::JournalFailed));
         assert!(state.borrow().committed.is_empty());
@@ -371,12 +715,10 @@ mod tests {
     #[test]
     fn no_signature_is_released_for_an_uncommitted_leaf() {
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MockJournal {
-            state: Rc::clone(&state),
-        };
+        let mut journal = bound_journal(&state);
 
         for _ in 0..4 {
-            let sig = sign_after_commit(&mut journal, 8, |leaf| Ok(produce(&state, leaf)))
+            let sig = sign_after_commit(&mut journal, key_a(), 8, |leaf| Ok(produce(&state, leaf)))
                 .expect("signing succeeds below the leaf ceiling");
             let leaf = u32::from_be_bytes(sig);
             // The leaf the caller now holds is already durable.
@@ -403,13 +745,11 @@ mod tests {
     #[test]
     fn successive_signatures_advance_the_leaf() {
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MockJournal {
-            state: Rc::clone(&state),
-        };
+        let mut journal = bound_journal(&state);
 
-        let first = sign_after_commit(&mut journal, 8, |leaf| Ok(produce(&state, leaf)))
+        let first = sign_after_commit(&mut journal, key_a(), 8, |leaf| Ok(produce(&state, leaf)))
             .expect("first signature");
-        let second = sign_after_commit(&mut journal, 8, |leaf| Ok(produce(&state, leaf)))
+        let second = sign_after_commit(&mut journal, key_a(), 8, |leaf| Ok(produce(&state, leaf)))
             .expect("second signature");
 
         assert_eq!(u32::from_be_bytes(first), 0);
@@ -420,17 +760,15 @@ mod tests {
     #[test]
     fn exhaustion_commits_nothing() {
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MockJournal {
-            state: Rc::clone(&state),
-        };
+        let mut journal = bound_journal(&state);
 
         for _ in 0..2 {
-            sign_after_commit(&mut journal, 2, |leaf| Ok(produce(&state, leaf)))
+            sign_after_commit(&mut journal, key_a(), 2, |leaf| Ok(produce(&state, leaf)))
                 .expect("the first two leaves are available");
         }
         let committed_before = state.borrow().committed.clone();
 
-        let outcome = sign_after_commit(&mut journal, 2, |leaf| Ok(produce(&state, leaf)));
+        let outcome = sign_after_commit(&mut journal, key_a(), 2, |leaf| Ok(produce(&state, leaf)));
 
         assert_eq!(outcome, Err(StatefulSignError::LeavesExhausted));
         assert_eq!(state.borrow().committed, committed_before);
@@ -443,6 +781,132 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn an_identity_names_exactly_one_suite_and_verify_key() {
+        let base = KeyIdentity::derive(b"suite\0", &[1, 2, 3, 4]);
+        assert_eq!(base, KeyIdentity::derive(b"suite\0", &[1, 2, 3, 4]));
+        assert_ne!(base, KeyIdentity::derive(b"other\0", &[1, 2, 3, 4]));
+        assert_ne!(base, KeyIdentity::derive(b"suite\0", &[1, 2, 3, 5]));
+
+        // Length-prefixed, not concatenated: moving the boundary between the
+        // two fields must not produce the same identity. Without the
+        // prefixes, `("ab", "cd")` and `("a", "bcd")` would hash the same
+        // bytes, so a suite label chosen for one key could name another.
+        assert_ne!(
+            KeyIdentity::derive(b"ab", b"cd"),
+            KeyIdentity::derive(b"a", b"bcd")
+        );
+    }
+
+    #[test]
+    fn an_identity_survives_being_written_down() {
+        let identity = key_a();
+        assert_eq!(KeyIdentity::from_bytes(*identity.as_bytes()), identity);
+        assert_eq!(identity.as_bytes().len(), KEY_IDENTITY_LEN);
+    }
+
+    #[test]
+    fn adopting_binds_once_and_refuses_a_second_key() {
+        let state = Rc::new(RefCell::new(JournalState::default()));
+        let mut journal = MockJournal {
+            state: Rc::clone(&state),
+        };
+        assert_eq!(journal.bound_key(), None, "a fresh journal owns no key");
+
+        assert_eq!(adopt_key(&mut journal, key_a()), Ok(()));
+        assert_eq!(journal.bound_key(), Some(key_a()));
+
+        // Idempotent for the same key, so re-running a provisioning step is
+        // safe.
+        assert_eq!(adopt_key(&mut journal, key_a()), Ok(()));
+
+        // And closed against a second key: the leaf numbers already in this
+        // journal describe key A's budget and mean nothing under key B.
+        assert_eq!(
+            adopt_key(&mut journal, key_b()),
+            Err(StatefulSignError::JournalKeyMismatch)
+        );
+        assert_eq!(
+            journal.bound_key(),
+            Some(key_a()),
+            "a refused adoption must not overwrite the binding"
+        );
+    }
+
+    #[test]
+    fn a_binding_that_did_not_become_durable_binds_nothing() {
+        let state = Rc::new(RefCell::new(JournalState {
+            fail_bind: true,
+            ..JournalState::default()
+        }));
+        let mut journal = MockJournal {
+            state: Rc::clone(&state),
+        };
+
+        assert_eq!(
+            adopt_key(&mut journal, key_a()),
+            Err(StatefulSignError::JournalFailed)
+        );
+        assert_eq!(journal.bound_key(), None);
+
+        // Once the store recovers, the same adoption succeeds.
+        state.borrow_mut().fail_bind = false;
+        assert_eq!(adopt_key(&mut journal, key_a()), Ok(()));
+    }
+
+    #[test]
+    fn requiring_a_binding_never_creates_one() {
+        let state = Rc::new(RefCell::new(JournalState::default()));
+        let journal = MockJournal {
+            state: Rc::clone(&state),
+        };
+
+        assert_eq!(
+            require_bound_key(&journal, key_a()),
+            Err(StatefulSignError::JournalKeyMismatch),
+            "an unbound journal is not this key's journal"
+        );
+        assert_eq!(
+            journal.bound_key(),
+            None,
+            "checking must not adopt: adoption is the caller's explicit act"
+        );
+
+        state.borrow_mut().bound = Some(key_a());
+        assert_eq!(require_bound_key(&journal, key_a()), Ok(()));
+        assert_eq!(
+            require_bound_key(&journal, key_b()),
+            Err(StatefulSignError::JournalKeyMismatch)
+        );
+    }
+
+    /// The reference flow must refuse a journal that is not the key's before
+    /// it reads the counter, because a counter from another key's journal is
+    /// not a budget for this one -- and a fresh journal's `0` agrees with an
+    /// unspent key's `0` by coincidence, not by fact.
+    #[test]
+    fn the_reference_flow_refuses_an_unbound_journal_before_the_counter() {
+        let state = Rc::new(RefCell::new(JournalState::default()));
+        let mut journal = MockJournal {
+            state: Rc::clone(&state),
+        };
+
+        let outcome = sign_after_commit(&mut journal, key_a(), 8, |leaf| Ok(produce(&state, leaf)));
+
+        assert_eq!(outcome, Err(StatefulSignError::JournalKeyMismatch));
+        assert!(state.borrow().committed.is_empty());
+        assert!(state.borrow().log.is_empty(), "build must not have run");
+
+        // A journal bound to another key is refused on the same terms, even
+        // though its counter would have passed the budget check.
+        state.borrow_mut().bound = Some(key_b());
+        assert_eq!(
+            sign_after_commit(&mut journal, key_a(), 8, |leaf| Ok(produce(&state, leaf))),
+            Err(StatefulSignError::JournalKeyMismatch)
+        );
+        assert!(state.borrow().committed.is_empty());
     }
 
     #[test]
@@ -462,6 +926,31 @@ mod tests {
         assert_ne!(
             StatefulSignError::JournalFailed,
             StatefulSignError::SigningFailed
+        );
+        // A divergence is the one failure an operator must act on by
+        // rotating the key, so it must not collapse into the catch-all.
+        assert_ne!(
+            StatefulSignError::CountersDiverged,
+            StatefulSignError::SigningFailed
+        );
+        assert_ne!(
+            StatefulSignError::CountersDiverged,
+            StatefulSignError::LeavesExhausted
+        );
+        // A wrong journal and a diverged counter demand opposite responses --
+        // rotate the key, or reopen the right journal and leave the key
+        // alone -- so they must never share a variant.
+        assert_ne!(
+            StatefulSignError::JournalKeyMismatch,
+            StatefulSignError::CountersDiverged
+        );
+        assert_ne!(
+            StatefulSignError::JournalKeyMismatch,
+            StatefulSignError::SigningFailed
+        );
+        assert_ne!(
+            StatefulSignError::JournalKeyMismatch,
+            StatefulSignError::JournalFailed
         );
     }
 
@@ -489,7 +978,7 @@ mod tests {
                 return Err(StatefulSignError::SigningFailed);
             }
             let seed = sk.seed;
-            sign_after_commit(journal, 4, |leaf| {
+            sign_after_commit(journal, key_a(), 4, |leaf| {
                 let mut sig = [0u8; 8];
                 sig[..4].copy_from_slice(&seed);
                 sig[4..].copy_from_slice(&leaf.to_be_bytes());
@@ -499,6 +988,7 @@ mod tests {
 
         fn sign_stateless(
             _sk: &Self::SecretKey,
+            _budget: &mut impl crate::budget::StatelessBudgetStore,
             _msg: &[u8],
             _ctx: &[u8],
         ) -> Result<Self::Signature, StatefulSignError> {
@@ -513,9 +1003,7 @@ mod tests {
     #[test]
     fn scheme_sign_stateful_commits_before_it_returns() {
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MockJournal {
-            state: Rc::clone(&state),
-        };
+        let mut journal = bound_journal(&state);
         let mut sk = TestSecretKey { seed: [7, 7, 7, 7] };
 
         let sig =
@@ -529,9 +1017,7 @@ mod tests {
     #[test]
     fn input_validation_precedes_any_commit() {
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MockJournal {
-            state: Rc::clone(&state),
-        };
+        let mut journal = bound_journal(&state);
         let mut sk = TestSecretKey { seed: [7, 7, 7, 7] };
 
         let outcome = TestScheme::sign_stateful(&mut sk, &mut journal, b"", b"");

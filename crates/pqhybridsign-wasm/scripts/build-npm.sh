@@ -12,6 +12,17 @@ set -euo pipefail
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$crate_dir"
 
+workspace_root="$(cd "$crate_dir/../.." && pwd)"
+workspace_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$workspace_root/Cargo.toml" | head -n 1)
+if [ -z "$workspace_version" ]; then
+  echo "could not read workspace version from $workspace_root/Cargo.toml" >&2
+  exit 1
+fi
+# The published npm version must name the workspace crate revision.
+pkg_tmp="$(mktemp)"
+sed "s/\"version\": \"[^\"]*\"/\"version\": \"$workspace_version\"/" npm/package.json > "$pkg_tmp"
+mv -f "$pkg_tmp" npm/package.json
+
 wasm-pack build --release --target web --out-dir npm/web --out-name pqhybridsign_wasm --no-pack
 wasm-pack build --release --target nodejs --out-dir npm/node --out-name pqhybridsign_wasm --no-pack
 

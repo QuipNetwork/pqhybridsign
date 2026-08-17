@@ -11,10 +11,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-pqhybridsign = { path = "../pqhybridsign" }
-pqhybridsign-core = { path = "../pqhybridsign-core" }
-pqhybridsign-shrincs = { path = "../pqhybridsign-shrincs" }
+pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc1" }
+pqhybridsign-core = { path = "../pqhybridsign-core", version = "0.0.0-rc1" }
+pqhybridsign-shrincs = { path = "../pqhybridsign-shrincs", version = "0.0.0-rc1" }
 rand_core.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-rand_core = { version = "0.6.4", features = ["getrandom"] }
+rand_core = { workspace = true, features = ["getrandom"] }

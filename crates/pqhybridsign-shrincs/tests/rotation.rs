@@ -16,9 +16,12 @@
 // do not depend on the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
+use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign_core::encoding_path;
 use pqhybridsign_core::rotation::{self, NextStoredPublicKey, RotationKind, RotationPayload};
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_shrincs::{keygen, PublicKey, SecretKey, H5};
 use std::sync::OnceLock;
 
@@ -40,6 +43,19 @@ fn base_payload() -> RotationPayload {
 #[derive(Default)]
 struct MemoryJournal {
     committed: Vec<u32>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter.
+    bound: Option<KeyIdentity>,
+}
+
+impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
 }
 
 impl LeafJournal for MemoryJournal {
@@ -51,6 +67,14 @@ impl LeafJournal for MemoryJournal {
     }
     fn next_leaf(&self) -> u32 {
         self.committed.iter().copied().max().map_or(0, |m| m + 1)
+    }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        self.bound
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        self.bound = Some(key);
+        Ok(())
     }
 }
 
@@ -77,10 +101,16 @@ fn fixture() -> &'static Fixture {
         let payload_a = base_payload();
 
         let mut honest_sig = vec![0u8; rotation::rotation_signature_len::<H5>()];
-        rotation::sign_rotation::<H5>(&sk, CTX, &payload_a, &mut honest_sig)
-            .expect("sign_rotation");
+        rotation::sign_rotation::<H5>(
+            &sk,
+            &mut MemoryBudget::default(),
+            CTX,
+            &payload_a,
+            &mut honest_sig,
+        )
+        .expect("sign_rotation");
 
-        let mut journal = MemoryJournal::default();
+        let mut journal = MemoryJournal::adopted(sk.key_identity());
         let ordinary_sig = H5::sign_stateful(&mut sk, &mut journal, b"ordinary message", CTX)
             .expect("sign_stateful");
 
@@ -239,4 +269,25 @@ fn install_returns_the_next_stored_key_differing_from_current_in_both_halves() {
         installed.next_commitment, f.payload_a.current_commitment,
         "the commitment half must differ from the current stored key"
     );
+}
+
+/// An in-memory `StatelessBudgetStore`. Not durable across a process
+/// restart, which is fine for a test: the property under test is that the
+/// count is consulted and advanced at all, not real persistence. A
+/// deployment must persist this, or the few-time bound of specification
+/// section 21 can be exceeded silently after any restart.
+#[derive(Default)]
+struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+
+impl StatelessBudgetStore for MemoryBudget {
+    type Error = core::convert::Infallible;
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        self.0.get(key.as_bytes()).copied()
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        self.0.insert(*key.as_bytes(), count);
+        Ok(())
+    }
 }

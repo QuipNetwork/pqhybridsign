@@ -25,6 +25,25 @@ pub fn public_key_len(suite: Suite) -> usize {
     }
 }
 
+/// Stored public key length for `suite`, in bytes: the form a verifier
+/// keeps, which is what [`crate::verify_with_stored_public_key`] takes as
+/// `stored_public_key`.
+///
+/// For H5 and H6 this is [`StatefulSuite::STORED_PUBLIC_KEY_LEN`]: the
+/// classical public key and a 32-byte commitment to the post-quantum verify
+/// key, smaller than [`public_key_len`] reports for the same suite because
+/// the verify key itself is supplied per signature rather than stored. For
+/// H1-H4 the stored and verify forms are the same bytes, so this equals
+/// [`public_key_len`].
+#[must_use]
+pub fn stored_public_key_len(suite: Suite) -> usize {
+    match suite {
+        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => public_key_len(suite),
+        Suite::H5 => <H5 as StatefulSuite>::STORED_PUBLIC_KEY_LEN,
+        Suite::H6 => <H6 as StatefulSuite>::STORED_PUBLIC_KEY_LEN,
+    }
+}
+
 /// Secret key length for `suite`, in bytes.
 ///
 /// For H1-H4 this is the raw composite secret key
@@ -107,6 +126,10 @@ mod tests {
             Suite::H6,
         ] {
             assert!(public_key_len(suite) > 0, "{suite}");
+            assert!(
+                stored_public_key_len(suite) <= public_key_len(suite),
+                "{suite}"
+            );
             assert!(secret_key_len(suite) > 0, "{suite}");
             assert!(signature_len(suite) > 0, "{suite}");
         }
@@ -138,5 +161,10 @@ mod tests {
             assert_eq!(secret_key_len(suite), sk, "secret key length for {suite:?}");
             assert_eq!(public_key_len(suite), pk, "public key length for {suite:?}");
         }
+
+        // The stored form for H5 and H6: a 32-byte classical public key and
+        // a 32-byte commitment, against the 196-byte verify form above.
+        assert_eq!(stored_public_key_len(Suite::H5), 64);
+        assert_eq!(stored_public_key_len(Suite::H6), 64);
     }
 }

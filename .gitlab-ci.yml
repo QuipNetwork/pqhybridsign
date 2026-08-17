@@ -25,6 +25,7 @@ deps:
     # whitespace) and match "rand_core v" gives the count of distinct
     # versions resolved in the graph, not the count of edges to it.
     - |
+      set -euo pipefail
       count=$(cargo tree -i rand_core --workspace | grep -c '^rand_core v')
       if [ "$count" -ne 1 ]; then
         echo "Expected exactly one rand_core major version in the graph, found $count:"
@@ -52,7 +53,7 @@ cross-profile:
     # A change that stopped binding the profile into the commitment would
     # collide two of them here.
     - |
-      set -eu
+      set -euo pipefail
       out=$(mktemp)
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
         cargo test -p pqhybridsign-shrincs --release --no-default-features \
@@ -73,12 +74,16 @@ cross-profile:
 wasm-npm:
   stage: test
   script:
-    - apt-get update && apt-get install -y --no-install-recommends nodejs
-    - curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-    - cd crates/pqhybridsign-wasm
-    - ./scripts/check-types.sh
-    - ./scripts/build-npm.sh
-    - node tests/node/sign_and_verify.mjs
+    # `curl | sh` must fail if curl fails. Without pipefail the installer
+    # can run on a truncated script and exit 0.
+    - |
+      set -euo pipefail
+      apt-get update && apt-get install -y --no-install-recommends nodejs
+      curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      cd crates/pqhybridsign-wasm
+      ./scripts/check-types.sh
+      ./scripts/build-npm.sh
+      node tests/node/sign_and_verify.mjs
 
 deny:
   stage: check
@@ -99,7 +104,7 @@ msrv:
     # running on stable and passing whatever the declared floor is, which is a
     # gate that cannot fail. Only the `+toolchain` argument outranks the file.
     - |
-      set -eu
+      set -euo pipefail
       msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
       test -n "$msrv"
       rustup toolchain install "$msrv" --profile minimal
@@ -131,7 +136,7 @@ profile-matrix:
   stage: test
   script:
     - |
-      set -eu
+      set -euo pipefail
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
         cargo clippy -p pqhybridsign-shrincs --all-targets --no-default-features \
           --features "$p" -- -D warnings
@@ -160,7 +165,7 @@ regenerate-fixtures:
     - if: $CI_PIPELINE_SOURCE == "schedule"
   script:
     - |
-      set -eu
+      set -euo pipefail
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
         cargo test -p pqhybridsign-shrincs --release --no-default-features \
           --features "$p" --test generate_fixtures -- --ignored --nocapture
@@ -183,3 +188,20 @@ c-abi:
     # against the checked-in header and runs it: proof the header and the
     # library it describes agree, not just that the Rust side compiles.
     - crates/pqhybridsign-cffi/tests/c/run.sh
+
+python:
+  stage: test
+  script:
+    # Builds the pyo3 extension and runs the pytest suite, including the
+    # copy, deepcopy and pickle guards on StatefulSecretKey. The C ABI has
+    # c-abi and wasm has wasm-npm. This is the matching Python gate.
+    - |
+      set -euo pipefail
+      apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip python3-venv python3-dev
+      python3 -m venv /tmp/pqhs-py
+      . /tmp/pqhs-py/bin/activate
+      pip install 'maturin>=1.7,<2.0' pytest
+      cd crates/pqhybridsign-py
+      maturin develop
+      pytest

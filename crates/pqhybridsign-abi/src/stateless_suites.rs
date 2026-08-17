@@ -168,14 +168,19 @@ mod tests {
         let mut pk = vec![0u8; crate::public_key_len(Suite::H1)];
         keygen_from_seed(Suite::H1, &[7u8; 32], &mut sk, &mut pk).expect("keygen");
 
+        // `OutputBufferTooSmall`, not `BadLength`: `sig_out` is a caller
+        // buffer the suite writes into, so a short one is a capacity fault
+        // and names the right argument. All six suites report it the same
+        // way, and an oversized `sig_out` is accepted with the true length
+        // reported through the bytes-written out-parameter.
         let mut short_sig = [0u8; 1];
         assert_eq!(
             sign(Suite::H1, &sk, b"msg", b"", &mut OsRng, &mut short_sig),
-            Err(AbiError::BadLength)
+            Err(AbiError::OutputBufferTooSmall)
         );
         assert_eq!(
             sign_deterministic(Suite::H1, &sk, b"msg", b"", b"n", &mut short_sig),
-            Err(AbiError::BadLength)
+            Err(AbiError::OutputBufferTooSmall)
         );
     }
 }

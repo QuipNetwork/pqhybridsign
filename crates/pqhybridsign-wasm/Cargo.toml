@@ -14,7 +14,7 @@ categories.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pqhybridsign-abi = { path = "../pqhybridsign-abi" }
+pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc1" }
 rand_core = { workspace = true, features = ["getrandom"] }
 zeroize.workspace = true
 wasm-bindgen = "0.2.127"

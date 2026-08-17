@@ -34,7 +34,24 @@ pub fn derive_component_seeds(
     classical_out: &mut [u8; 32],
     pq_out: &mut [u8],
 ) -> Result<()> {
-    let hk = Hkdf::<Sha256>::new(Some(SALT), master);
+    // `Hkdf::new` is `extract(..).1`: it materializes the pseudorandom key
+    // and drops the copy without wiping it. Extracting explicitly puts that
+    // copy in a local this function can wipe. The PRK is worth more than
+    // either component seed, because it is not label-bound -- whoever holds
+    // it can re-expand `classical/<label>` and `pq/<label>` for every suite,
+    // not just this one.
+    //
+    // Residual, recorded rather than glossed over: the `Hkdf` value below
+    // holds the same key as an `hmac` 0.12 `HmacCore`, whose primed ipad and
+    // opad states expand exactly what the PRK expands. `hmac` implements
+    // neither `Drop` nor `Zeroize` on that type and exposes no field to
+    // reach, so this function cannot wipe it, and neither can any caller.
+    // Wiping the PRK removes one of the two copies, not both.
+    let (mut prk, hk) = Hkdf::<Sha256>::extract(Some(SALT), master);
+    // `as_mut_slice` rather than `prk.zeroize()`: the PRK is a
+    // `GenericArray`, and `zeroize` implements the trait for byte slices
+    // without needing its optional `generic-array` integration.
+    prk.as_mut_slice().zeroize();
 
     let mut info = [0u8; MAX_INFO];
     let write_info = |info: &mut [u8; MAX_INFO], prefix: &[u8]| -> Result<usize> {

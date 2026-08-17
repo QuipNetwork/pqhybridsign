@@ -15,7 +15,9 @@
 // the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_core::stateful_composite::SecretKey;
 use pqhybridsign_core::{Error, PqStatefulScheme};
 use pqhybridsign_shrincs::{keygen, PublicKey, ShrincsScheme, H5};
@@ -32,6 +34,20 @@ const SEED: [u8; 32] = [0x5e; 32];
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter. A journal that has never been bound owns no key.
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
+}
+
+impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    /// Signing refuses a journal that is not the key's.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
 }
 
 impl LeafJournal for MemoryJournal {
@@ -50,6 +66,14 @@ impl LeafJournal for MemoryJournal {
             .max()
             .map_or(0, |m| m + 1)
     }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
+    }
 }
 
 /// One key, exported after two of its four leaves have been spent. Shared
@@ -64,7 +88,7 @@ fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let (mut sk, public_key) = keygen::<H5>(&SEED, MAX).expect("keygen");
-        let mut journal = MemoryJournal::default();
+        let mut journal = MemoryJournal::adopted(sk.key_identity());
         H5::sign_stateful(&mut sk, &mut journal, b"first", b"").expect("sign");
         H5::sign_stateful(&mut sk, &mut journal, b"second", b"").expect("sign");
         let blob = sk.export().expect("export");
@@ -96,9 +120,11 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
     let mut restored = SecretKey::<H5>::import(&fixture.blob).expect("import");
 
     // The restored counter is observable through the driver's lockstep check:
-    // a fresh journal disagrees with a key that has already spent two leaves,
-    // so signing is refused rather than reissuing leaf 0.
-    let mut fresh = MemoryJournal::default();
+    // a journal rewound to the start disagrees with a key that has already
+    // spent two leaves, so signing is refused rather than reissuing leaf 0.
+    // The journal is adopted first, so what refuses here is the counter
+    // check and not the identity check that runs ahead of it.
+    let mut fresh = MemoryJournal::adopted(restored.key_identity());
     assert!(
         H5::sign_stateful(&mut restored, &mut fresh, b"rewound", b"").is_err(),
         "a restored key must not accept a journal that was rewound to the start"
@@ -106,7 +132,7 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
 
     // The journal is the integrator's durable record; a correct restore pairs
     // the imported key with the journal it was exported alongside.
-    let journal = MemoryJournal::default();
+    let journal = MemoryJournal::adopted(restored.key_identity());
     journal.committed.borrow_mut().extend([0, 1]);
     let mut journal = journal;
 
@@ -129,7 +155,7 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
 #[test]
 fn export_import_preserves_the_exhausted_counter() {
     let mut restored = SecretKey::<H5>::import(&fixture().blob).expect("import");
-    let journal = MemoryJournal::default();
+    let journal = MemoryJournal::adopted(restored.key_identity());
     journal.committed.borrow_mut().extend([0, 1]);
     let mut journal = journal;
 
@@ -152,6 +178,62 @@ fn export_import_preserves_the_exhausted_counter() {
         H5::sign_stateful(&mut again, &mut journal, b"fifth", b"").is_err(),
         "the restored key is still exhausted"
     );
+}
+
+/// The invariant every integrator depends on: the identity a journal is
+/// adopted with, taken from the key at any point in its life, is the same
+/// value.
+///
+/// An integrator adopts a journal right after `keygen`, using the secret key
+/// in hand. Every later restart adopts nothing and instead checks the stored
+/// identity against a key rebuilt by `import`. If those two differed, a key
+/// would be refused by its own journal on the first restart, and the
+/// documented claim that the public and secret sides name the same key would
+/// be false.
+///
+/// Pinned against the real SHRINCS component, not a fake: the identity is
+/// derived from the post-quantum verify key, which `keygen` fills in memory
+/// and `import` reads back out of the exported blob's trailer. Those are two
+/// different code paths to the same bytes, and nothing else in the suite
+/// would notice if they diverged.
+#[test]
+fn the_identity_is_the_same_before_and_after_an_export_import_round_trip() {
+    let (mut fresh, public_key) = keygen::<H5>(&[0x1du8; 32], MAX).expect("keygen");
+    let at_keygen = fresh.key_identity();
+
+    // The public key names the same identity, so an integrator holding only
+    // the public half can provision the journal.
+    assert_eq!(
+        at_keygen,
+        public_key.key_identity(),
+        "the public and secret sides of one key must name the same identity"
+    );
+
+    // Unspent round trip.
+    let restored = SecretKey::<H5>::import(&fresh.export().expect("export")).expect("import");
+    assert_eq!(
+        at_keygen,
+        restored.key_identity(),
+        "an export/import round trip must not change the identity"
+    );
+
+    // And after leaves have been spent, so the identity does not drift with
+    // the counter it sits beside.
+    let mut journal = MemoryJournal::adopted(at_keygen);
+    H5::sign_stateful(&mut fresh, &mut journal, b"spend one", b"").expect("sign");
+    assert_eq!(
+        at_keygen,
+        fresh.key_identity(),
+        "spending a leaf must not change the identity"
+    );
+    let advanced = SecretKey::<H5>::import(&fresh.export().expect("export")).expect("import");
+    assert_eq!(at_keygen, advanced.key_identity());
+
+    // The journal adopted at keygen still accepts the key that came back
+    // through import, which is the restart path in full.
+    let mut advanced = advanced;
+    H5::sign_stateful(&mut advanced, &mut journal, b"spend two", b"")
+        .expect("the journal adopted at keygen must accept the reimported key");
 }
 
 /// Upstream re-derives the hypertree root from the private seeds on import,

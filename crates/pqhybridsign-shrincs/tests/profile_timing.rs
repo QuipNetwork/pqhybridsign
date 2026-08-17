@@ -14,7 +14,10 @@
 //! and it was wrong: the `cross_profile` test does one keygen and no signing
 //! at all, yet accounted for 3259 s under `profile-128s-q18` against 0.39 s
 //! under `profile-256s`. Per-operation numbers settle it.
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_core::PqStatefulScheme;
 use pqhybridsign_shrincs::{keygen, ShrincsScheme, H5};
 use std::time::Instant;
@@ -22,7 +25,7 @@ use std::time::Instant;
 const SEED: [u8; 32] = [0x42; 32];
 const MAX_SIGNATURES: u32 = 4;
 
-struct CountingJournal(u32);
+struct CountingJournal(u32, Option<KeyIdentity>);
 
 impl LeafJournal for CountingJournal {
     type Error = core::convert::Infallible;
@@ -32,6 +35,13 @@ impl LeafJournal for CountingJournal {
     }
     fn next_leaf(&self) -> u32 {
         self.0
+    }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        self.1
+    }
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        self.1 = Some(key);
+        Ok(())
     }
 }
 
@@ -44,13 +54,15 @@ fn time_the_costly_operations() {
     let (mut sk, pk) = keygen::<H5>(&SEED, MAX_SIGNATURES).expect("keygen");
     let keygen_secs = t.elapsed().as_secs_f64();
 
-    let mut journal = CountingJournal(0);
+    let mut journal = CountingJournal(0, None);
+    adopt_key(&mut journal, sk.key_identity()).expect("adopt");
     let t = Instant::now();
     let stateful = H5::sign_stateful(&mut sk, &mut journal, b"message", b"ctx").expect("stateful");
     let stateful_secs = t.elapsed().as_secs_f64();
 
     let t = Instant::now();
-    let stateless = H5::sign_stateless(&sk, b"message", b"ctx").expect("stateless");
+    let stateless = H5::sign_stateless(&sk, &mut MemoryBudget::default(), b"message", b"ctx")
+        .expect("stateless");
     let stateless_secs = t.elapsed().as_secs_f64();
 
     let t = Instant::now();
@@ -65,4 +77,25 @@ fn time_the_costly_operations() {
         stateful.len(),
         stateless.len(),
     );
+}
+
+/// An in-memory `StatelessBudgetStore`. Not durable across a process
+/// restart, which is fine for a test: the property under test is that the
+/// count is consulted and advanced at all, not real persistence. A
+/// deployment must persist this, or the few-time bound of specification
+/// section 21 can be exceeded silently after any restart.
+#[derive(Default)]
+struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+
+impl StatelessBudgetStore for MemoryBudget {
+    type Error = core::convert::Infallible;
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        self.0.get(key.as_bytes()).copied()
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        self.0.insert(*key.as_bytes(), count);
+        Ok(())
+    }
 }

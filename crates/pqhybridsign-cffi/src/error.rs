@@ -2,7 +2,7 @@
 //! The integer error codes every entry point in this crate returns, and the
 //! lookup this crate offers to turn one into a message.
 //!
-//! Codes `1..=16` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
+//! Codes `1..=18` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
 //! a C caller that already branches on the numbers the ABI crate documents
 //! keeps working against this crate. Codes `100` and above are this crate's
 //! own vocabulary, for failures that only exist at a raw-pointer boundary
@@ -64,6 +64,38 @@ pub const PQHS_ERR_INVALID_SUITE: c_int = 15;
 /// The wrong entry point was called for this suite. Mirrors
 /// `AbiError::WrongEntryPointForSuite`.
 pub const PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE: c_int = 16;
+/// H5/H6 only: the secret key's leaf counter and the leaf journal no longer
+/// agree, so this key can sign no more. Rotate it. Do not repair the
+/// counters by hand: that reissues a spent leaf, which destroys the key's
+/// security. Distinct from `PQHS_ERR_SIGNING_FAILED`, which may be worth
+/// retrying. Mirrors `AbiError::CountersDiverged`.
+pub const PQHS_ERR_COUNTERS_DIVERGED: c_int = 17;
+/// H5/H6 only: the journal does not belong to this key. Its `bound_key`
+/// callback reported no binding at all, or a binding to a different key.
+/// Nothing was spent and the key is intact -- unlike
+/// `PQHS_ERR_COUNTERS_DIVERGED`, this is not a reason to rotate. Reopen the
+/// durable journal that belongs to this key, or, if there genuinely is none,
+/// bind one explicitly with [`crate::pqhs_adopt_key`]. Mirrors
+/// `AbiError::JournalKeyMismatch`.
+pub const PQHS_ERR_JOURNAL_KEY_MISMATCH: c_int = 18;
+/// H5/H6 only: the few-time stateless budget for this key's stateless
+/// material is spent (specification section 21). Nothing was spent on the
+/// refused attempt.
+///
+/// Distinct from `PQHS_ERR_LEAVES_EXHAUSTED`, which is the stateful path's
+/// separate one-time leaf budget. This bound is shared by stateless signing,
+/// rotation authorization and recovery, and it is not a quota to raise:
+/// exceeding it degrades the security assumption of the underlying few-time
+/// scheme. It clears only when a rotation actually changes the stateless key
+/// material. Mirrors `AbiError::StatelessBudgetExhausted`.
+pub const PQHS_ERR_STATELESS_BUDGET_EXHAUSTED: c_int = 19;
+/// H5/H6 only: the caller's [`crate::PqhsStatelessBudget`] reported that it
+/// could not durably record the spend, so no stateless signature was
+/// released. The stateless counterpart of `PQHS_ERR_JOURNAL_FAILED`, and
+/// transient on the same terms: nothing was recorded, so the same unit of
+/// budget is still available once the storage fault is repaired. Mirrors
+/// `AbiError::BudgetStoreFailed`.
+pub const PQHS_ERR_BUDGET_STORE_FAILED: c_int = 20;
 
 /// A required pointer argument was null while its paired length was
 /// nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
@@ -77,6 +109,14 @@ pub const PQHS_ERR_NULL_POINTER: c_int = 100;
 /// this crate is wrapped so that if one ever does, the caller gets this
 /// code instead of a crash.
 pub const PQHS_ERR_PANIC: c_int = 101;
+/// Two buffer arguments that must not alias pointed at overlapping memory.
+/// This crate's own code, for the same reason as
+/// [`PQHS_ERR_NULL_POINTER`]: [`pqhybridsign_abi`] receives Rust slices,
+/// which cannot overlap in the first place. Nothing was read, written or
+/// spent. Today this is raised only for an `sk`/`sk_out` pair in
+/// [`crate::pqhs_sign_stateful`], where passing the same buffer twice is
+/// the most natural way to write an in-place key update in C.
+pub const PQHS_ERR_ALIASED_BUFFERS: c_int = 102;
 
 /// The stable code [`crate::pqhs_error_message`] and every other function in
 /// this crate return for `error`.
@@ -111,8 +151,23 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
         PQHS_ERR_SIGNING_FAILED => c"signing failed",
         PQHS_ERR_INVALID_SUITE => c"the suite code or name is not one of H1-H6",
         PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE => c"this entry point does not accept this suite",
+        PQHS_ERR_COUNTERS_DIVERGED => {
+            c"the key counter and leaf journal diverged; this key can sign no more, rotate it"
+        }
+        PQHS_ERR_STATELESS_BUDGET_EXHAUSTED => {
+            c"the few-time stateless budget for this key's stateless material is spent"
+        }
+        PQHS_ERR_BUDGET_STORE_FAILED => {
+            c"the stateless budget store could not durably record; nothing consumed"
+        }
+        PQHS_ERR_JOURNAL_KEY_MISMATCH => {
+            c"this leaf journal does not belong to this key; reopen the key's own journal"
+        }
         PQHS_ERR_NULL_POINTER => c"a required pointer argument was null",
         PQHS_ERR_PANIC => c"an internal panic was caught at the C boundary",
+        PQHS_ERR_ALIASED_BUFFERS => {
+            c"two buffer arguments that must not alias pointed at overlapping memory"
+        }
         _ => c"unknown error code",
     };
     msg.as_ptr()
@@ -122,7 +177,7 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
 mod tests {
     use super::*;
 
-    /// Every code this table hands out for `1..=16` must equal the code
+    /// Every code this table hands out for `1..=20` must equal the code
     /// [`AbiError::code`] reports for the variant it mirrors, and the
     /// message text must match [`AbiError`]'s own [`std::fmt::Display`]
     /// text, so the two crates' vocabularies cannot drift apart silently.
@@ -160,12 +215,40 @@ mod tests {
                 AbiError::WrongEntryPointForSuite,
                 PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE,
             ),
+            (AbiError::CountersDiverged, PQHS_ERR_COUNTERS_DIVERGED),
+            (AbiError::JournalKeyMismatch, PQHS_ERR_JOURNAL_KEY_MISMATCH),
+            (
+                AbiError::StatelessBudgetExhausted,
+                PQHS_ERR_STATELESS_BUDGET_EXHAUSTED,
+            ),
+            (AbiError::BudgetStoreFailed, PQHS_ERR_BUDGET_STORE_FAILED),
         ];
         for (err, code) in cases {
             assert_eq!(code_of(err), code, "{err}");
             let msg = unsafe { std::ffi::CStr::from_ptr(pqhs_error_message(code)) };
             assert_eq!(msg.to_str().unwrap(), err.to_string(), "{err}");
         }
+    }
+
+    /// The codes at and above `100` are this crate's own, so nothing in
+    /// `pqhybridsign-abi` pins them. Pin them here instead: a C caller
+    /// branches on the numbers, and renumbering one silently would change
+    /// what an already-compiled integration believes happened.
+    #[test]
+    fn this_crates_own_codes_are_pinned_and_have_messages() {
+        for code in [
+            PQHS_ERR_NULL_POINTER,
+            PQHS_ERR_PANIC,
+            PQHS_ERR_ALIASED_BUFFERS,
+        ] {
+            let msg = unsafe { std::ffi::CStr::from_ptr(pqhs_error_message(code)) }
+                .to_str()
+                .unwrap();
+            assert_ne!(msg, "unknown error code", "code {code}");
+        }
+        assert_eq!(PQHS_ERR_NULL_POINTER, 100);
+        assert_eq!(PQHS_ERR_PANIC, 101);
+        assert_eq!(PQHS_ERR_ALIASED_BUFFERS, 102);
     }
 
     #[test]

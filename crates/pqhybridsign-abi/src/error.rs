@@ -13,9 +13,10 @@ use pqhybridsign_core::Error as CoreError;
 /// sources: [`pqhybridsign_core::Error`], from the stateless composite
 /// layer H1-H4 share, and [`StatefulSignError`], from the stateful signing
 /// path H5 and H6 use. Every current variant of both maps to a distinct
-/// code here; nothing collapses onto [`Self::ComponentFailure`] except a
-/// hypothetical future variant of one of those `#[non_exhaustive]` source
-/// enums.
+/// code here. Both sources are `#[non_exhaustive]`, and each conversion
+/// ends in a catch-all arm, so a variant added upstream reaches a C caller
+/// as a generic code rather than as a compile error here. Adding a variant
+/// upstream therefore means adding a discriminant here in the same change.
 ///
 /// [`Suite::code`](crate::Suite::code) is the sibling of this type: both
 /// are pinned in `tests::codes_are_pinned` below, so an existing binding
@@ -82,6 +83,51 @@ pub enum AbiError {
     /// function ([`crate::sign_stateful`], [`crate::sign_stateless`],
     /// [`crate::keygen_stateful_from_seed`]) was called with H1-H4.
     WrongEntryPointForSuite = 16,
+    /// H5/H6 only: the secret key's leaf counter and the leaf journal no
+    /// longer agree, so this key can sign no more. Mirrors
+    /// [`StatefulSignError::CountersDiverged`].
+    ///
+    /// Distinct from [`Self::SigningFailed`] because the remedy differs:
+    /// a diverged key is permanently unusable and must be rotated, while
+    /// a signing failure may be worth retrying. Repairing the counters by
+    /// hand reissues a spent leaf, which destroys the key's security.
+    CountersDiverged = 17,
+    /// H5/H6 only: the leaf journal does not belong to this key. It has never
+    /// been bound to any key, or it is bound to a different one. Mirrors
+    /// [`StatefulSignError::JournalKeyMismatch`].
+    ///
+    /// Distinct from [`Self::CountersDiverged`] because the two demand
+    /// opposite responses. A divergence means the key is finished and must be
+    /// rotated. This means the key is intact and the *journal* is wrong:
+    /// rotating would destroy a perfectly good key, and nothing was spent.
+    /// Recover by reopening the durable journal that belongs to this key, or,
+    /// if there genuinely is none, by adopting one explicitly with
+    /// [`crate::adopt_key`].
+    JournalKeyMismatch = 18,
+    /// H5/H6 only: the few-time stateless budget for this key's stateless
+    /// material is spent (specification section 21). Mirrors
+    /// [`StatefulSignError::StatelessBudgetExhausted`] and
+    /// [`CoreError::StatelessBudgetExhausted`].
+    ///
+    /// Distinct from [`Self::LeavesExhausted`], which is the stateful path's
+    /// separate one-time leaf budget. Ordinary application signing spends
+    /// leaves and never touches this bound; stateless signing, rotation
+    /// authorization and recovery all draw on this one and never touch
+    /// leaves. Nothing was spent on the refused attempt.
+    ///
+    /// This is not a quota to raise. Exceeding it degrades the security
+    /// assumption of the underlying few-time scheme. It clears only when a
+    /// rotation actually changes `pkSeed || hypertreeRoot`.
+    StatelessBudgetExhausted = 19,
+    /// H5/H6 only: the caller's stateless budget store could not durably
+    /// record the spend, so no stateless signature was released. Mirrors
+    /// [`StatefulSignError::BudgetStoreFailed`] and
+    /// [`CoreError::BudgetStoreFailed`].
+    ///
+    /// The stateless counterpart of [`Self::JournalFailed`], and transient on
+    /// the same terms: nothing was recorded, so the same unit of budget is
+    /// still available once the storage fault is repaired.
+    BudgetStoreFailed = 20,
 }
 
 impl AbiError {
@@ -113,6 +159,18 @@ impl fmt::Display for AbiError {
             Self::SigningFailed => "signing failed",
             Self::InvalidSuite => "the suite code or name is not one of H1-H6",
             Self::WrongEntryPointForSuite => "this entry point does not accept this suite",
+            Self::CountersDiverged => {
+                "the key counter and leaf journal diverged; this key can sign no more, rotate it"
+            }
+            Self::JournalKeyMismatch => {
+                "this leaf journal does not belong to this key; reopen the key's own journal"
+            }
+            Self::StatelessBudgetExhausted => {
+                "the few-time stateless budget for this key's stateless material is spent"
+            }
+            Self::BudgetStoreFailed => {
+                "the stateless budget store could not durably record; nothing consumed"
+            }
         };
         f.write_str(msg)
     }
@@ -133,6 +191,8 @@ impl From<CoreError> for AbiError {
             CoreError::ComponentFailure => Self::ComponentFailure,
             CoreError::BadRotationKind { .. } => Self::BadRotationKind,
             CoreError::DeltaLengthOutOfRange { .. } => Self::DeltaLengthOutOfRange,
+            CoreError::StatelessBudgetExhausted => Self::StatelessBudgetExhausted,
+            CoreError::BudgetStoreFailed => Self::BudgetStoreFailed,
             // `CoreError` is `#[non_exhaustive]`: only a variant added after
             // this crate was written can reach this arm, since every
             // variant that exists today has its own arm above.
@@ -148,6 +208,10 @@ impl From<StatefulSignError> for AbiError {
             StatefulSignError::GrindAbort => Self::GrindAbort,
             StatefulSignError::JournalFailed => Self::JournalFailed,
             StatefulSignError::SigningFailed => Self::SigningFailed,
+            StatefulSignError::CountersDiverged => Self::CountersDiverged,
+            StatefulSignError::JournalKeyMismatch => Self::JournalKeyMismatch,
+            StatefulSignError::StatelessBudgetExhausted => Self::StatelessBudgetExhausted,
+            StatefulSignError::BudgetStoreFailed => Self::BudgetStoreFailed,
             // `StatefulSignError` is `#[non_exhaustive]` too; see the note
             // on the `CoreError` conversion above.
             _ => Self::SigningFailed,
@@ -181,6 +245,10 @@ mod tests {
         assert_eq!(AbiError::SigningFailed.code(), 14);
         assert_eq!(AbiError::InvalidSuite.code(), 15);
         assert_eq!(AbiError::WrongEntryPointForSuite.code(), 16);
+        assert_eq!(AbiError::CountersDiverged.code(), 17);
+        assert_eq!(AbiError::JournalKeyMismatch.code(), 18);
+        assert_eq!(AbiError::StatelessBudgetExhausted.code(), 19);
+        assert_eq!(AbiError::BudgetStoreFailed.code(), 20);
     }
 
     #[test]
@@ -240,6 +308,14 @@ mod tests {
             }),
             AbiError::DeltaLengthOutOfRange
         );
+        assert_eq!(
+            AbiError::from(CoreError::StatelessBudgetExhausted),
+            AbiError::StatelessBudgetExhausted
+        );
+        assert_eq!(
+            AbiError::from(CoreError::BudgetStoreFailed),
+            AbiError::BudgetStoreFailed
+        );
     }
 
     #[test]
@@ -259,6 +335,22 @@ mod tests {
         assert_eq!(
             AbiError::from(StatefulSignError::SigningFailed),
             AbiError::SigningFailed
+        );
+        assert_eq!(
+            AbiError::from(StatefulSignError::CountersDiverged),
+            AbiError::CountersDiverged
+        );
+        assert_eq!(
+            AbiError::from(StatefulSignError::JournalKeyMismatch),
+            AbiError::JournalKeyMismatch
+        );
+        assert_eq!(
+            AbiError::from(StatefulSignError::StatelessBudgetExhausted),
+            AbiError::StatelessBudgetExhausted
+        );
+        assert_eq!(
+            AbiError::from(StatefulSignError::BudgetStoreFailed),
+            AbiError::BudgetStoreFailed
         );
     }
 }

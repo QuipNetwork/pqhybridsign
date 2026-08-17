@@ -85,6 +85,33 @@ sub_exception!(
     "This entry point does not accept this suite."
 );
 sub_exception!(
+    CountersDivergedError,
+    "The key counter and the leaf journal diverged; this key can sign no more, rotate it. \
+     Repairing the counters by hand reissues a spent leaf, which destroys the key's security."
+);
+sub_exception!(
+    JournalKeyMismatchError,
+    "This leaf journal does not belong to this key: it has never been bound to any key, \
+     or it is bound to a different one. Nothing was spent and the key is intact -- unlike \
+     CountersDivergedError, this is not a reason to rotate. Reopen the durable journal that \
+     belongs to this key, or, if there genuinely is none, bind one explicitly with \
+     adopt_key()."
+);
+sub_exception!(
+    StatelessBudgetExhaustedError,
+    "The few-time stateless budget for this key's stateless material is spent. Nothing was \
+     spent on the refused attempt. This is not the stateful path's leaf budget \
+     (LeavesExhaustedError) and it is not a quota to raise: exceeding it degrades the \
+     security assumption of the underlying few-time scheme. It clears only when a rotation \
+     actually changes the stateless key material."
+);
+sub_exception!(
+    BudgetStoreFailedError,
+    "The stateless budget store could not durably record the spend, so no signature was \
+     released. Nothing was recorded, so the same unit of budget is still available once the \
+     storage fault is repaired."
+);
+sub_exception!(
     StatefulKeyNotCloneableError,
     "A stateful (H5/H6) secret key cannot be copied, deep-copied or pickled: \
      doing so would let the same one-time leaf be spent twice."
@@ -109,6 +136,10 @@ pub(crate) fn to_py_err(e: AbiError) -> PyErr {
         AbiError::SigningFailed => SigningFailedError::new_err(msg),
         AbiError::InvalidSuite => InvalidSuiteError::new_err(msg),
         AbiError::WrongEntryPointForSuite => WrongEntryPointForSuiteError::new_err(msg),
+        AbiError::CountersDiverged => CountersDivergedError::new_err(msg),
+        AbiError::JournalKeyMismatch => JournalKeyMismatchError::new_err(msg),
+        AbiError::StatelessBudgetExhausted => StatelessBudgetExhaustedError::new_err(msg),
+        AbiError::BudgetStoreFailed => BudgetStoreFailedError::new_err(msg),
         // `AbiError` is `#[non_exhaustive]`: only a variant added after
         // this crate was written can reach this arm, since every variant
         // that exists today has its own arm above.
@@ -160,6 +191,22 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     m.add(
         "WrongEntryPointForSuiteError",
         py.get_type::<WrongEntryPointForSuiteError>(),
+    )?;
+    m.add(
+        "CountersDivergedError",
+        py.get_type::<CountersDivergedError>(),
+    )?;
+    m.add(
+        "JournalKeyMismatchError",
+        py.get_type::<JournalKeyMismatchError>(),
+    )?;
+    m.add(
+        "StatelessBudgetExhaustedError",
+        py.get_type::<StatelessBudgetExhaustedError>(),
+    )?;
+    m.add(
+        "BudgetStoreFailedError",
+        py.get_type::<BudgetStoreFailedError>(),
     )?;
     m.add(
         "StatefulKeyNotCloneableError",

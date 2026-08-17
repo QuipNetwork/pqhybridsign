@@ -24,7 +24,7 @@
 //! [`DeltaSuite::MAX_SIGNATURE_LEN`] bytes; callers size it with that
 //! constant.
 
-use crate::composite::{exact, with_m_prime};
+use crate::composite::{at_least, exact, with_m_prime};
 use crate::encoding_delta::{self, CLASSICAL_SIG_LEN, DELTA_LEN};
 use crate::{derive_component_seeds, ClassicalScheme, DeltaSuite, Error, PqScheme, Result};
 use subtle::Choice;
@@ -203,16 +203,19 @@ fn split_sk<S: DeltaSuite>(sk: &[u8]) -> Result<(&[u8], &[u8])> {
 ///
 /// [`Error::OutputBufferTooSmall`] when `sig_out` is too small to hold the
 /// encoding.
+// The three slots are three disjoint mutable borrows of one buffer, which is
+// exactly what `split_at_mut` produces and what the callers need: each slot
+// is written by a different component. A named tuple struct would have to
+// carry the same three lifetimes and would be constructed and destructured
+// at the single call site, so it would rename the complexity rather than
+// remove it. The alternative that does remove it -- returning the offsets
+// and re-slicing in the caller -- gives up the compiler's proof that the
+// three slots do not overlap, which is the one property worth having here.
 #[allow(clippy::type_complexity)]
 fn split_sig_out<S: DeltaSuite>(sig_out: &mut [u8]) -> Result<(&mut [u8], &mut [u8], &mut [u8])> {
     let pq_len = <S::Pq as PqScheme>::SIGNATURE_LEN;
     let needed = CLASSICAL_SIG_LEN + DELTA_LEN + pq_len;
-    if sig_out.len() < needed {
-        return Err(Error::OutputBufferTooSmall {
-            needed,
-            actual: sig_out.len(),
-        });
-    }
+    at_least(sig_out, needed)?;
     let (classical_slot, rest) = sig_out[..needed].split_at_mut(CLASSICAL_SIG_LEN);
     let (delta_slot, pq_slot) = rest.split_at_mut(DELTA_LEN);
     Ok((classical_slot, delta_slot, pq_slot))

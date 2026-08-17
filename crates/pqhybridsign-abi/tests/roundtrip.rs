@@ -4,7 +4,9 @@
 //! at the boundary.
 
 use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_abi::{AbiError, LeafJournal, Suite};
+use pqhybridsign_abi::{
+    AbiError, BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, Suite,
+};
 use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
 use pqhybridsign_core::{composite, composite_delta, DeltaSuite, Suite as CoreSuite};
 use pqhybridsign_shrincs::{H5, H6};
@@ -15,7 +17,24 @@ use std::rc::Rc;
 #[derive(Default)]
 struct JournalState {
     committed: Vec<u32>,
+    bound: Option<KeyIdentity>,
 }
+/// An in-memory `StatelessBudgetStore`, the budget counterpart of
+/// `MemoryJournal`. Not durable; a deployment must persist this or the
+/// few-time bound of specification section 21 restarts at zero.
+#[derive(Default)]
+struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+impl StatelessBudgetStore for MemoryBudget {
+    type Error = std::convert::Infallible;
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        self.0.get(key.as_bytes()).copied()
+    }
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        self.0.insert(*key.as_bytes(), count);
+        Ok(())
+    }
+}
+
 struct MemoryJournal(Rc<RefCell<JournalState>>);
 impl LeafJournal for MemoryJournal {
     type Error = std::convert::Infallible;
@@ -32,6 +51,23 @@ impl LeafJournal for MemoryJournal {
             .max()
             .map_or(0, |m| m + 1)
     }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        self.0.borrow().bound
+    }
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        self.0.borrow_mut().bound = Some(key);
+        Ok(())
+    }
+}
+
+/// A fresh journal, adopted by the key `pk` names. Signing refuses a journal
+/// that has never been bound to the key, so every stateful test here does the
+/// one-off adoption an integrator does when the key is provisioned.
+fn adopted_journal(suite: Suite, pk: &[u8]) -> MemoryJournal {
+    let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+    let identity = pqhybridsign_abi::key_identity(suite, pk).unwrap();
+    pqhybridsign_abi::adopt_key(&mut journal, identity).unwrap();
+    journal
 }
 
 const SEED: [u8; 32] = [42u8; 32];
@@ -122,7 +158,7 @@ fn a_signature_from_one_suite_fails_under_every_other() {
         let sig_len = if suite.is_stateful() {
             pqhybridsign_abi::keygen_stateful_from_seed(*suite, &seed, 4, &mut sk, &mut pk)
                 .unwrap();
-            let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+            let mut journal = adopted_journal(*suite, &pk);
             let mut sk_out = sk.clone();
             pqhybridsign_abi::sign_stateful(
                 *suite,
@@ -176,8 +212,8 @@ fn h5_stateful_signing_matches_the_generic_api_and_advances_the_leaf() {
         pqhybridsign_core::stateful_composite::keygen::<H5>(&SEED, 4).unwrap();
     assert_eq!(abi_pk, generic_pk.as_ref());
 
-    let mut journal_a = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
-    let mut journal_b = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+    let mut journal_a = adopted_journal(Suite::H5, &abi_pk);
+    let mut journal_b = adopted_journal(Suite::H5, generic_pk.as_ref());
 
     let mut abi_sig = vec![0u8; pqhybridsign_abi::signature_len(Suite::H5)];
     let mut sk_out = abi_sk.clone();
@@ -222,7 +258,10 @@ fn h5_stateful_signing_matches_the_generic_api_and_advances_the_leaf() {
         &mut sig2,
     )
     .unwrap_err();
-    assert_eq!(err, AbiError::SigningFailed);
+    // Named, not the generic `SigningFailed`: a diverged key can never sign
+    // again and must be rotated, while a signing failure may be worth a
+    // retry. A caller that cannot tell them apart retries forever.
+    assert_eq!(err, AbiError::CountersDiverged);
 }
 
 /// H5's stateless (few-time) path spends no leaf and can be called
@@ -235,8 +274,13 @@ fn h5_stateless_signing_spends_no_leaf() {
 
     let mut sig_a = vec![0u8; pqhybridsign_abi::signature_len(Suite::H5)];
     let mut sig_b = vec![0u8; pqhybridsign_abi::signature_len(Suite::H5)];
-    let n_a = pqhybridsign_abi::sign_stateless(Suite::H5, &sk, MSG, CTX, &mut sig_a).unwrap();
-    let n_b = pqhybridsign_abi::sign_stateless(Suite::H5, &sk, MSG, CTX, &mut sig_b).unwrap();
+    // One store across both calls, as a deployment would have: the leaf
+    // state must stay untouched even though the stateless budget advances.
+    let mut budget = MemoryBudget::default();
+    let n_a = pqhybridsign_abi::sign_stateless(Suite::H5, &sk, &mut budget, MSG, CTX, &mut sig_a)
+        .unwrap();
+    let n_b = pqhybridsign_abi::sign_stateless(Suite::H5, &sk, &mut budget, MSG, CTX, &mut sig_b)
+        .unwrap();
 
     assert!(pqhybridsign_abi::verify(
         Suite::H5,
@@ -271,7 +315,7 @@ fn h3_h4_h6_round_trip_end_to_end() {
     let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(Suite::H6)];
     let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(Suite::H6)];
     pqhybridsign_abi::keygen_stateful_from_seed(Suite::H6, &SEED, 4, &mut sk, &mut pk).unwrap();
-    let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+    let mut journal = adopted_journal(Suite::H6, &pk);
     let mut sk_out = sk.clone();
     let mut sig = vec![0u8; pqhybridsign_abi::signature_len(Suite::H6)];
     let n = pqhybridsign_abi::sign_stateful(
@@ -384,8 +428,8 @@ fn h6_stateful_dispatch_matches_the_generic_api() {
         pqhybridsign_core::stateful_composite::keygen::<H6>(&SEED, 4).unwrap();
     assert_eq!(abi_pk, generic_pk.as_ref());
 
-    let mut journal_a = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
-    let mut journal_b = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+    let mut journal_a = adopted_journal(Suite::H6, &abi_pk);
+    let mut journal_b = adopted_journal(Suite::H6, generic_pk.as_ref());
 
     let mut abi_sig = vec![0u8; pqhybridsign_abi::signature_len(Suite::H6)];
     let mut sk_out = abi_sk.clone();

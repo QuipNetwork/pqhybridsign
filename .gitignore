@@ -2,6 +2,9 @@
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
+# Transient worktrees created for parallel agent runs. Never part of a commit.
+/.claude/worktrees/
+
 .beads-credential-key
 .beads/proxieddb/
 .beads.gate.lock

@@ -4,7 +4,80 @@ use pqhybridsign_core::{ClassicalScheme, Error, Result};
 use subtle::Choice;
 use zeroize::Zeroize;
 
-/// ed25519 classical component, per RFC 8032.
+/// ed25519 classical component of suites H1, H2, H5.
+///
+/// Signing follows RFC 8032. Verification follows [ZIP-215], which
+/// `ed25519-zebra` implements, and the two sides are deliberately
+/// asymmetric:
+///
+/// * What this component **produces** is valid under both ZIP-215 and
+///   strict RFC 8032, so any verifier accepts it. [`derive`] emits a
+///   canonical, torsion-free public key and [`sign`] emits a signature
+///   that satisfies the exact equation `[s]B = R + [k]A`, not only the
+///   cofactored `[8][s]B = [8]R + [8][k]A`. `tests/ed25519_strict.rs`
+///   pins both, with hard-failing tests: this half of the contract is fully
+///   under this crate's control and a regression here is a real bug.
+/// * What this component **accepts** is a strict superset of RFC 8032.
+///   ZIP-215 requires accepting non-canonical encodings of `A` and `R`,
+///   which RFC 8032 section 5.1.3 rejects, and requires the cofactored
+///   equation. A verifier that instead takes the alternative equation
+///   RFC 8032 section 5.1.7 permits -- `ed25519-dalek`'s `verify_strict`,
+///   Go's `crypto/ed25519`, the common Solidity ports -- rejects
+///   signatures this component accepts.
+///
+/// The second bullet is a consensus hazard, not a malleability one:
+/// malleability is closed, because `s` must be canonical and `R_bytes` is
+/// hashed into `k`. The hazard is that two conforming implementations can
+/// disagree about whether one attacker-chosen signature is valid.
+/// `tests/vectors/ed25519_zip215_negative.json` pins triples that show the
+/// disagreement, and `tests/ed25519_strict.rs` prints a detailed warning for
+/// each one, visible on a plain `cargo test` with no extra flag, rather than
+/// failing the build, because the exact set of accepted triples is a
+/// property of `ed25519-zebra`/`curve25519-dalek`, not something this
+/// crate's own specification can bind a second implementation to.
+///
+/// # Reproducing this in a second implementation
+///
+/// This crate's specification states ZIP-215 acceptance as this
+/// implementation's behavior, and recommends (does not require) that a
+/// second, independent implementation reproduce it. A second implementation
+/// that instead verifies with a stock strict library -- `ed25519-dalek`'s
+/// `verify_strict`, Go's `crypto/ed25519`, or a common Solidity ed25519
+/// port -- stays specification-conformant, but takes on the following
+/// disadvantages:
+///
+/// * **Which peers it can disagree with.** The three verifiers named above
+///   all reject the triples `tests/vectors/ed25519_zip215_negative.json`
+///   pins; this crate's own `verify` accepts them. Two otherwise-conformant
+///   parties running one implementation each can reach opposite verdicts on
+///   the identical wire bytes.
+/// * **Who can trigger the disagreement, and at what cost.** The attacker
+///   needs no secret key at all for the classical half: an ed25519 public
+///   key of order 8 (or 4, or 2) makes the cofactored check pass for
+///   essentially any message, with `R` and `s` fixed constants. There is no
+///   private key to steal or brute-force, because none is used --
+///   `weak_classical_forgery` in `tests/support/mod.rs` builds one from
+///   public curve constants alone.
+/// * **What that means for a consensus system.** For an on-chain registry
+///   or any protocol where independent parties must agree on validity, this
+///   is not "a malformed transaction gets rejected" -- both verifiers
+///   reject genuinely malformed input identically. It is "a well-formed,
+///   attacker-supplied input is accepted by one honest verifier and
+///   rejected by another," which is the shape of a chain split.
+///   `tests/ed25519_strict.rs`'s `a_low_order_ed25519_half_splits_h1_verification`
+///   shows this survives into the H1 composite signature, not only the bare
+///   ed25519 component: an H1 signature with this classical forgery spliced
+///   in and an honest ML-DSA-44 half still verifies under this crate,
+///   because composite verification is `classical_ok & pq_ok`.
+///
+/// This crate's own outputs never trigger the hazard (see the first bullet
+/// above), so the disadvantage is specific to a second implementation that
+/// deliberately chooses a stricter verifier than this specification
+/// recommends -- not to any signature this crate itself produces.
+///
+/// [ZIP-215]: https://zips.z.cash/zip-0215
+/// [`derive`]: ClassicalScheme::derive
+/// [`sign`]: ClassicalScheme::sign
 #[derive(Clone, Copy, Debug)]
 pub struct Ed25519;
 

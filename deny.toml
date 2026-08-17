@@ -12,7 +12,12 @@ version = 2
 # The workspace is AGPL-3.0-or-later. Dependencies must be licensed
 # permissively enough to combine with it.
 allow = [
+    # The workspace crates and hashsigs-rs carry this. Without it every
+    # first-party crate is rejected for its own license.
+    "AGPL-3.0-or-later",
     "Apache-2.0",
+    # target-lexicon, a build-time dependency of the WebAssembly toolchain.
+    "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
@@ -28,6 +33,9 @@ confidence-threshold = 0.93
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Intra-workspace `{ path = ... }` dependencies carry no version and read as
+# wildcards. They are not a supply-chain risk: they resolve inside this repo.
+allow-wildcard-paths = true
 # One rand_core major version across the graph. Two would mean two
 # incompatible CryptoRngCore traits and a component that cannot be handed the
 # caller's RNG.

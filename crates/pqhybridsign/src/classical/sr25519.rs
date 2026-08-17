@@ -11,6 +11,28 @@ use zeroize::Zeroize;
 #[derive(Clone, Copy, Debug)]
 pub struct Sr25519;
 
+/// Holds a schnorrkel key so that its wipe happens on drop.
+///
+/// schnorrkel 0.11.5 implements `Drop` only for `Keypair` (`src/keys.rs`);
+/// `MiniSecretKey` and `SecretKey` derive `Zeroize` but have no destructor,
+/// so a plain local leaves its bytes in the stack frame verbatim. Both
+/// key types below are short-lived copies of real key material -- the
+/// HKDF-expanded component seed in `derive`, the full 64-byte secret on
+/// every signature in `sign_with_rng` -- and both were previously dropped
+/// unwiped.
+///
+/// A bare `zeroize()` call at the end of each function would fix today's
+/// code and quietly stop working the moment somebody adds an early return
+/// or a `?` above it. Holding the value here makes the wipe structural
+/// instead: it runs on every exit path, including a panic unwind.
+struct Wiped<T: Zeroize>(T);
+
+impl<T: Zeroize> Drop for Wiped<T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 /// A deterministic RNG seeded from `H(sk || nonce || msg)`.
 ///
 /// schnorrkel draws its Schnorr nonce from this RNG. Seeding it from the
@@ -86,8 +108,8 @@ impl ClassicalScheme for Sr25519 {
     fn derive(seed: &[u8; 32], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()> {
         check_len(sk_out, Self::SECRET_KEY_LEN)?;
         check_len(pk_out, Self::PUBLIC_KEY_LEN)?;
-        let mini = MiniSecretKey::from_bytes(seed).map_err(|_| Error::ComponentFailure)?;
-        let keypair = mini.expand_to_keypair(ExpansionMode::Ed25519);
+        let mini = Wiped(MiniSecretKey::from_bytes(seed).map_err(|_| Error::ComponentFailure)?);
+        let keypair = mini.0.expand_to_keypair(ExpansionMode::Ed25519);
         // `to_bytes` returns an owned array with no drop glue, so wipe the
         // temporary once it has been copied into the caller's buffer.
         let mut secret_bytes = keypair.secret.to_bytes();
@@ -167,15 +189,15 @@ fn sign_with_rng(
 ) -> Result<()> {
     check_len(sk, 64)?;
     check_len(sig_out, 64)?;
-    let secret = SecretKey::from_bytes(sk).map_err(|_| Error::ComponentFailure)?;
-    let public = secret.to_public();
+    let secret = Wiped(SecretKey::from_bytes(sk).map_err(|_| Error::ComponentFailure)?);
+    let public = secret.0.to_public();
     let ctx = signing_context(label);
     // schnorrkel 0.11.5 has no `SigningTranscript::with_rng`; the caller-
     // supplied RNG is attached via `schnorrkel::context::attach_rng`, which
     // wraps the transcript so `witness_bytes_rng` draws from it instead of
     // the OS RNG (`getrandom_or_panic`). The nonce derived here is seeded
     // from `H(sk || nonce || msg)`, so it never depends on public data alone.
-    let sig = secret.sign(attach_rng(ctx.bytes(msg), rng), &public);
+    let sig = secret.0.sign(attach_rng(ctx.bytes(msg), rng), &public);
     sig_out.copy_from_slice(&sig.to_bytes());
     Ok(())
 }

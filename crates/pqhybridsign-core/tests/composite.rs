@@ -267,3 +267,59 @@ fn signing_rejects_wrong_length_buffers() {
         Err(Error::ContextTooLong)
     );
 }
+
+/// `sig_out` only needs to be *at least* `SIGNATURE_LEN`: a caller sizing
+/// one scratch buffer for the largest of the six suites and reusing it for
+/// every suite must not be turned away by H1 or H3. Pins the relaxed
+/// contract for both `sign` and `sign_deterministic`, and for both suites
+/// this module exercises.
+#[test]
+fn sig_out_accepts_exact_or_larger_and_rejects_shorter() {
+    fn check<S: Suite>(seed: u8) {
+        let mut sk = vec![0u8; S::SECRET_KEY_LEN];
+        let mut pk = vec![0u8; S::PUBLIC_KEY_LEN];
+        keypair_from_seed::<S>(&[seed; 32], &mut sk, &mut pk).expect("keypair");
+
+        // Short: rejected with `OutputBufferTooSmall`, not `BadLength` --
+        // the wrong argument name misleads a caller into resizing `sk`.
+        let mut short = vec![0u8; S::SIGNATURE_LEN - 1];
+        assert_eq!(
+            sign_deterministic::<S>(&sk, b"m", b"", b"n", &mut short),
+            Err(Error::OutputBufferTooSmall {
+                needed: S::SIGNATURE_LEN,
+                actual: S::SIGNATURE_LEN - 1,
+            })
+        );
+        let mut rng = CountingRng(1);
+        assert_eq!(
+            sign::<S>(&sk, b"m", b"", &mut rng, &mut short),
+            Err(Error::OutputBufferTooSmall {
+                needed: S::SIGNATURE_LEN,
+                actual: S::SIGNATURE_LEN - 1,
+            })
+        );
+
+        // Exact: succeeds.
+        let mut exact = vec![0u8; S::SIGNATURE_LEN];
+        sign_deterministic::<S>(&sk, b"m", b"", b"n", &mut exact).expect("exact-size sig_out");
+        assert!(verify::<S>(&pk, b"m", b"", &exact));
+
+        // Larger: succeeds too, and only the first `SIGNATURE_LEN` bytes are
+        // the real signature -- the tail is left as the caller supplied it.
+        let mut oversized = vec![0xffu8; S::SIGNATURE_LEN + 64];
+        sign_deterministic::<S>(&sk, b"m", b"", b"n", &mut oversized).expect("oversized sig_out");
+        assert_eq!(
+            oversized[..S::SIGNATURE_LEN],
+            exact[..],
+            "the written signature must not depend on the buffer's extra length"
+        );
+        assert!(
+            oversized[S::SIGNATURE_LEN..].iter().all(|&b| b == 0xff),
+            "bytes past SIGNATURE_LEN must be left untouched"
+        );
+        assert!(verify::<S>(&pk, b"m", b"", &oversized[..S::SIGNATURE_LEN]));
+    }
+
+    check::<HashH1>(21);
+    check::<HashH3>(22);
+}

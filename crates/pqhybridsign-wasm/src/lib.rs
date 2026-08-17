@@ -45,15 +45,16 @@
 //!
 //! # Secret key handling
 //!
-//! Every export that receives or produces secret key bytes takes or
-//! returns them as an owned `Vec<u8>` (a `Uint8Array` on the JavaScript
-//! side, always copied across the boundary by `wasm-bindgen`) and
-//! [`zeroize`]s its own copy before returning. That covers the memory
-//! this crate controls. It cannot zero the `Uint8Array` the caller
-//! passed in, or any copy JavaScript itself made of it -- no binding in
-//! any language can reach into a garbage-collected heap it does not
-//! own. Callers that need that guarantee should drop their reference to
-//! the key material as soon as they are done with it.
+//! Every export that receives or produces secret key bytes, or the
+//! master seed, takes or returns them as an owned `Vec<u8>` (a
+//! `Uint8Array` on the JavaScript side, always copied across the
+//! boundary by `wasm-bindgen`) and [`zeroize`]s its own copy before
+//! returning. That covers the memory this crate controls. It cannot
+//! zero the `Uint8Array` the caller passed in, or any copy JavaScript
+//! itself made of it -- no binding in any language can reach into a
+//! garbage-collected heap it does not own. Callers that need that
+//! guarantee should drop their reference to the key material as soon as
+//! they are done with it.
 //!
 //! # The SHRINCS profile is fixed at compile time
 //!
@@ -157,6 +158,10 @@ pub fn signature_len(suite: &str) -> Result<u32, JsValue> {
 }
 
 /// A stateless keypair: a secret key and its matching public key.
+///
+/// A caller must call `free()`, call `[Symbol.dispose]()`, or declare
+/// the value with JavaScript `using`. A leaked `KeyPair` keeps its
+/// secret-key `Uint8Array` reachable.
 #[wasm_bindgen(getter_with_clone)]
 pub struct KeyPair {
     /// The composite secret key, `pqhybridsign_wasm::secretKeyLen(suite)`
@@ -176,12 +181,14 @@ pub struct KeyPair {
 /// A JavaScript `Error` if `suite` is not one of the four stateless
 /// suites, or if `seed` is not exactly 32 bytes.
 #[wasm_bindgen(js_name = keygenFromSeed)]
-pub fn keygen_from_seed(suite: &str, seed: &[u8]) -> Result<KeyPair, JsValue> {
+pub fn keygen_from_seed(suite: &str, seed: Vec<u8>) -> Result<KeyPair, JsValue> {
     let suite = stateless_suite(suite).map_err(js_error)?;
+    let mut seed = seed;
     let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(suite)];
     let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(suite)];
 
-    let result = pqhybridsign_abi::keygen_from_seed(suite, seed, &mut sk, &mut pk);
+    let result = pqhybridsign_abi::keygen_from_seed(suite, &seed, &mut sk, &mut pk);
+    seed.zeroize();
 
     let pair = result.map(|()| KeyPair {
         secret_key: Uint8Array::from(sk.as_slice()),

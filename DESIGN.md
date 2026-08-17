@@ -38,15 +38,65 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 |-------|----------|--------------|
 | `pqhybridsign-core` | Component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port | `subtle`, `zeroize`, `hkdf`, `sha2` |
 | `pqhybridsign` | H1 through H4 | core, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa` |
-| `pqhybridsign-shrincs` | H5 and H6 | core, `hashsigs-rs` pinned by revision |
+| `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` pinned by revision |
 | `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter | core, `pqhybridsign`, `pqhybridsign-shrincs` |
 | `pqhybridsign-cffi` | C ABI, with a checked-in header | abi |
 | `pqhybridsign-wasm` | WebAssembly and npm package, H1 through H4 only | abi |
 | `pqhybridsign-py` | Python wheel on the `abi3-py39` stable ABI | abi |
 
+H5 and H6 reuse the lattice crate classical components. They do not write
+those schemes again. Those components come from `ed25519-zebra` and
+`schnorrkel` through `pqhybridsign`. A license or dependency audit that
+reads only this table misses those crates.
+
 Every library crate sets `#![forbid(unsafe_code)]`. The core and lattice
 crates build for `wasm32-unknown-unknown` without an allocator. The SHRINCS
 crate needs `std`, because the reference signer needs `std` today.
+
+### ed25519 verification: ZIP-215 acceptance is stated, not mandated
+
+The ed25519 component verifies under ZIP-215, through `ed25519-zebra`. It
+accepts non-canonical encodings of the public key and of the signature's `R`
+value, and it checks the cofactored group equation `[8][s]B = [8]R + [8][k]A`
+rather than the cofactorless `[s]B = R + [k]A`.
+
+RFC 8032 section 5.1.7 permits both equations, so checking the cofactored one
+is not by itself a departure from RFC 8032. The divergence is confined to
+section 5.1.3, which requires rejecting non-canonical encodings of `A` and `R`
+where ZIP-215 requires accepting them. This design states that property of this
+implementation. It does not require a second implementation to reproduce it.
+Reproducing it is RECOMMENDED, not mandatory.
+
+A second implementation that verifies with a stricter and more commonly
+deployed verifier stays conformant. Go's `crypto/ed25519`, the `verify_strict`
+path of `ed25519-dalek`, and the common Solidity ed25519 ports all qualify.
+Such an implementation can still disagree with this one about whether a
+specific attacker-supplied signature is valid. The attacker needs no secret
+key: an ed25519 public key with no prime-order component, of order 2, 4 or 8,
+makes a fixed forgery accept under ZIP-215 for almost any message, with `R`
+and `s` as fixed public constants. Rejecting such a key is a `verify_strict`
+convention. Neither RFC 8032 nor ZIP-215 requires it, so an implementation
+that omits the check stays conformant to both while still disagreeing with
+this one.
+
+This is a difference in the accepted set, not a signature-malleability
+finding. Malleability is closed under ZIP-215 and under strict verification
+alike: `s` must be canonical, and the encoded bytes of `R` are hashed into the
+challenge `k`, so an attacker cannot derive a second valid signature over one
+message from a first.
+
+The outputs of this library are unaffected. `derive` and `sign_deterministic`
+always produce output that is valid under ZIP-215 and under strict
+verification, so the disadvantage falls on a second implementation that takes
+the stricter path, never on a signature this library produces. The test suite
+splits along that line. The tests that pin our own outputs as strict-valid
+fail the build, because this library controls those bytes. The tests that
+probe the divergence in the accepted set print a warning and pass, because the
+accepted set of a third-party verifier is not ours to bind, and a dependency
+upgrade that narrows or widens the gap is not a defect in this library. See
+the rustdoc on `pqhybridsign::classical::Ed25519` and
+`crates/pqhybridsign/tests/ed25519_strict.rs` for the pinned vectors and the
+demonstration at the H1 composite level.
 
 ### Component traits
 
@@ -255,8 +305,11 @@ imported component key holds, so the parts cannot be restored out of step.
 `SecretKey::next_leaf` lets an integrator reconcile against the journal at
 restore time rather than discovering drift at signing time.
 
-The blob is plaintext secret material, and an export followed by two imports
-is a forked leaf budget. Treat it as a single-holder token.
+The blob is plaintext secret material. An export followed by two imports is a
+forked leaf budget, so treat it as a single-holder token. The journal binding
+described below detects that fork rather than relying on the caller to avoid
+it, but the blob still deserves single-holder handling: the binding stops a
+second holder from signing, not from possessing the secret.
 
 Verification combines the two component results with a bitwise `&` on
 `subtle::Choice` and returns `bool`. The short-circuiting `&&` is wrong here:
@@ -264,10 +317,200 @@ skipping the post-quantum half once the classical half fails reveals which
 component rejected, which is the leak the hybrid construction exists to
 prevent.
 
-Stateful signing returns a typed error: `LeavesExhausted`, `GrindAbort` or
-`SigningFailed`. The documentation and the tests treat `GrindAbort` as
-non-retryable, because the reference randomizer is a deterministic function of
-the key and the message.
+Stateful signing returns a typed error: `LeavesExhausted`, `GrindAbort`,
+`JournalFailed`, `CountersDiverged`, `JournalKeyMismatch` or `SigningFailed`.
+The remedies differ, which is why the variants stay separate instead of
+collapsing into `SigningFailed`. The documentation and the tests treat
+`GrindAbort` as non-retryable, because the reference randomizer is a
+deterministic function of the key and the message. `JournalFailed` means the
+durable commit did not land and nothing was spent, so a retry is correct.
+
+### The leaf journal records two facts
+
+A stateful suite spends one single-use leaf per signature. Reissuing a leaf
+discloses one-time key material and permits forgery, so leaf consumption must
+be durable before a signature exists. The `LeafJournal` port is how the
+integrator supplies that durability. The library performs no I/O of its own.
+
+A journal records two facts, and both must be durable:
+
+1. **How far the key has spent**, through `next_leaf` and `commit`.
+2. **Which key it is spending for**, through `bound_key` and `bind_key`.
+
+The second fact exists because the first cannot express it. Hand one exported
+key blob to two journals that have each recorded nothing, and both report that
+leaf `0` is next. Each answer is honest: for a journal that has never seen this
+key, `0` is correct, and it is identical to what one correctly reopened journal
+reports for a key that has spent nothing. No comparison of counters separates
+those two situations. Signing on that agreement spends leaf `0` twice, under
+two different messages, and both signatures verify against the same public key.
+
+#### Key identity comes from public material
+
+A journal names its key with a `KeyIdentity`: a fixed 32-byte value derived by
+hashing a versioned domain separator together with the suite label and the
+post-quantum verify key, each length-prefixed.
+
+The derivation uses public material only. Journals are persisted to files and
+database rows that are not held to secret-key handling standards, so an
+identity computed over secret key bytes would push secret material into storage
+that is not built to protect it. The verify key is material a verifier already
+holds and a signature already travels with, so the identity discloses nothing
+new. It may be logged, stored in the clear, and compared with an ordinary
+equality test: there is no secret for a timing difference to leak.
+
+An identity is not a capability. Holding one lets a caller name a key, not sign
+for it. The public key and the secret key blob for one key derive the same
+identity, so either side can compute it.
+
+The domain separator is versioned. Changing the derivation orphans every
+journal record already written under the old one.
+
+#### Adoption is explicit
+
+A journal that has never seen a key cannot refuse one: it has nothing to
+compare against. Binding is therefore an explicit, durable step the integrator
+writes once, when the key's durable journal is created:
+
+```text
+identity = key_identity(suite, public_key)
+adopt_key(journal, identity)
+```
+
+`adopt_key` has three outcomes. A journal that has never been bound records the
+identity durably and returns success. A journal already bound to the same key
+writes nothing and returns success, so an idempotent provisioning step is safe
+to re-run. A journal bound to a different key writes nothing and fails with
+`JournalKeyMismatch`. A journal belongs to one key for its whole life, because
+the leaf numbers in it mean nothing under another key.
+
+Call it once per key, at provisioning time. Calling it on a fresh journal at
+every process restart reinstates the defect it closes: each restart would mint
+a new binding, and each new journal would start the leaf budget over.
+
+Every signing path checks the binding first, ahead of the budget read and ahead
+of any commit. A journal that does not belong to the key holds counters that
+mean nothing for it and must not be read as a budget.
+
+The refusal lands earlier than that, at load. `load_stateful_secret_key`
+rejects a journal that does not belong to the key, so a mispaired journal
+fails when the key is constructed rather than at the first signature. This is
+deliberate and stronger than deferring the check, because it fails before the
+caller holds a signer it believes is usable. It is called out here because an
+integrator reading only the signing documentation would not expect it.
+
+#### `JournalKeyMismatch` against `CountersDiverged`
+
+These are different failures and call for different recovery.
+
+`CountersDiverged` means two counters that were once in step no longer are. The
+key is finished. Rotate it. Do not repair the counters by hand: whichever
+counter is behind names a leaf the other may already have spent.
+
+`JournalKeyMismatch` means the journal is not this key's journal. It has never
+been bound, or it is bound to a different key. It fires even when the counters
+agree perfectly, and that agreement is exactly what makes the case dangerous.
+The key is intact and the pairing is wrong. Recover by reopening the durable
+journal that belongs to this key. It is not a reason to rotate.
+
+Only if no such journal exists, for a new store whose spending history is known
+by other means, call `adopt_key`. Understand that doing so for a key that has
+signed before, against a journal that does not know it, reissues every leaf
+that key has already spent.
+
+#### Implementing the journal
+
+Implementations must persist the identity in the same durable storage the
+counter lives in, and it must survive a restart. A journal that forgets which
+key it belongs to accepts any key, which is the whole of the hazard.
+
+`bound_key` returning "not bound" must mean *never bound*, never *could not
+read*. That answer is what `adopt_key` treats as an invitation to write, and
+binding over a record that already exists forks the leaf budget. An
+implementation that cannot read its storage must fail at construction, before a
+journal value exists.
+
+An implementation that can enforce write-once in its storage, through a
+`UNIQUE` column or an `O_EXCL` create, should do so. That enforcement survives
+a caller who reaches past this library.
+
+#### Upgrading an existing integration
+
+`LeafJournal` gains two required methods, so this is a breaking change for
+every integrator that implements it. The break is deliberate. A silent upgrade
+would leave existing journals unbound and the hazard open.
+
+Rust implementations stop compiling until `bound_key` and `bind_key` are added,
+which is the outcome to want: the compiler names every site that needs durable
+storage for the 32-byte identity alongside the counter.
+
+Python implementations do not get that. A journal class written against the old
+contract raises `AttributeError: 'Journal' object has no attribute 'bound_key'`
+on the first call, not `JournalKeyMismatchError`. The behaviour is correct and
+fails closed, but the message names the missing method rather than the reason it
+now exists, and it is the first thing a Python integrator meets on upgrade. Say
+so in the changelog in those words, so the error is recognisable before anyone
+has to debug it.
+
+### The stateless budget is enforced by types, not by documentation
+
+The stateless path carries a hard security bound of its own: `2^20` signatures,
+`2^18` under the `profile-128s-q18` profile. The bound is shared across every
+stateless signature, every rotation authorization, and every recovery a key
+ever performs. Exceeding it degrades the security assumption of the underlying
+few-time signature scheme, so it is not a quota a deployment may enforce
+loosely.
+
+`StatefulHybridSignatureScheme::sign_stateless` and `rotation::sign_rotation`
+each take a required `&mut impl StatelessBudgetStore`, so neither can be called
+without a durable store to charge. This is the discipline the leaf journal
+follows, for the same reason: an obligation a caller can forget is not an
+obligation.
+
+The spend is made durable before the signature is built. A crash between the
+two wastes one unit of budget, which is acceptable. Releasing a signature whose
+spend is not yet durable is not, because a restart would hand the same unit out
+again.
+
+#### How the stateless budget differs from the leaf journal
+
+Both are durable-state ports the integrator implements. Three things separate
+them.
+
+The budget is **keyed to the stateless key material**, `pkSeed ||
+hypertreeRoot`, hashed to a 32-byte `BudgetKey`. A leaf journal instead holds a
+bare counter and a separately recorded `KeyIdentity`, because a counter alone
+cannot say whose leaves it counts. The budget needs no such record: identity is
+inside the lookup key. Two keys sharing stateless material always resolve to
+the same `BudgetKey`, and two keys with different stateless material never do.
+
+It follows that the budget needs **no adoption step**. `adopt_key` exists
+because a fresh journal and a correctly reopened one both report leaf `0`, and
+only an explicit binding separates them. A budget store that has never seen a
+given material reports nothing for that material alone, and cannot be mistaken
+for a store holding another key's count. There is nothing for an adoption
+ceremony to protect.
+
+The budget is **shared**, not per key. One store serves every key a process
+holds, and it is drawn on by ordinary stateless signing, by rotation
+authorization, and by recovery. Ordinary application signing never touches it:
+leaves and the stateless budget are separate bounds, with separate exhaustion
+errors and separate remedies.
+
+#### What a rotation does and does not reset
+
+`sign_rotation` charges the pre-rotation material, which the function derives
+itself from the key's own cached verify key. No caller can aim the charge at
+the material a rotation is about to install.
+
+A rotation therefore resets the budget only when the stateless material
+actually changes. A stateful-only graft leaves the material untouched and
+continues the same count. A rotation labelled `FullSwap` whose stateless half
+happens to be identical also continues the same count, even though its
+commitment and its next classical key both change on install: the `BudgetKey`
+is a function of the material and of nothing else. Only a rotation that
+genuinely changes `pkSeed || hypertreeRoot` starts a fresh count, and the old
+material's count is left exactly where it was.
 
 ### Rotation
 
@@ -470,7 +713,24 @@ results with a non-short-circuiting `Choice` conjunction and returns one
 `bool` at the API boundary. A per-component error would leak through the error
 channel exactly what the constant-time combination prevents.
 
+Durable-state failures stay separate from each other and from
+`SigningFailed`, because their remedies differ and a caller that cannot tell
+them apart handles all of them wrongly.
+
+| Error | Meaning | Remedy |
+|-------|---------|--------|
+| `JournalFailed` | The leaf commit did not land. Nothing was spent. | Transient. Repair the storage fault and retry. |
+| `CountersDiverged` | The key counter and the journal no longer agree. | Permanent. Rotate. Never repair the counters by hand. |
+| `JournalKeyMismatch` (ABI 18) | The journal is not this key's journal, whatever its counters say. | Reopen the journal that belongs to this key. Not a reason to rotate. |
+| `StatelessBudgetExhausted` (ABI 19) | The few-time bound for this key's stateless material is spent. Nothing was spent on the refused attempt. | Permanent for this material. Rotate to material that actually differs. Do not raise the bound. |
+| `BudgetStoreFailed` (ABI 20) | The budget store could not durably record the spend. Nothing was recorded. | Transient. Repair the storage fault; the same unit is still available. |
+
 Library code holds no `unwrap` or `expect` outside tests.
+
+`pqhybridsign-core` and `pqhybridsign-abi` write `fmt::Display` and
+`Error` by hand. They do not depend on `thiserror`. Core builds with no
+`std` and no allocator, and decision 2 keeps the dependency surface small.
+Do not add the proc-macro crate to "fix" this.
 
 ## Testing
 
@@ -637,7 +897,8 @@ rather than labels (`pqhs-yn0`).
 Cycle 4: H2 and H4, over `fn-dsa` 0.4.0. The maintainer decided on 2026-08-10
 to ship these now rather than wait for a final FIPS 206, having been told that
 the standard may change the wire format and that signatures made before then
-could stop verifying. The dependency lifts the workspace Rust floor to 1.82.
+could stop verifying. The dependency set the workspace Rust floor to 1.82.
+The pinned `hashsigs-rs` revision later raised that floor to 1.89.
 
 Cycle 5: the language bindings, all on `pqhybridsign-abi`. The C ABI with a
 checked-in header, the WebAssembly and npm package, and the Python wheel.
@@ -653,6 +914,11 @@ system, and exposing half a state machine across a C boundary invites the
 misuse the state machine exists to prevent.
 
 ### Next
+
+Cycle 5 shipped the C, Python, and WebAssembly bindings. They are no
+longer next work. Rotation and the policy machine stay out of the first
+release-candidate binding surface. The Cycle 5 paragraph records that
+limit.
 
 Two defects block a first crates.io release. Both are tracked, and the
 upstream merge request this crate pins resolves neither.
@@ -672,7 +938,6 @@ external event.
 - Substrate integration: `sp_core::Pair`, the keystore extension, the
   commitment registry pallet, and account identifier derivation.
 - The hybrid VRF from section 15.
-- Language bindings for WASM, Python and TypeScript.
 - A Go version and cross-language vectors.
 
 ## Open questions

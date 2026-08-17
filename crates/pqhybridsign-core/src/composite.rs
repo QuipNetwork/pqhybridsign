@@ -88,6 +88,11 @@ pub fn keypair_from_seed<S: Suite>(
 /// stack buffer. `ctx.len() + msg.len()` above 484 bytes for the shipped
 /// 26-byte labels returns [`Error::OutputBufferTooSmall`]; the message is
 /// never truncated.
+///
+/// `sig_out` must be at least [`Suite::SIGNATURE_LEN`] bytes; a larger
+/// buffer is accepted, with only the first `SIGNATURE_LEN` bytes written, so
+/// a caller can size one scratch buffer for the largest suite and reuse it
+/// across suites. [`Error::OutputBufferTooSmall`] if it is smaller.
 pub fn sign<S: Suite>(
     sk: &[u8],
     msg: &[u8],
@@ -124,7 +129,10 @@ pub fn sign<S: Suite>(
 /// distinct signatures over one message must either vary `ctx` or use
 /// [`sign`].
 ///
-/// The no-`alloc` message ceiling described on [`sign`] applies here too.
+/// The no-`alloc` message ceiling described on [`sign`] applies here too,
+/// and so does its `sig_out` contract: at least [`Suite::SIGNATURE_LEN`]
+/// bytes, [`Error::OutputBufferTooSmall`] otherwise, a larger buffer
+/// accepted with only the first `SIGNATURE_LEN` bytes written.
 pub fn sign_deterministic<S: Suite>(
     sk: &[u8],
     msg: &[u8],
@@ -179,11 +187,19 @@ type Halves<'a> = (&'a [u8], &'a [u8]);
 type HalvesMut<'a> = (&'a mut [u8], &'a mut [u8]);
 
 /// Split the secret key and the signature buffer into their two halves.
+///
+/// `sig_out` only needs to be *at least* [`Suite::SIGNATURE_LEN`]: see
+/// [`at_least`]. Any bytes beyond that are left untouched and excluded from
+/// the halves handed to the component signers, so a caller that reuses one
+/// scratch buffer sized for the largest suite works for every suite.
 fn split<'a, S: Suite>(sk: &'a [u8], sig_out: &'a mut [u8]) -> Result<(Halves<'a>, HalvesMut<'a>)> {
     exact(sk, S::SECRET_KEY_LEN)?;
-    exact(sig_out, S::SIGNATURE_LEN)?;
+    at_least(sig_out, S::SIGNATURE_LEN)?;
     let sk_split = <S::Classical as ClassicalScheme>::SECRET_KEY_LEN;
-    Ok((sk.split_at(sk_split), sig_out.split_at_mut(S::SPLIT)))
+    Ok((
+        sk.split_at(sk_split),
+        sig_out[..S::SIGNATURE_LEN].split_at_mut(S::SPLIT),
+    ))
 }
 
 pub(crate) fn exact(buf: &[u8], want: usize) -> Result<()> {
@@ -192,6 +208,24 @@ pub(crate) fn exact(buf: &[u8], want: usize) -> Result<()> {
     } else {
         Err(Error::BadLength {
             expected: want,
+            actual: buf.len(),
+        })
+    }
+}
+
+/// Check that an output buffer is large enough, without requiring it be
+/// exactly that size. Every signing entry point that uses this reports the
+/// number of bytes it actually wrote through a separate `sig_written`/return
+/// value, so accepting a larger buffer loses no information and lets a
+/// caller size one scratch buffer for the largest suite and reuse it for
+/// every suite -- unlike [`exact`], which fixed-size inputs (a secret key, a
+/// seed) still need, since there the length itself is part of the encoding.
+pub(crate) fn at_least(buf: &[u8], needed: usize) -> Result<()> {
+    if buf.len() >= needed {
+        Ok(())
+    } else {
+        Err(Error::OutputBufferTooSmall {
+            needed,
             actual: buf.len(),
         })
     }

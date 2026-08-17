@@ -12,7 +12,10 @@
 //! Leaves 1, 2 and 4 are recorded; leaf 3 is spent (state must advance
 //! through it to reach leaf 4) but its signature is not checked, so it is
 //! not persisted.
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
 use pqhybridsign_shrincs::{keygen, ShrincsScheme, H5, H6};
 use std::cell::RefCell;
@@ -21,6 +24,20 @@ use std::rc::Rc;
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter. A journal that has never been bound owns no key.
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
+}
+
+impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    /// Signing refuses a journal that is not the key's.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
 }
 
 impl LeafJournal for MemoryJournal {
@@ -38,6 +55,14 @@ impl LeafJournal for MemoryJournal {
             .copied()
             .max()
             .map_or(0, |m| m + 1)
+    }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
     }
 }
 
@@ -61,7 +86,7 @@ where
         >,
 {
     let (mut sk, pk) = keygen::<S>(&master, MAX_SIGNATURES).expect("keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
 
     let msg1 = leaf_msg(1);
     let sig1 = S::sign_stateful(&mut sk, &mut journal, &msg1, STATEFUL_CTX).expect("leaf 1");
@@ -72,10 +97,13 @@ where
     let msg4 = leaf_msg(4);
     let sig4 = S::sign_stateful(&mut sk, &mut journal, &msg4, STATEFUL_CTX).expect("leaf 4");
 
-    let stateless_a =
-        S::sign_stateless(&sk, STATELESS_MSG, STATELESS_CTX).expect("stateless resign a");
-    let stateless_b =
-        S::sign_stateless(&sk, STATELESS_MSG, STATELESS_CTX).expect("stateless resign b");
+    // One store across both signatures: the two resigns draw on the same
+    // few-time budget, exactly as a deployment's two calls would.
+    let mut budget = MemoryBudget::default();
+    let stateless_a = S::sign_stateless(&sk, &mut budget, STATELESS_MSG, STATELESS_CTX)
+        .expect("stateless resign a");
+    let stateless_b = S::sign_stateless(&sk, &mut budget, STATELESS_MSG, STATELESS_CTX)
+        .expect("stateless resign b");
     assert_eq!(
         stateless_a, stateless_b,
         "the generator itself must observe the byte-identical resign it is pinning"
@@ -150,4 +178,25 @@ fn generate_h5() {
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
 fn generate_h6() {
     emit::<H6>("H6", [0x60u8; 32]);
+}
+
+/// An in-memory `StatelessBudgetStore`. Not durable across a process
+/// restart, which is fine for a test: the property under test is that the
+/// count is consulted and advanced at all, not real persistence. A
+/// deployment must persist this, or the few-time bound of specification
+/// section 21 can be exceeded silently after any restart.
+#[derive(Default)]
+struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+
+impl StatelessBudgetStore for MemoryBudget {
+    type Error = core::convert::Infallible;
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        self.0.get(key.as_bytes()).copied()
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        self.0.insert(*key.as_bytes(), count);
+        Ok(())
+    }
 }

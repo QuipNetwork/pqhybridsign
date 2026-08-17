@@ -192,3 +192,54 @@ fn two_suites_from_one_master_seed_have_independent_keys() {
     assert_ne!(sk2, sk4);
     assert_ne!(pk2, pk4);
 }
+
+/// `sig_out` only needs to be *at least* `MAX_SIGNATURE_LEN`: mirrors
+/// `composite.rs`'s `sig_out_accepts_exact_or_larger_and_rejects_shorter`
+/// for the two `DeltaSuite`s. `signing_reports_a_buffer_that_is_too_small`
+/// above already pins the short case for H2; this rounds it out with H4 and
+/// the accept-larger side of the contract for both.
+#[test]
+fn sig_out_accepts_exact_or_larger_and_rejects_shorter() {
+    fn check<S: DeltaSuite>(seed: u8) {
+        let (sk, pk) = keys::<S>(seed);
+
+        let mut short = vec![0u8; S::MAX_SIGNATURE_LEN - 1];
+        assert_eq!(
+            sign_deterministic::<S>(&sk, b"m", b"", b"n", &mut short),
+            Err(Error::OutputBufferTooSmall {
+                needed: S::MAX_SIGNATURE_LEN,
+                actual: S::MAX_SIGNATURE_LEN - 1,
+            })
+        );
+        let mut rng = CountingRng(1);
+        assert_eq!(
+            sign::<S>(&sk, b"m", b"", &mut rng, &mut short),
+            Err(Error::OutputBufferTooSmall {
+                needed: S::MAX_SIGNATURE_LEN,
+                actual: S::MAX_SIGNATURE_LEN - 1,
+            })
+        );
+
+        let mut exact = vec![0u8; S::MAX_SIGNATURE_LEN];
+        let written =
+            sign_deterministic::<S>(&sk, b"m", b"", b"n", &mut exact).expect("exact-size sig_out");
+        assert!(verify::<S>(&pk, b"m", b"", &exact[..written]));
+
+        let mut oversized = vec![0xffu8; S::MAX_SIGNATURE_LEN + 64];
+        let written = sign_deterministic::<S>(&sk, b"m", b"", b"n", &mut oversized)
+            .expect("oversized sig_out");
+        assert_eq!(
+            oversized[..written],
+            exact[..written],
+            "the written signature must not depend on the buffer's extra length"
+        );
+        assert!(
+            oversized[written..].iter().all(|&b| b == 0xff),
+            "bytes past the written length must be left untouched"
+        );
+        assert!(verify::<S>(&pk, b"m", b"", &oversized[..written]));
+    }
+
+    check::<DeltaH2Test>(31);
+    check::<DeltaH4Test>(32);
+}

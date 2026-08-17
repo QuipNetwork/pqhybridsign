@@ -11,11 +11,27 @@
 
 use std::os::raw::{c_int, c_void};
 
-use pqhybridsign_abi::LeafJournal;
+use pqhybridsign_abi::{
+    BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, KEY_IDENTITY_LEN,
+};
 
-use crate::error::{PQHS_ERR_NULL_POINTER, PQHS_OK};
-use crate::ffi::{borrow_slice, borrow_slice_mut, guard, write_out};
+use crate::error::{PQHS_ERR_ALIASED_BUFFERS, PQHS_ERR_BAD_LENGTH, PQHS_ERR_NULL_POINTER, PQHS_OK};
+use crate::ffi::{borrow_slice, borrow_slice_mut, guard, ranges_overlap, write_out};
 use crate::suite::suite_from_code;
+
+/// Width in bytes of a key identity: the value
+/// [`PqhsLeafJournal::bound_key`] reports, [`PqhsLeafJournal::bind_key`]
+/// stores, and [`pqhs_key_identity`] writes.
+///
+/// Written as a literal rather than as an alias for
+/// `pqhybridsign_abi::KEY_IDENTITY_LEN`, because cbindgen copies the
+/// initialising expression into the header verbatim and a C compiler has no
+/// `KEY_IDENTITY_LEN` to expand. The assertion below is what keeps the two in
+/// step: a change upstream fails this build rather than shipping a header
+/// that disagrees with the library.
+pub const PQHS_KEY_IDENTITY_LEN: usize = 32;
+
+const _: () = assert!(PQHS_KEY_IDENTITY_LEN == KEY_IDENTITY_LEN);
 
 /// A caller-owned durable log of spent one-time leaves, passed to
 /// [`pqhs_sign_stateful`].
@@ -27,18 +43,76 @@ use crate::suite::suite_from_code;
 /// is a total loss of the key's post-quantum security. Returning nonzero
 /// from `commit` MUST mean nothing was recorded.
 ///
-/// `ctx` is passed back unchanged to both callbacks and is never
+/// A journal also records **which key** it belongs to, through `bound_key`
+/// and `bind_key`. That binding is as durable as the counter and is what
+/// separates a journal correctly reopened for its own key from a brand-new
+/// one handed the same key by mistake: both report `0` from `next_leaf` for a
+/// key that has spent nothing, and signing under the second reissues every
+/// leaf the first spent. [`pqhs_sign_stateful`] refuses a journal that is not
+/// bound to the key it was handed, with `PQHS_ERR_JOURNAL_KEY_MISMATCH`;
+/// [`pqhs_adopt_key`] is the one call that creates a binding.
+///
+/// `ctx` is passed back unchanged to every callback and is never
 /// dereferenced by this crate; it exists so a caller can close over its own
 /// state without a second, language-specific registration mechanism.
+///
+/// # No callback may re-enter this library
+///
+/// `commit`, `next_leaf`, `bound_key` and `bind_key` MUST NOT call any
+/// `pqhs_*` function, directly
+/// or indirectly. All run while [`pqhs_sign_stateful`] holds live
+/// references to the caller's `sk`, `sk_out` and `sig_out` buffers, so a
+/// callback that re-enters with any of those buffers is the same aliasing
+/// undefined behaviour `PQHS_ERR_ALIASED_BUFFERS` exists to catch on the
+/// argument list -- and nothing detects it from inside a callback. A
+/// callback that re-enters with the same journal is worse still: it spends
+/// leaves in an order the outer call does not expect, which is exactly the
+/// leaf reuse the journal exists to prevent. Do the work the callback needs
+/// (the durable write) and return.
+///
+/// # Threading
+///
+/// Both callbacks are plain C calls made on whatever thread called
+/// [`pqhs_sign_stateful`]; this library starts no threads and hands the
+/// `ctx` pointer to nothing else.
+///
+/// Every entry point in this library is stateless -- keys, signatures and
+/// leaf state live only in the caller's own buffers, for the duration of
+/// one call -- so calls on different threads over different buffers do not
+/// interact. The one piece of process-wide state is the cached string
+/// behind [`pqhs_profile_name`](crate::pqhs_profile_name), which is
+/// initialised once and never mutated.
+///
+/// What is *not* thread-safe is the caller's own journal. Two threads
+/// signing with the same journal, or with two copies of the same stateful
+/// secret key, can be handed the same leaf. Serialising access to a journal
+/// and to the key blob it tracks is the caller's responsibility, and it is
+/// not optional: a reused leaf is a total loss of the key's post-quantum
+/// security.
 #[repr(C)]
 pub struct PqhsLeafJournal {
-    /// Opaque caller state, passed unchanged to `commit` and `next_leaf`.
+    /// Opaque caller state, passed unchanged to every callback.
     pub ctx: *mut c_void,
     /// Durably record that `leaf` is consumed. Returns `0` on success, or
     /// any nonzero value to report the leaf was not recorded.
     pub commit: Option<extern "C" fn(ctx: *mut c_void, leaf: u32) -> c_int>,
     /// The next unused leaf, as last committed. `0` for a fresh journal.
     pub next_leaf: Option<extern "C" fn(ctx: *mut c_void) -> u32>,
+    /// Report the key this journal belongs to. Returns `0` and writes exactly
+    /// `PQHS_KEY_IDENTITY_LEN` bytes to `out` if a binding exists, or any
+    /// nonzero value -- writing nothing -- if the journal has never been
+    /// bound.
+    ///
+    /// Nonzero MUST mean "never bound", never "could not read". A storage
+    /// error reported as "never bound" invites [`pqhs_adopt_key`] to write a
+    /// binding over one that already exists, which is what forks the leaf
+    /// budget. Fail before constructing the journal instead.
+    pub bound_key: Option<extern "C" fn(ctx: *mut c_void, out: *mut u8, out_len: usize) -> c_int>,
+    /// Durably record that this journal belongs to the
+    /// `PQHS_KEY_IDENTITY_LEN`-byte identity at `key`. Returns `0` once the
+    /// write is durable, or any nonzero value to report that nothing was
+    /// written. The same durability rule `commit` follows.
+    pub bind_key: Option<extern "C" fn(ctx: *mut c_void, key: *const u8, key_len: usize) -> c_int>,
 }
 
 /// Wraps a caller's `&PqhsLeafJournal` as a
@@ -66,6 +140,331 @@ impl LeafJournal for FfiJournal<'_> {
     fn next_leaf(&self) -> u32 {
         self.0.next_leaf.map_or(0, |f| f(self.0.ctx))
     }
+
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        let bound_key = self.0.bound_key?;
+        let mut out = [0u8; KEY_IDENTITY_LEN];
+        // A missing callback and a nonzero return both read as "never
+        // bound", which is the fail-closed answer: signing refuses it, and
+        // `adopt_key` is the only thing that acts on it, under a caller who
+        // asked for exactly that.
+        if bound_key(self.0.ctx, out.as_mut_ptr(), out.len()) != 0 {
+            return None;
+        }
+        Some(KeyIdentity::from_bytes(out))
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        let bind_key = self.0.bind_key.ok_or(())?;
+        let bytes = key.as_bytes();
+        if bind_key(self.0.ctx, bytes.as_ptr(), bytes.len()) == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
+
+/// Width in bytes of a budget key: the value a
+/// [`PqhsStatelessBudget`] callback receives to identify which stateless
+/// material a count belongs to.
+///
+/// Written as a literal for the same reason as [`PQHS_KEY_IDENTITY_LEN`]:
+/// cbindgen copies the initialising expression into the header verbatim, and
+/// a C compiler has no Rust constant to expand. The assertion below keeps it
+/// in step with the library.
+pub const PQHS_BUDGET_KEY_LEN: usize = 32;
+
+const _: () = assert!(PQHS_BUDGET_KEY_LEN == 32);
+
+/// A caller-owned durable record of how much of the few-time stateless
+/// budget each stateless key material has consumed, passed to
+/// [`pqhs_sign_stateless`].
+///
+/// The stateless counterpart of [`PqhsLeafJournal`], and required on the
+/// same terms: [`pqhs_sign_stateless`] cannot be called without one. The
+/// stateless path has a hard security bound of its own -- `2^20` signatures,
+/// `2^18` under the low-budget profile -- shared with rotation and recovery,
+/// and exceeding it degrades the security assumption of the underlying
+/// few-time scheme. It is not a quota to enforce loosely.
+///
+/// `record` MUST NOT return until the count is durably stored, for the same
+/// reason [`PqhsLeafJournal::commit`] must not: a crash after `record`
+/// returns `0` but before the write reaches stable storage hands the same
+/// unit of budget out again after a restart, and enough of those exceed the
+/// bound with nothing reporting it. Returning nonzero from `record` MUST
+/// mean nothing was stored.
+///
+/// Entries are keyed by a `PQHS_BUDGET_KEY_LEN`-byte value derived from the
+/// key's stateless material (`pkSeed || hypertreeRoot`), so one store serves
+/// every key an integrator holds and there is no separate binding step: two
+/// keys sharing stateless material always produce the same budget key, and
+/// two keys with different stateless material never do. A rotation that does
+/// not change that material therefore continues the same count rather than
+/// starting a new one, which is exactly what stops a rotation from refilling
+/// the bound.
+///
+/// `ctx` is passed back unchanged to every callback and is never
+/// dereferenced by this crate.
+///
+/// # No callback may re-enter this library
+///
+/// `consumed` and `record` MUST NOT call any `pqhs_*` function, directly or
+/// indirectly, on the same terms as [`PqhsLeafJournal`]'s callbacks: they
+/// run while [`pqhs_sign_stateless`] holds live references to the caller's
+/// `sk` and `sig_out` buffers.
+///
+/// # Threading
+///
+/// As with [`PqhsLeafJournal`], the callbacks are plain C calls on the
+/// calling thread, and serialising access to the store is the caller's
+/// responsibility. Two threads signing against one unserialised store can
+/// each read the same count and each write back the same increment, which
+/// loses one spend per race and lets the bound be exceeded.
+#[repr(C)]
+pub struct PqhsStatelessBudget {
+    /// Opaque caller state, passed unchanged to every callback.
+    pub ctx: *mut c_void,
+    /// Report how many stateless signatures have already been produced for
+    /// the `PQHS_BUDGET_KEY_LEN`-byte budget key at `key`. Returns `0` and
+    /// writes the count to `out_consumed` if this material is tracked, or
+    /// any nonzero value -- writing nothing -- if it has never been tracked.
+    ///
+    /// Nonzero MUST mean "never tracked", never "could not read". A storage
+    /// error reported as "never tracked" is read here as a count of zero,
+    /// which hands the caller a full budget for material that may have spent
+    /// most of it. Fail before constructing the store instead.
+    pub consumed: Option<
+        extern "C" fn(
+            ctx: *mut c_void,
+            key: *const u8,
+            key_len: usize,
+            out_consumed: *mut u64,
+        ) -> c_int,
+    >,
+    /// Durably record that `count` stateless signatures have now been
+    /// produced for the `PQHS_BUDGET_KEY_LEN`-byte budget key at `key`.
+    /// Returns `0` once the write is durable, or any nonzero value to report
+    /// that nothing was stored.
+    pub record: Option<
+        extern "C" fn(ctx: *mut c_void, key: *const u8, key_len: usize, count: u64) -> c_int,
+    >,
+}
+
+/// Wraps a caller's `&PqhsStatelessBudget` as a
+/// [`pqhybridsign_abi::StatelessBudgetStore`], on the same terms as
+/// [`FfiJournal`].
+struct FfiBudget<'a>(&'a PqhsStatelessBudget);
+
+impl StatelessBudgetStore for FfiBudget<'_> {
+    /// The callback reported failure; no further detail crosses the FFI
+    /// boundary for this path (see [`PqhsStatelessBudget::record`]).
+    type Error = ();
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        let consumed = self.0.consumed?;
+        let bytes = key.as_bytes();
+        let mut out = 0u64;
+        // A missing callback and a nonzero return both read as "never
+        // tracked". That is the permissive answer rather than the
+        // fail-closed one, which is why the callback's contract forbids
+        // reporting a read failure this way: the store, not this crate, is
+        // the only place that can tell a missing entry from an unreadable
+        // one.
+        if consumed(self.0.ctx, bytes.as_ptr(), bytes.len(), &mut out) != 0 {
+            return None;
+        }
+        Some(out)
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        let record = self.0.record.ok_or(())?;
+        let bytes = key.as_bytes();
+        if record(self.0.ctx, bytes.as_ptr(), bytes.len(), count) == 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
+
+/// Bind `journal` to the key `key` names, unless it already belongs to a
+/// different key.
+///
+/// This is the explicit act an integrator performs once, when a key's durable
+/// journal is first created. [`pqhs_sign_stateful`] never does it: pairing a
+/// key with a journal that has never seen it is how one key's one-time leaves
+/// get spent twice, and it is refused with `PQHS_ERR_JOURNAL_KEY_MISMATCH`
+/// rather than silently accepted.
+///
+/// `key` is the [`PQHS_KEY_IDENTITY_LEN`]-byte value
+/// [`pqhs_key_identity`] or [`pqhs_key_identity_from_secret_key`] produced.
+/// Calling this is idempotent for a journal already bound to `key`.
+///
+/// Do not call it on a fresh journal at every process start: that mints a new
+/// binding each time and starts the leaf budget over, which is the defect the
+/// binding exists to close.
+///
+/// # Errors
+///
+/// `PQHS_ERR_NULL_POINTER` if `journal` or `key` is null, or if
+/// `journal->bound_key` or `journal->bind_key` is null.
+/// `PQHS_ERR_BAD_LENGTH` if `key_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+/// `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal` already belongs to another
+/// key; nothing is written. `PQHS_ERR_JOURNAL_FAILED` if `bind_key` reported
+/// the write did not become durable.
+///
+/// # Safety
+///
+/// `journal`, if non-null, must point to a valid `PqhsLeafJournal` whose
+/// `ctx` is a pointer its own callbacks are prepared to receive, and whose
+/// callbacks do not call back into this library (see [`PqhsLeafJournal`]).
+/// `key`, if non-null, must be valid for reads for `key_len` bytes for the
+/// duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_adopt_key(
+    journal: *const PqhsLeafJournal,
+    key: *const u8,
+    key_len: usize,
+) -> c_int {
+    guard(move || {
+        if journal.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // SAFETY: `journal` is non-null, checked above; the caller
+        // guarantees it is valid for reads for the duration of this call.
+        let journal_ref = unsafe { &*journal };
+        if journal_ref.bound_key.is_none() || journal_ref.bind_key.is_none() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        let key = match unsafe { borrow_slice(key, key_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let Ok(bytes) = <[u8; KEY_IDENTITY_LEN]>::try_from(key) else {
+            return PQHS_ERR_BAD_LENGTH;
+        };
+        let mut ffi_journal = FfiJournal(journal_ref);
+        match pqhybridsign_abi::adopt_key(&mut ffi_journal, KeyIdentity::from_bytes(bytes)) {
+            Ok(()) => PQHS_OK,
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key `pk`
+/// describes into `out`.
+///
+/// `pk` is the verify-form public key
+/// [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
+/// wrote, exactly [`pqhs_public_key_len`](crate::pqhs_public_key_len) bytes
+/// for `suite`. It is public material, so this identity can be computed
+/// without ever holding the secret key.
+///
+/// # Errors
+///
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4, which have no journal
+/// and so no identity. `PQHS_ERR_BAD_LENGTH` if `pk` is not the suite's
+/// public key length or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+/// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is null.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `pk`, writes for `out`) for exactly its paired length in
+/// bytes, and must not be aliased by another live pointer for the duration of
+/// this call. A null pointer is only valid when its paired length is `0`.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_key_identity(
+    suite: u8,
+    pk: *const u8,
+    pk_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> c_int {
+    guard(move || {
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let pk = match unsafe { borrow_slice(pk, pk_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let out = match unsafe { borrow_slice_mut(out, out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        write_identity(pqhybridsign_abi::key_identity(suite, pk), out)
+    })
+}
+
+/// Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key an exported
+/// secret key blob holds into `out`.
+///
+/// The same value [`pqhs_key_identity`] writes for the matching public key:
+/// it comes from the blob's cached post-quantum verify key, which is public,
+/// and no secret byte reaches it. This exists because the restart path has
+/// the blob in hand and may not have kept the public key.
+///
+/// # Errors
+///
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4. `PQHS_ERR_BAD_LENGTH` if
+/// `sk` is not [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for
+/// `suite` or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+/// `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
+/// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is null.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `sk`, writes for `out`) for exactly its paired length in
+/// bytes, and must not be aliased by another live pointer for the duration of
+/// this call. A null pointer is only valid when its paired length is `0`.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_key_identity_from_secret_key(
+    suite: u8,
+    sk: *const u8,
+    sk_len: usize,
+    out: *mut u8,
+    out_len: usize,
+) -> c_int {
+    guard(move || {
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sk = match unsafe { borrow_slice(sk, sk_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let out = match unsafe { borrow_slice_mut(out, out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        write_identity(
+            pqhybridsign_abi::key_identity_from_secret_key(suite, sk),
+            out,
+        )
+    })
+}
+
+/// Shared tail of the two identity entry points: check the output length,
+/// then copy the identity out.
+fn write_identity(
+    identity: Result<KeyIdentity, pqhybridsign_abi::AbiError>,
+    out: &mut [u8],
+) -> c_int {
+    if out.len() != KEY_IDENTITY_LEN {
+        return PQHS_ERR_BAD_LENGTH;
+    }
+    match identity {
+        Ok(identity) => {
+            out.copy_from_slice(identity.as_bytes());
+            PQHS_OK
+        }
+        Err(e) => crate::error::code_of(e),
+    }
 }
 
 /// Sign `msg` under `ctx` for `suite`, spending one leaf recorded through
@@ -81,8 +480,22 @@ impl LeafJournal for FfiJournal<'_> {
 /// Writing `sk_out` unconditionally in that case keeps the caller's copy of
 /// the key in step with the journal; skipping it is exactly the
 /// silent-leaf-drift failure mode this entry point exists to rule out.
-/// `sk_out` is not written if `sk` fails to import or if `sk_out` itself is
-/// the wrong length.
+/// `sk_out` is not written if `sk` fails to import, which happens before
+/// any leaf is spent.
+///
+/// Every argument check -- the suite, the pointers, and the lengths of
+/// `sk` and `sk_out` -- happens before the component signer runs, so a
+/// rejected call has spent nothing and left `journal` untouched. That
+/// ordering is what makes an error code safe to act on: an error raised
+/// after a leaf had been committed but before the advanced key was handed
+/// back would leave `journal` permanently ahead of every copy of the key
+/// the caller holds, and the key unusable for the rest of its budget.
+///
+/// `sk` and `sk_out` must be separate buffers. Passing the same buffer for
+/// both -- the natural way to write an in-place key update in C -- is
+/// `PQHS_ERR_ALIASED_BUFFERS`, and so is any partial overlap between them.
+/// Copy `sk` into `sk_out`'s buffer afterwards if that is the shape the
+/// integration wants.
 ///
 /// # Errors
 ///
@@ -90,12 +503,16 @@ impl LeafJournal for FfiJournal<'_> {
 /// [`pqhs_sign`](crate::pqhs_sign) or
 /// [`pqhs_sign_deterministic`](crate::pqhs_sign_deterministic) instead.
 /// `PQHS_ERR_BAD_LENGTH` if `sk` or `sk_out` is not exactly
-/// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
-/// `PQHS_ERR_LEAVES_EXHAUSTED` if the key's leaf budget is spent, checked
-/// before the journal is touched. `PQHS_ERR_JOURNAL_FAILED` if `journal`
-/// could not durably commit; nothing was spent. `PQHS_ERR_NULL_POINTER` if
-/// `journal` is null or either of its callbacks is null, or if any buffer
-/// pointer paired with a nonzero length is null.
+/// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`,
+/// checked before the journal is touched. `PQHS_ERR_LEAVES_EXHAUSTED` if
+/// the key's leaf budget is spent, also checked before the journal is
+/// touched. `PQHS_ERR_JOURNAL_FAILED` if `journal` could not durably
+/// commit; nothing was spent. `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal`
+/// is not bound to this key; nothing was spent and the key is intact.
+/// `PQHS_ERR_NULL_POINTER` if `journal` is null
+/// or any of its four callbacks is null, if `sig_written` is null, or if any
+/// buffer pointer paired with a nonzero length is null.
+/// `PQHS_ERR_ALIASED_BUFFERS` if `sk` and `sk_out` overlap.
 ///
 /// # Safety
 ///
@@ -103,9 +520,13 @@ impl LeafJournal for FfiJournal<'_> {
 /// access (reads for `sk`/`journal`/`msg`/`ctx`, writes for
 /// `sk_out`/`sig_out`/`sig_written`) for exactly its paired length in
 /// bytes, and must not be aliased by another live pointer for the duration
-/// of this call. A null pointer is only valid when its paired length is
-/// `0`; `journal`, if non-null, must point to a valid `PqhsLeafJournal`
-/// whose `ctx` is a pointer its own callbacks are prepared to receive.
+/// of this call. The `sk`/`sk_out` pair is the one overlap this function
+/// detects and refuses rather than leaving to the caller; every other pair
+/// is still the caller's obligation. A null pointer is only valid when its
+/// paired length is `0`; `journal`, if non-null, must point to a valid
+/// `PqhsLeafJournal` whose `ctx` is a pointer its own callbacks are
+/// prepared to receive, and whose callbacks do not call back into this
+/// library (see [`PqhsLeafJournal`]).
 #[no_mangle]
 pub unsafe extern "C" fn pqhs_sign_stateful(
     suite: u8,
@@ -130,10 +551,45 @@ pub unsafe extern "C" fn pqhs_sign_stateful(
         if journal.is_null() {
             return PQHS_ERR_NULL_POINTER;
         }
+        // Checked with the other pointers rather than at the `write_out`
+        // that consumes it. Discovering it at the end of the success path
+        // returns an error for a call that has already spent a leaf and
+        // written a valid signature, and a caller reading that as a
+        // rejection signs the same message again -- burning a second leaf.
+        if sig_written.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // Refused before either slice exists. Manufacturing a `&[u8]` and a
+        // `&mut [u8]` over the same bytes violates Rust's exclusivity rule
+        // and reaches the optimizer with `noalias` on both, so it is
+        // undefined behaviour rather than merely unspecified -- and the
+        // corruption it would license is a wrong leaf counter in a stateful
+        // secret key, which is silent, not a crash. Partial overlap is the
+        // same defect as the exact `sk_out == sk` case and is caught too.
+        //
+        // Two null pointers both read as address zero, which would look
+        // like an overlap. Skip them: the borrow helpers below report
+        // `PQHS_ERR_NULL_POINTER` for a null buffer, which tells the caller
+        // more than an aliasing complaint would.
+        if !sk.is_null()
+            && !sk_out.is_null()
+            && ranges_overlap(sk, sk_len, sk_out.cast_const(), sk_out_len)
+        {
+            return PQHS_ERR_ALIASED_BUFFERS;
+        }
         // SAFETY: `journal` is non-null, checked above; the caller
         // guarantees it is valid for reads for the duration of this call.
         let journal_ref = unsafe { &*journal };
-        if journal_ref.commit.is_none() || journal_ref.next_leaf.is_none() {
+        // All four, not just the two the signing flow calls on the success
+        // path: a journal with no `bound_key` reports "never bound" for every
+        // key, which would come back as `PQHS_ERR_JOURNAL_KEY_MISMATCH` and
+        // send an integrator hunting a binding problem that is really a
+        // half-filled vtable.
+        if journal_ref.commit.is_none()
+            || journal_ref.next_leaf.is_none()
+            || journal_ref.bound_key.is_none()
+            || journal_ref.bind_key.is_none()
+        {
             return PQHS_ERR_NULL_POINTER;
         }
         let sk = match unsafe { borrow_slice(sk, sk_len) } {
@@ -176,7 +632,14 @@ pub unsafe extern "C" fn pqhs_sign_stateful(
 }
 
 /// Sign `msg` under `ctx` for `suite` without spending any leaf state, using
-/// SHRINCS's stateless few-time path (specification section 21).
+/// SHRINCS's stateless few-time path (specification section 21), and
+/// spending one unit of the few-time stateless budget.
+///
+/// `budget` is required. The stateless path has a hard bound of its own,
+/// shared with rotation and recovery, and the spend is made durable through
+/// `budget` before the signature is built -- the same order
+/// [`pqhs_sign_stateful`] commits its leaf in. See [`PqhsStatelessBudget`]
+/// for the durability contract the callbacks must honour.
 ///
 /// # Errors
 ///
@@ -184,7 +647,12 @@ pub unsafe extern "C" fn pqhs_sign_stateful(
 /// if `sk` is not exactly
 /// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
 /// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
-/// null, or if `sig_written` is null.
+/// null, if `sig_written` is null, if `budget` is null, or if either of
+/// `budget`'s callbacks is null.
+/// `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's stateless budget is
+/// spent; nothing was recorded and no signature was built.
+/// `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+/// become durable; nothing was recorded either.
 ///
 /// # Safety
 ///
@@ -193,12 +661,16 @@ pub unsafe extern "C" fn pqhs_sign_stateful(
 /// for exactly its paired length in bytes, and must not be aliased by
 /// another live pointer for the duration of this call. A null pointer is
 /// only valid when its paired length is `0`; `sig_written` has no paired
-/// length and must be a valid, non-null, writable `usize` pointer.
+/// length and must be a valid, non-null, writable `usize` pointer. `budget`
+/// must point to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its
+/// own callbacks are prepared to receive, and whose callbacks do not call
+/// back into this library.
 #[no_mangle]
 pub unsafe extern "C" fn pqhs_sign_stateless(
     suite: u8,
     sk: *const u8,
     sk_len: usize,
+    budget: *const PqhsStatelessBudget,
     msg: *const u8,
     msg_len: usize,
     ctx: *const u8,
@@ -212,6 +684,25 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
             Ok(s) => s,
             Err(e) => return e,
         };
+        // See `pqhs_sign_stateful` for why this is checked here and not at
+        // the `write_out` that consumes it.
+        if sig_written.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if budget.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // SAFETY: `budget` is non-null, checked above; the caller
+        // guarantees it is valid for reads for the duration of this call.
+        let budget_ref = unsafe { &*budget };
+        // Both callbacks are checked here rather than at the point of use.
+        // A missing `record` would otherwise surface as
+        // `PQHS_ERR_BUDGET_STORE_FAILED`, which tells a caller their storage
+        // is broken when in fact their vtable is incomplete, and a missing
+        // `consumed` would silently read as a full budget.
+        if budget_ref.consumed.is_none() || budget_ref.record.is_none() {
+            return PQHS_ERR_NULL_POINTER;
+        }
         let sk = match unsafe { borrow_slice(sk, sk_len) } {
             Ok(s) => s,
             Err(e) => return e,
@@ -228,7 +719,8 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
             Ok(s) => s,
             Err(e) => return e,
         };
-        match pqhybridsign_abi::sign_stateless(suite, sk, msg, ctx, sig_out) {
+        let mut ffi_budget = FfiBudget(budget_ref);
+        match pqhybridsign_abi::sign_stateless(suite, sk, &mut ffi_budget, msg, ctx, sig_out) {
             Ok(n) => match unsafe { write_out(sig_written, n) } {
                 Ok(()) => PQHS_OK,
                 Err(e) => e,
@@ -247,6 +739,15 @@ mod tests {
 
     thread_local! {
         static COMMITTED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+        /// The durable binding the test journal holds, alongside its
+        /// counter. `None` is a journal that has never been bound to a key.
+        static BOUND: RefCell<Option<[u8; PQHS_KEY_IDENTITY_LEN]>> =
+            const { RefCell::new(None) };
+        /// What the stateless budget store has on record, as
+        /// `(budget key, count)` pairs. A linear scan is enough: the tests
+        /// here use one or two keys at a time.
+        static SPENT: RefCell<Vec<([u8; PQHS_BUDGET_KEY_LEN], u64)>> =
+            const { RefCell::new(Vec::new()) };
     }
 
     extern "C" fn test_commit(_ctx: *mut c_void, leaf: u32) -> c_int {
@@ -260,6 +761,146 @@ mod tests {
 
     extern "C" fn failing_commit(_ctx: *mut c_void, _leaf: u32) -> c_int {
         1
+    }
+
+    extern "C" fn test_bound_key(_ctx: *mut c_void, out: *mut u8, out_len: usize) -> c_int {
+        BOUND.with(|b| match *b.borrow() {
+            None => 1,
+            Some(key) => {
+                if out.is_null() || out_len != PQHS_KEY_IDENTITY_LEN {
+                    return 1;
+                }
+                // SAFETY: `out` is non-null and the caller (this crate's own
+                // `FfiJournal`) passes a buffer of exactly `out_len` bytes.
+                unsafe { std::ptr::copy_nonoverlapping(key.as_ptr(), out, out_len) };
+                0
+            }
+        })
+    }
+
+    extern "C" fn test_bind_key(_ctx: *mut c_void, key: *const u8, key_len: usize) -> c_int {
+        if key.is_null() || key_len != PQHS_KEY_IDENTITY_LEN {
+            return 1;
+        }
+        let mut bytes = [0u8; PQHS_KEY_IDENTITY_LEN];
+        // SAFETY: `key` is non-null and valid for `key_len` bytes, which the
+        // check above pins to the size of `bytes`.
+        unsafe { std::ptr::copy_nonoverlapping(key, bytes.as_mut_ptr(), key_len) };
+        BOUND.with(|b| *b.borrow_mut() = Some(bytes));
+        0
+    }
+
+    extern "C" fn test_consumed(
+        _ctx: *mut c_void,
+        key: *const u8,
+        key_len: usize,
+        out_consumed: *mut u64,
+    ) -> c_int {
+        if key.is_null() || key_len != PQHS_BUDGET_KEY_LEN || out_consumed.is_null() {
+            return 1;
+        }
+        // SAFETY: `key` is non-null and valid for `key_len` bytes, pinned to
+        // the size of the array by the check above.
+        let bytes: [u8; PQHS_BUDGET_KEY_LEN] = unsafe { std::slice::from_raw_parts(key, key_len) }
+            .try_into()
+            .unwrap_or([0u8; PQHS_BUDGET_KEY_LEN]);
+        SPENT.with(
+            |spent| match spent.borrow().iter().find(|(k, _)| *k == bytes) {
+                // Never tracked: the store has nothing to report for this
+                // material, which is a different answer from "zero spent".
+                None => 1,
+                Some((_, count)) => {
+                    // SAFETY: `out_consumed` is non-null, checked above, and the
+                    // caller passes a live `u64`.
+                    unsafe { *out_consumed = *count };
+                    0
+                }
+            },
+        )
+    }
+
+    extern "C" fn test_record(
+        _ctx: *mut c_void,
+        key: *const u8,
+        key_len: usize,
+        count: u64,
+    ) -> c_int {
+        if key.is_null() || key_len != PQHS_BUDGET_KEY_LEN {
+            return 1;
+        }
+        // SAFETY: as `test_consumed` above.
+        let bytes: [u8; PQHS_BUDGET_KEY_LEN] = unsafe { std::slice::from_raw_parts(key, key_len) }
+            .try_into()
+            .unwrap_or([0u8; PQHS_BUDGET_KEY_LEN]);
+        SPENT.with(|spent| {
+            let mut spent = spent.borrow_mut();
+            match spent.iter_mut().find(|(k, _)| *k == bytes) {
+                Some(entry) => entry.1 = count,
+                None => spent.push((bytes, count)),
+            }
+        });
+        0
+    }
+
+    extern "C" fn failing_record(
+        _ctx: *mut c_void,
+        _key: *const u8,
+        _key_len: usize,
+        _count: u64,
+    ) -> c_int {
+        1
+    }
+
+    /// The stateless budget store every test below uses: a full vtable over
+    /// the `SPENT` thread-local.
+    fn test_budget() -> PqhsStatelessBudget {
+        PqhsStatelessBudget {
+            ctx: std::ptr::null_mut(),
+            consumed: Some(test_consumed),
+            record: Some(test_record),
+        }
+    }
+
+    /// The journal every test below uses: a full vtable over the two
+    /// thread-locals above.
+    fn test_journal() -> PqhsLeafJournal {
+        PqhsLeafJournal {
+            ctx: std::ptr::null_mut(),
+            commit: Some(test_commit),
+            next_leaf: Some(test_next_leaf),
+            bound_key: Some(test_bound_key),
+            bind_key: Some(test_bind_key),
+        }
+    }
+
+    /// The identity of the key `pk` names.
+    fn identity_of(suite: u8, pk: &[u8]) -> [u8; PQHS_KEY_IDENTITY_LEN] {
+        let mut out = [0u8; PQHS_KEY_IDENTITY_LEN];
+        // SAFETY: both pointers are live local buffers of exactly the
+        // lengths passed alongside them.
+        let rc =
+            unsafe { pqhs_key_identity(suite, pk.as_ptr(), pk.len(), out.as_mut_ptr(), out.len()) };
+        assert_eq!(rc, PQHS_OK);
+        out
+    }
+
+    /// Reset the shared test journal and bind it to the key `pk` names.
+    ///
+    /// Signing refuses a journal that is not the key's, so every test that
+    /// signs starts from a journal provisioned for its key -- which is what
+    /// an integrator does once, when the key's durable store is created.
+    /// Resetting the binding first is a test convenience: the one store here
+    /// stands in for a different durable journal per key.
+    fn provision_journal(suite: u8, pk: &[u8]) {
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        SPENT.with(|s| s.borrow_mut().clear());
+        BOUND.with(|b| *b.borrow_mut() = None);
+        let identity = identity_of(suite, pk);
+        let journal = test_journal();
+        // SAFETY: `journal` and `identity` are live locals for the duration
+        // of the call.
+        let rc = unsafe { pqhs_adopt_key(&journal, identity.as_ptr(), identity.len()) };
+        assert_eq!(rc, PQHS_OK);
     }
 
     fn h5_keypair(seed: u8) -> (Vec<u8>, Vec<u8>) {
@@ -282,6 +923,7 @@ mod tests {
             )
         };
         assert_eq!(rc, PQHS_OK);
+        provision_journal(5, &pk);
         (sk, pk)
     }
 
@@ -289,11 +931,7 @@ mod tests {
     fn h5_stateful_sign_and_verify_round_trip() {
         COMMITTED.with(|c| c.borrow_mut().clear());
         let (sk, pk) = h5_keypair(11);
-        let journal = PqhsLeafJournal {
-            ctx: std::ptr::null_mut(),
-            commit: Some(test_commit),
-            next_leaf: Some(test_next_leaf),
-        };
+        let journal = test_journal();
 
         let msg = b"stateful message";
         let mut sk_out = vec![0u8; sk.len()];
@@ -345,13 +983,257 @@ mod tests {
         assert!(valid);
     }
 
+    /// The pqhs-aww reproduction across the C boundary: one key blob, a
+    /// second journal that has never been bound to it. Both journals report
+    /// leaf `0`, so nothing but the binding can separate them.
+    ///
+    /// Leaf indices here are signer-side and zero-based, not the one-based
+    /// wire `LeafCount`.
+    #[test]
+    fn a_journal_that_never_adopted_this_key_is_refused_across_the_boundary() {
+        let (sk, pk) = h5_keypair(21);
+        let msg = b"message one";
+        let mut sk_out = vec![0u8; sk.len()];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+        let journal = test_journal();
+
+        // The key's own journal signs.
+        // SAFETY: every pointer below is either null with a zero length or
+        // points at a live, correctly sized local buffer for the duration
+        // of the call.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &journal,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert_eq!(COMMITTED.with(|c| c.borrow().clone()), vec![0]);
+
+        // A second store: never committed anything, never bound to any key.
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        BOUND.with(|b| *b.borrow_mut() = None);
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &journal,
+                b"message two".as_ptr(),
+                11,
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, crate::error::PQHS_ERR_JOURNAL_KEY_MISMATCH);
+        assert!(
+            COMMITTED.with(|c| c.borrow().is_empty()),
+            "the refusal lands before any leaf is committed"
+        );
+
+        // A journal bound to another key is refused on the same terms.
+        let (_other_sk, other_pk) = h5_keypair(22);
+        assert_ne!(identity_of(5, &pk), identity_of(5, &other_pk));
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &journal,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, crate::error::PQHS_ERR_JOURNAL_KEY_MISMATCH);
+        assert!(COMMITTED.with(|c| c.borrow().is_empty()));
+    }
+
+    /// `pqhs_adopt_key` binds once, is idempotent for the same key, and
+    /// refuses a second key. `pqhs_key_identity` and
+    /// `pqhs_key_identity_from_secret_key` agree.
+    #[test]
+    fn adopting_binds_one_key_and_refuses_another() {
+        let (sk, pk) = h5_keypair(23);
+        let identity = identity_of(5, &pk);
+
+        let mut from_sk = [0u8; PQHS_KEY_IDENTITY_LEN];
+        // SAFETY: both pointers are live locals of exactly the lengths
+        // passed alongside them.
+        let rc = unsafe {
+            pqhs_key_identity_from_secret_key(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                from_sk.as_mut_ptr(),
+                from_sk.len(),
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert_eq!(from_sk, identity, "public and secret name the same key");
+
+        let journal = test_journal();
+        // Already bound by `h5_keypair`; re-adopting the same key is a
+        // no-op, so a provisioning step can be re-run.
+        // SAFETY: as above.
+        let rc = unsafe { pqhs_adopt_key(&journal, identity.as_ptr(), identity.len()) };
+        assert_eq!(rc, PQHS_OK);
+
+        // A different key is refused, and the existing binding stands.
+        let mut other_pk = vec![0u8; pk.len()];
+        let mut other_sk = vec![0u8; sk.len()];
+        let seed = [24u8; 32];
+        // SAFETY: as above.
+        let rc = unsafe {
+            crate::keygen::pqhs_keygen_stateful_from_seed(
+                5,
+                seed.as_ptr(),
+                32,
+                4,
+                other_sk.as_mut_ptr(),
+                other_sk.len(),
+                other_pk.as_mut_ptr(),
+                other_pk.len(),
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let other = identity_of(5, &other_pk);
+        // SAFETY: as above.
+        let rc = unsafe { pqhs_adopt_key(&journal, other.as_ptr(), other.len()) };
+        assert_eq!(rc, crate::error::PQHS_ERR_JOURNAL_KEY_MISMATCH);
+        assert_eq!(
+            BOUND.with(|b| *b.borrow()),
+            Some(identity),
+            "a refused adoption must not overwrite the binding"
+        );
+    }
+
+    #[test]
+    fn the_identity_entry_points_check_their_pointers_and_lengths() {
+        let (sk, pk) = h5_keypair(25);
+        let mut out = [0u8; PQHS_KEY_IDENTITY_LEN];
+        let identity = identity_of(5, &pk);
+
+        // SAFETY: every pointer below is either the null under test, or a
+        // live local of the length passed alongside it.
+        unsafe {
+            assert_eq!(
+                pqhs_key_identity(9, pk.as_ptr(), pk.len(), out.as_mut_ptr(), out.len()),
+                crate::error::PQHS_ERR_INVALID_SUITE
+            );
+            assert_eq!(
+                pqhs_key_identity(1, pk.as_ptr(), pk.len(), out.as_mut_ptr(), out.len()),
+                crate::error::PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE
+            );
+            assert_eq!(
+                pqhs_key_identity(5, pk.as_ptr(), pk.len() - 1, out.as_mut_ptr(), out.len()),
+                crate::error::PQHS_ERR_BAD_LENGTH
+            );
+            assert_eq!(
+                pqhs_key_identity(5, pk.as_ptr(), pk.len(), out.as_mut_ptr(), out.len() - 1),
+                crate::error::PQHS_ERR_BAD_LENGTH
+            );
+            assert_eq!(
+                pqhs_key_identity(5, std::ptr::null(), pk.len(), out.as_mut_ptr(), out.len()),
+                PQHS_ERR_NULL_POINTER
+            );
+            assert_eq!(
+                pqhs_key_identity_from_secret_key(
+                    5,
+                    sk.as_ptr(),
+                    sk.len() - 1,
+                    out.as_mut_ptr(),
+                    out.len()
+                ),
+                crate::error::PQHS_ERR_BAD_LENGTH
+            );
+            assert_eq!(
+                pqhs_adopt_key(std::ptr::null(), identity.as_ptr(), identity.len()),
+                PQHS_ERR_NULL_POINTER
+            );
+        }
+
+        // A journal missing either binding callback is a half-filled vtable,
+        // not a binding failure, so it is a null-pointer error rather than
+        // `PQHS_ERR_JOURNAL_KEY_MISMATCH`.
+        let no_bound_key = PqhsLeafJournal {
+            bound_key: None,
+            ..test_journal()
+        };
+        let no_bind_key = PqhsLeafJournal {
+            bind_key: None,
+            ..test_journal()
+        };
+        let mut sk_out = vec![0u8; sk.len()];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+        // SAFETY: as above.
+        unsafe {
+            assert_eq!(
+                pqhs_adopt_key(&no_bound_key, identity.as_ptr(), identity.len()),
+                PQHS_ERR_NULL_POINTER
+            );
+            assert_eq!(
+                pqhs_adopt_key(&no_bind_key, identity.as_ptr(), identity.len()),
+                PQHS_ERR_NULL_POINTER
+            );
+            assert_eq!(
+                pqhs_adopt_key(&test_journal(), identity.as_ptr(), identity.len() - 1),
+                crate::error::PQHS_ERR_BAD_LENGTH
+            );
+            assert_eq!(
+                pqhs_sign_stateful(
+                    5,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &no_bound_key,
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    sk_out.as_mut_ptr(),
+                    sk_out.len(),
+                    sig.as_mut_ptr(),
+                    sig.len(),
+                    &mut n,
+                ),
+                PQHS_ERR_NULL_POINTER
+            );
+        }
+        assert!(COMMITTED.with(|c| c.borrow().is_empty()));
+    }
+
     #[test]
     fn a_failing_journal_reports_journal_failed_and_spends_nothing() {
         let (sk, _pk) = h5_keypair(12);
         let journal = PqhsLeafJournal {
-            ctx: std::ptr::null_mut(),
             commit: Some(failing_commit),
-            next_leaf: Some(test_next_leaf),
+            ..test_journal()
         };
         let msg = b"m";
         let mut sk_out = vec![0u8; sk.len()];
@@ -410,9 +1292,8 @@ mod tests {
         assert_eq!(rc, crate::error::PQHS_ERR_NULL_POINTER);
 
         let half_journal = PqhsLeafJournal {
-            ctx: std::ptr::null_mut(),
-            commit: Some(test_commit),
             next_leaf: None,
+            ..test_journal()
         };
         // SAFETY: as above.
         let rc = unsafe {
@@ -435,6 +1316,210 @@ mod tests {
         assert_eq!(rc, crate::error::PQHS_ERR_NULL_POINTER);
     }
 
+    /// The in-place idiom -- one buffer passed as both `sk` and `sk_out` --
+    /// is undefined behaviour, so it is refused rather than left to appear
+    /// to work. A partial overlap is the same defect and the likelier
+    /// accident.
+    #[test]
+    fn aliased_sk_and_sk_out_are_refused_and_spend_nothing() {
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        let (sk, _pk) = h5_keypair(15);
+        let journal = test_journal();
+        let mut buf = sk.clone();
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+
+        // Exactly the same range for both.
+        // SAFETY: `buf` is a live, correctly sized local buffer; passing it
+        // twice is the condition under test, and the call rejects it before
+        // constructing either slice.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                buf.as_ptr(),
+                buf.len(),
+                &journal,
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, crate::error::PQHS_ERR_ALIASED_BUFFERS);
+
+        // Partially overlapping ranges inside one allocation.
+        let mut wide = vec![0u8; sk.len() * 2];
+        wide[..sk.len()].copy_from_slice(&sk);
+        // SAFETY: both ranges lie inside `wide`, which outlives the call.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                wide.as_ptr(),
+                sk.len(),
+                &journal,
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                wide.as_mut_ptr().add(sk.len() / 2),
+                sk.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, crate::error::PQHS_ERR_ALIASED_BUFFERS);
+
+        assert!(
+            COMMITTED.with(|c| c.borrow().is_empty()),
+            "an aliased call must be refused before any leaf is spent"
+        );
+        assert_eq!(buf, sk, "an aliased call must not write through sk_out");
+    }
+
+    /// A null `sig_written` used to be discovered at the end of the success
+    /// path, after the leaf was spent and the signature written -- so a
+    /// caller reading `PQHS_ERR_NULL_POINTER` as a rejected call would sign
+    /// again and burn a second leaf.
+    #[test]
+    fn a_null_sig_written_is_refused_before_any_leaf_is_spent() {
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        let (sk, _pk) = h5_keypair(16);
+        let journal = test_journal();
+        let mut sk_out = vec![0u8; sk.len()];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        // SAFETY: every pointer below is either null with a zero length, the
+        // null `sig_written` under test, or a live, correctly sized local
+        // buffer for the duration of the call.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &journal,
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, PQHS_ERR_NULL_POINTER);
+        assert!(
+            COMMITTED.with(|c| c.borrow().is_empty()),
+            "no leaf may be spent for a call that is refused"
+        );
+        assert!(sk_out.iter().all(|&b| b == 0), "sk_out must be untouched");
+        assert!(sig.iter().all(|&b| b == 0), "sig_out must be untouched");
+
+        // The stateless path takes the same check.
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateless(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &test_budget(),
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                sig.as_mut_ptr(),
+                sig.len(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, PQHS_ERR_NULL_POINTER);
+        assert!(sig.iter().all(|&b| b == 0), "sig_out must be untouched");
+    }
+
+    /// A wrong-length `sk_out` must be caught before the signer runs. When
+    /// it was caught afterwards, the leaf was already committed and the
+    /// advanced key was never handed back, which left the key unusable for
+    /// the whole of its remaining budget.
+    #[test]
+    fn a_wrong_length_sk_out_spends_nothing_and_leaves_the_key_usable() {
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        let (sk, pk) = h5_keypair(17);
+        let journal = test_journal();
+        let msg = b"m";
+        let mut short_sk_out = vec![0u8; sk.len() - 1];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+        // SAFETY: every pointer below is either null with a zero length or
+        // points at a live buffer of the length passed alongside it.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &journal,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                short_sk_out.as_mut_ptr(),
+                short_sk_out.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, crate::error::PQHS_ERR_BAD_LENGTH);
+        assert!(
+            COMMITTED.with(|c| c.borrow().is_empty()),
+            "a wrong-length sk_out must be refused before any leaf is spent"
+        );
+
+        // The original key still signs, and the signature verifies.
+        let mut sk_out = vec![0u8; sk.len()];
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &journal,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let mut valid = false;
+        // SAFETY: as above.
+        unsafe {
+            crate::sign::pqhs_verify(
+                5,
+                pk.as_ptr(),
+                pk.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sig.as_ptr(),
+                n,
+                &mut valid,
+            );
+        }
+        assert!(valid);
+    }
+
     #[test]
     fn h5_stateless_signing_spends_no_leaf_and_can_repeat() {
         let (sk, pk) = h5_keypair(14);
@@ -452,6 +1537,7 @@ mod tests {
                     5,
                     sk.as_ptr(),
                     sk.len(),
+                    &test_budget(),
                     msg.as_ptr(),
                     msg.len(),
                     std::ptr::null(),
@@ -467,6 +1553,7 @@ mod tests {
                     5,
                     sk.as_ptr(),
                     sk.len(),
+                    &test_budget(),
                     msg.as_ptr(),
                     msg.len(),
                     std::ptr::null(),
@@ -494,13 +1581,327 @@ mod tests {
         }
     }
 
+    fn keypair(suite: u8, seed: u8) -> (Vec<u8>, Vec<u8>) {
+        let mut sk = vec![
+            0u8;
+            pqhybridsign_abi::secret_key_len(
+                pqhybridsign_abi::Suite::from_code(suite).unwrap(),
+            )
+        ];
+        let mut pk = vec![
+            0u8;
+            pqhybridsign_abi::public_key_len(
+                pqhybridsign_abi::Suite::from_code(suite).unwrap(),
+            )
+        ];
+        let seed_bytes = [seed; 32];
+        // SAFETY: every pointer below is either null with a zero length or
+        // points at a live, correctly sized local buffer for the duration
+        // of the call.
+        let rc = unsafe {
+            pqhs_keygen_stateful_from_seed(
+                suite,
+                seed_bytes.as_ptr(),
+                32,
+                4,
+                sk.as_mut_ptr(),
+                sk.len(),
+                pk.as_mut_ptr(),
+                pk.len(),
+            )
+        };
+        assert_eq!(rc, PQHS_OK, "suite {suite} keygen");
+        provision_journal(suite, &pk);
+        (sk, pk)
+    }
+
+    /// `sig_out` only needs to be *at least* what a call actually writes for
+    /// H5 and H6 too, mirroring the contract `pqhs_sign`/
+    /// `pqhs_sign_deterministic` pin for H1-H4 in `crate::sign::tests`.
+    ///
+    /// Unlike H1-H4, [`pqhybridsign_abi::signature_len`] for H5/H6 is a
+    /// worst-case upper bound (the largest authentication path any leaf
+    /// budget could need -- see that function's doc comment), not the exact
+    /// length any one call writes, so `signature_len - 1` is not
+    /// necessarily short enough to trigger the error. Each sub-case below
+    /// first probes the real length with one call, then re-derives short
+    /// (`probed - 1`), exact (`probed`) and oversized (`probed + 64`) from
+    /// that. The stateful probe and the short/oversized sub-cases each use
+    /// a fresh key at leaf 0, since a leaf-spending call cannot be
+    /// undone -- the authentication path length depends on the key's fixed
+    /// leaf capacity, not on which leaf is spent, so leaf 0 of a fresh key
+    /// gives the same length the probe measured.
+    ///
+    /// Covers both the leaf-spending [`pqhs_sign_stateful`] and the
+    /// few-time [`pqhs_sign_stateless`] entry points: short is
+    /// `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` (and, for the stateful path,
+    /// spends no leaf), exact and oversized both succeed with the same
+    /// `sig_written`.
+    #[test]
+    fn sig_out_accepts_exact_or_larger_and_rejects_shorter_for_h5_and_h6() {
+        for suite in [5u8, 6u8] {
+            let max_len =
+                pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::from_code(suite).unwrap());
+
+            // --- pqhs_sign_stateless: no leaf state to manage, so the
+            // probe key is reused for every sub-case. ---
+            let (sk, pk) = keypair(suite, 100 + suite);
+            let mut probe = vec![0u8; max_len];
+            let mut needed = 0usize;
+            // SAFETY: every pointer below is either null with a zero length
+            // or points at a live, correctly sized local buffer for the
+            // duration of the call.
+            let rc = unsafe {
+                pqhs_sign_stateless(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &test_budget(),
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    probe.as_mut_ptr(),
+                    probe.len(),
+                    &mut needed,
+                )
+            };
+            assert_eq!(rc, PQHS_OK, "suite {suite} probe pqhs_sign_stateless");
+
+            let mut short = vec![0u8; needed - 1];
+            let mut n = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateless(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &test_budget(),
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    short.as_mut_ptr(),
+                    short.len(),
+                    &mut n,
+                )
+            };
+            assert_eq!(
+                rc,
+                crate::error::PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL,
+                "suite {suite} short pqhs_sign_stateless"
+            );
+
+            let mut exact = vec![0u8; needed];
+            let mut n_exact = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateless(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &test_budget(),
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    exact.as_mut_ptr(),
+                    exact.len(),
+                    &mut n_exact,
+                )
+            };
+            assert_eq!(rc, PQHS_OK, "suite {suite} exact pqhs_sign_stateless");
+            assert_eq!(n_exact, needed);
+
+            let mut oversized = vec![0xffu8; needed + 64];
+            let mut n_oversized = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateless(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &test_budget(),
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    oversized.as_mut_ptr(),
+                    oversized.len(),
+                    &mut n_oversized,
+                )
+            };
+            assert_eq!(rc, PQHS_OK, "suite {suite} oversized pqhs_sign_stateless");
+            assert_eq!(n_oversized, needed, "suite {suite} sig_written");
+            assert!(
+                oversized[n_oversized..].iter().all(|&b| b == 0xff),
+                "suite {suite} bytes past sig_written must be left untouched"
+            );
+            let mut valid = false;
+            // SAFETY: as above.
+            let rc = unsafe {
+                crate::sign::pqhs_verify(
+                    suite,
+                    pk.as_ptr(),
+                    pk.len(),
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    oversized.as_ptr(),
+                    n_oversized,
+                    &mut valid,
+                )
+            };
+            assert_eq!(rc, PQHS_OK);
+            assert!(
+                valid,
+                "suite {suite} oversized-buffer signature must verify"
+            );
+
+            // --- pqhs_sign_stateful: a fresh key per sub-case, since a
+            // leaf that was spent to probe the length cannot be re-spent to
+            // then test the short buffer. ---
+            let journal = test_journal();
+
+            let (probe_sk, _pk) = keypair(suite, 150 + suite);
+            let mut probe_sk_out = vec![0u8; probe_sk.len()];
+            let mut probe = vec![0u8; max_len];
+            let mut needed = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateful(
+                    suite,
+                    probe_sk.as_ptr(),
+                    probe_sk.len(),
+                    &journal,
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    probe_sk_out.as_mut_ptr(),
+                    probe_sk_out.len(),
+                    probe.as_mut_ptr(),
+                    probe.len(),
+                    &mut needed,
+                )
+            };
+            assert_eq!(rc, PQHS_OK, "suite {suite} probe pqhs_sign_stateful");
+
+            // Every sub-case below signs at leaf 0 of a fresh key, so the
+            // shared `journal` must be reset to leaf 0 too, or its
+            // `next_leaf` (built from `COMMITTED`) disagrees with the fresh
+            // key's own counter and the call is rejected as diverged rather
+            // than exercising the buffer-size check under test.
+            COMMITTED.with(|c| c.borrow_mut().clear());
+            let (sk, _pk) = keypair(suite, 160 + suite);
+            let mut sk_out = vec![0u8; sk.len()];
+            let mut short = vec![0u8; needed - 1];
+            let mut n = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateful(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &journal,
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    sk_out.as_mut_ptr(),
+                    sk_out.len(),
+                    short.as_mut_ptr(),
+                    short.len(),
+                    &mut n,
+                )
+            };
+            assert_eq!(
+                rc,
+                crate::error::PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL,
+                "suite {suite} short pqhs_sign_stateful"
+            );
+            // Unlike H1-H4, a short `sig_out` here does not mean nothing
+            // happened: the module doc (`PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL`
+            // from `pqhs_sign_stateful`, in `include/pqhybridsign.h`)
+            // documents that the leaf is already spent and `sk_out` already
+            // holds the advanced key by the time the buffer is found too
+            // small, because that can only be discovered once the signature
+            // exists. That pre-existing behaviour is unrelated to the
+            // relaxed `sig_out` contract this test pins and is left as is.
+            assert_ne!(
+                sk_out, sk,
+                "suite {suite} sk_out is documented to advance even when sig_out is too small"
+            );
+            assert!(
+                COMMITTED.with(|c| !c.borrow().is_empty()),
+                "suite {suite} the leaf is documented to be spent even when sig_out is too small"
+            );
+
+            // The next fresh key starts at leaf 0 too.
+            COMMITTED.with(|c| c.borrow_mut().clear());
+            let (sk, _pk) = keypair(suite, 170 + suite);
+            let mut sk_out_exact = vec![0u8; sk.len()];
+            let mut exact = vec![0u8; needed];
+            let mut n_exact = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateful(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &journal,
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    sk_out_exact.as_mut_ptr(),
+                    sk_out_exact.len(),
+                    exact.as_mut_ptr(),
+                    exact.len(),
+                    &mut n_exact,
+                )
+            };
+            assert_eq!(rc, PQHS_OK, "suite {suite} exact pqhs_sign_stateful");
+            assert_eq!(n_exact, needed);
+
+            // The exact-buffer call above spent leaf 0 of its own key; reset
+            // for the next fresh key's leaf 0.
+            COMMITTED.with(|c| c.borrow_mut().clear());
+            let (sk, _pk) = keypair(suite, 180 + suite);
+            let mut sk_out_over = vec![0u8; sk.len()];
+            let mut oversized = vec![0xffu8; needed + 64];
+            let mut n_oversized = 0usize;
+            // SAFETY: as above.
+            let rc = unsafe {
+                pqhs_sign_stateful(
+                    suite,
+                    sk.as_ptr(),
+                    sk.len(),
+                    &journal,
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    sk_out_over.as_mut_ptr(),
+                    sk_out_over.len(),
+                    oversized.as_mut_ptr(),
+                    oversized.len(),
+                    &mut n_oversized,
+                )
+            };
+            assert_eq!(rc, PQHS_OK, "suite {suite} oversized pqhs_sign_stateful");
+            assert_eq!(n_oversized, needed, "suite {suite} sig_written");
+            assert!(
+                oversized[n_oversized..].iter().all(|&b| b == 0xff),
+                "suite {suite} bytes past sig_written must be left untouched"
+            );
+        }
+    }
+
     #[test]
     fn stateful_entry_points_reject_h1_through_h4() {
-        let journal = PqhsLeafJournal {
-            ctx: std::ptr::null_mut(),
-            commit: Some(test_commit),
-            next_leaf: Some(test_next_leaf),
-        };
+        let journal = test_journal();
         let mut buf = [0u8; 4096];
         let mut buf2 = [0u8; 4096];
         let mut n = 0usize;
@@ -532,6 +1933,7 @@ mod tests {
                     code,
                     buf.as_ptr(),
                     4096,
+                    &test_budget(),
                     b"m".as_ptr(),
                     1,
                     std::ptr::null(),
@@ -543,5 +1945,120 @@ mod tests {
             };
             assert_eq!(rc, crate::error::PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
         }
+    }
+
+    /// The budget vtable is required and must be complete. A null store, and
+    /// a store missing either callback, are all refused before anything is
+    /// read or charged -- and refused as a null-pointer error rather than as
+    /// a storage fault, which would send an integrator to inspect a disk for
+    /// a vtable they never filled in.
+    #[test]
+    fn a_null_or_incomplete_budget_vtable_is_refused_before_anything_is_charged() {
+        let (sk, pk) = h5_keypair(0x31);
+        provision_journal(5, &pk);
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+
+        let incomplete = [
+            std::ptr::null(),
+            &PqhsStatelessBudget {
+                ctx: std::ptr::null_mut(),
+                consumed: Some(test_consumed),
+                record: None,
+            },
+            &PqhsStatelessBudget {
+                ctx: std::ptr::null_mut(),
+                consumed: None,
+                record: Some(test_record),
+            },
+        ];
+        for budget in incomplete {
+            // SAFETY: every pointer below is either null with a zero length,
+            // or points at a live, correctly sized local for the duration of
+            // the call.
+            let rc = unsafe {
+                pqhs_sign_stateless(
+                    5,
+                    sk.as_ptr(),
+                    sk.len(),
+                    budget,
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    sig.as_mut_ptr(),
+                    sig.len(),
+                    &mut n,
+                )
+            };
+            assert_eq!(rc, PQHS_ERR_NULL_POINTER);
+        }
+        assert!(
+            SPENT.with(|spent| spent.borrow().is_empty()),
+            "a refused vtable must never reach the store"
+        );
+    }
+
+    /// A store that reports it could not make the spend durable must refuse
+    /// the signature, and must be reported as its own transient failure --
+    /// not folded into the permanent "budget exhausted" answer, which would
+    /// tell an operator to rotate a key whose only problem was a disk.
+    #[test]
+    fn a_budget_store_that_cannot_record_refuses_the_signature() {
+        let (sk, pk) = h5_keypair(0x32);
+        provision_journal(5, &pk);
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+
+        let failing = PqhsStatelessBudget {
+            ctx: std::ptr::null_mut(),
+            consumed: Some(test_consumed),
+            record: Some(failing_record),
+        };
+        // SAFETY: as in the test above.
+        let rc = unsafe {
+            pqhs_sign_stateless(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &failing,
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, crate::error::PQHS_ERR_BUDGET_STORE_FAILED);
+        assert!(
+            SPENT.with(|spent| spent.borrow().is_empty()),
+            "a failed record must leave nothing on record"
+        );
+
+        // The working store then signs, proving the refusal above was the
+        // store and not the key.
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateless(
+                5,
+                sk.as_ptr(),
+                sk.len(),
+                &test_budget(),
+                b"m".as_ptr(),
+                1,
+                std::ptr::null(),
+                0,
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert_eq!(
+            SPENT.with(|spent| spent.borrow().first().map(|(_, count)| *count)),
+            Some(1)
+        );
     }
 }

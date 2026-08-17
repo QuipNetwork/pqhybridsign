@@ -13,6 +13,47 @@
 //! the key's bytes out, for a caller that wants to persist them; loading
 //! them back is an explicit call to [`load_stateful_secret_key`], never an
 //! implicit copy.
+//!
+//! `export()` followed by `load_stateful_secret_key()` is nonetheless a
+//! second, sanctioned way to end up with two `StatefulSecretKey` objects
+//! over the same leaf budget -- the whole point of `export` is to let a
+//! caller persist the key and load it back after a restart. What must not
+//! happen is two *independent* journals both believing they own that
+//! budget: [`keygen_stateful_from_seed`] and [`load_stateful_secret_key`]
+//! therefore bind a `journal` to the key at construction time, and
+//! [`StatefulSecretKey::sign_stateful`] always signs through that bound
+//! journal rather than accepting a fresh one on every call. That closes the
+//! hole where a caller passes a *different* journal to two signing calls on
+//! what is meant to be one key.
+//!
+//! Binding a journal object is not enough on its own, because a caller can
+//! load the same exported blob twice, each time with its own brand-new
+//! journal that (correctly, for a journal that has never seen this key)
+//! reports leaf 0. Two such journals agree with the blob and with each
+//! other, so no comparison of counters can tell them apart from a legitimate
+//! restart.
+//!
+//! What separates them is **identity**. A journal records which key it is
+//! the leaf record for, as durably as it records the counter, and
+//! [`load_stateful_secret_key`] refuses a journal that does not already
+//! carry this key's identity. Creating that record is one explicit call,
+//! [`adopt_key`], made once when the key's durable journal is provisioned --
+//! [`keygen_stateful_from_seed`] makes it for a key it has just created,
+//! because a brand-new key has no history to fork. A restart that reopens
+//! the key's own journal finds the identity already there and proceeds; a
+//! restart handed a fresh journal raises
+//! [`JournalKeyMismatchError`](crate::errors::JournalKeyMismatchError)
+//! instead of silently starting the leaf budget over.
+//!
+//! The lockstep counter check is unchanged and still runs after the identity
+//! check. It is what catches the cases where the right journal is present but
+//! out of step: a stale blob loaded against an already-advanced journal, an
+//! advanced blob loaded against a journal that missed a commit, or a second
+//! key object that shares its sibling's journal instance and tries to sign
+//! after the sibling already has. Those surface as
+//! [`CountersDivergedError`](crate::errors::CountersDivergedError), from the
+//! same check `sign_stateful` has always used internally (see
+//! `pqhybridsign_core::stateful_composite`'s `sign_stateful`).
 
 use std::cell::RefCell;
 
@@ -20,12 +61,15 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use zeroize::Zeroize;
 
+use pqhybridsign_abi::{BudgetKey, KeyIdentity, KEY_IDENTITY_LEN};
+
 use crate::bytes_in::extract_bytes;
 use crate::errors::{to_py_err, StatefulKeyNotCloneableError};
 use crate::suite::PySuite;
 
 /// A [`pqhybridsign_abi::LeafJournal`] backed by a Python object exposing
-/// `commit(leaf: int) -> None` and `next_leaf() -> int`.
+/// `commit(leaf: int) -> None`, `next_leaf() -> int`,
+/// `bound_key() -> bytes | None` and `bind_key(identity: bytes) -> None`.
 ///
 /// [`pqhybridsign_abi::LeafJournal::next_leaf`] cannot return a `Result`,
 /// so a Python exception raised from `next_leaf` cannot be propagated
@@ -84,15 +128,132 @@ impl pqhybridsign_abi::LeafJournal for PyJournal<'_> {
             }
         }
     }
+
+    /// `bound_key()` returns the recorded identity as `bytes`, or `None` if
+    /// this journal has never been bound to a key.
+    ///
+    /// Like `next_leaf`, this cannot return a `Result`, so a Python
+    /// exception -- or a return value of the wrong type or length -- is
+    /// recorded on `self` and reported here as `None`. `None` is the
+    /// fail-closed answer for signing, which refuses it. The caller re-raises
+    /// the recorded exception in preference to whatever the ABI reported.
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        let value = match self.journal.call_method0("bound_key") {
+            Ok(value) => value,
+            Err(err) => {
+                self.record(err);
+                return None;
+            }
+        };
+        if value.is_none() {
+            return None;
+        }
+        match value.extract::<[u8; KEY_IDENTITY_LEN]>() {
+            Ok(bytes) => Some(KeyIdentity::from_bytes(bytes)),
+            Err(err) => {
+                self.record(err);
+                None
+            }
+        }
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        let bytes = PyBytes::new(self.journal.py(), key.as_bytes());
+        match self.journal.call_method1("bind_key", (bytes,)) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.record(err);
+                Err(JournalCallFailed)
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct JournalCallFailed;
 
+/// A [`pqhybridsign_abi::StatelessBudgetStore`] backed by a Python object
+/// exposing `consumed(key: bytes) -> int | None` and
+/// `record(key: bytes, count: int) -> None`.
+///
+/// The stateless counterpart of [`PyJournal`], and it captures Python
+/// exceptions the same way and for the same reason:
+/// [`pqhybridsign_abi::StatelessBudgetStore::consumed`] cannot return a
+/// `Result`, so an exception raised there is recorded in `error` and
+/// reported as `None`. `None` means "never tracked", which reads as a full
+/// budget, so the caller MUST check `take_error` after the ABI call and
+/// re-raise in preference to whatever the ABI reported -- otherwise a broken
+/// store would look like a fresh key.
+struct PyBudget<'py> {
+    budget: Bound<'py, PyAny>,
+    error: RefCell<Option<PyErr>>,
+}
+
+impl<'py> PyBudget<'py> {
+    fn new(budget: Bound<'py, PyAny>) -> Self {
+        Self {
+            budget,
+            error: RefCell::new(None),
+        }
+    }
+
+    fn take_error(&self) -> Option<PyErr> {
+        self.error.borrow_mut().take()
+    }
+
+    fn record_error(&self, err: PyErr) {
+        *self.error.borrow_mut() = Some(err);
+    }
+}
+
+impl pqhybridsign_abi::StatelessBudgetStore for PyBudget<'_> {
+    /// The Python exception is recorded on `self` and re-raised by the
+    /// caller; this marker only tells the ABI layer that nothing was
+    /// recorded, which maps to `AbiError::BudgetStoreFailed`.
+    type Error = BudgetCallFailed;
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        let bytes = PyBytes::new(self.budget.py(), key.as_bytes());
+        let value = match self.budget.call_method1("consumed", (bytes,)) {
+            Ok(value) => value,
+            Err(err) => {
+                self.record_error(err);
+                return None;
+            }
+        };
+        if value.is_none() {
+            return None;
+        }
+        match value.extract::<u64>() {
+            Ok(count) => Some(count),
+            Err(err) => {
+                self.record_error(err);
+                None
+            }
+        }
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        let bytes = PyBytes::new(self.budget.py(), key.as_bytes());
+        match self.budget.call_method1("record", (bytes, count)) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                self.record_error(err);
+                Err(BudgetCallFailed)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BudgetCallFailed;
+
 /// A loaded H5 or H6 secret key.
 ///
-/// Signing through [`Self::sign_stateful`] advances this object in place
-/// and requires a caller-supplied journal object so the one-time leaf it
+/// Bound to a journal object at construction, by [`keygen_stateful_from_seed`]
+/// or [`load_stateful_secret_key`]. Signing through [`Self::sign_stateful`]
+/// advances this object in place and always spends the leaf through that
+/// bound journal, never one supplied at call time, so the one-time leaf it
 /// spends is durably recorded before the signature is returned; see
 /// `pqhybridsign_abi::LeafJournal` for the durability contract the
 /// journal's `commit` method must honour. [`Self::sign_stateless`] spends
@@ -101,6 +262,8 @@ struct JournalCallFailed;
 pub(crate) struct StatefulSecretKey {
     suite: PySuite,
     bytes: Vec<u8>,
+    journal: Py<PyAny>,
+    budget: Py<PyAny>,
 }
 
 impl Drop for StatefulSecretKey {
@@ -117,9 +280,11 @@ impl StatefulSecretKey {
         self.suite
     }
 
-    /// Sign `msg` under `ctx`, spending one leaf.
+    /// Sign `msg` under `ctx`, spending one leaf from this key's bound
+    /// journal (the one passed to [`keygen_stateful_from_seed`] or
+    /// [`load_stateful_secret_key`] when this key was created).
     ///
-    /// `journal` must implement `commit(leaf: int) -> None` and
+    /// The journal must implement `commit(leaf: int) -> None` and
     /// `next_leaf() -> int`, and `commit` must not return until the write
     /// is durable: returning early there is the one way this method could
     /// let a leaf be reissued after a crash. This key's internal bytes are
@@ -133,14 +298,18 @@ impl StatefulSecretKey {
     ///
     /// `LeavesExhaustedError` if the key's leaf budget is spent.
     /// `JournalFailedError` if `journal.commit` raised or otherwise failed
-    /// to run; nothing was spent. Any exception `journal.commit` or
+    /// to run; nothing was spent. `JournalKeyMismatchError` if the bound
+    /// journal no longer carries this key's identity; nothing was spent.
+    /// `CountersDivergedError` if this key's own
+    /// leaf counter and the bound journal's `next_leaf()` disagree -- see
+    /// the module documentation for the two ways that happens and the one
+    /// way it does not, and why. Any exception `journal.commit` or
     /// `journal.next_leaf` itself raised is re-raised unchanged.
     fn sign_stateful(
         &mut self,
         py: Python<'_>,
         msg: &Bound<'_, PyAny>,
         ctx: &Bound<'_, PyAny>,
-        journal: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyBytes>> {
         let msg = extract_bytes(py, msg)?;
         let ctx = extract_bytes(py, ctx)?;
@@ -148,7 +317,7 @@ impl StatefulSecretKey {
 
         let mut sk_out = self.bytes.clone();
         let mut sig_out = vec![0u8; pqhybridsign_abi::signature_len(suite)];
-        let mut journal = PyJournal::new(journal.clone());
+        let mut journal = PyJournal::new(self.journal.bind(py).clone());
 
         let outcome = pqhybridsign_abi::sign_stateful(
             suite,
@@ -174,13 +343,34 @@ impl StatefulSecretKey {
         Ok(PyBytes::new(py, &sig_out[..n]).unbind())
     }
 
-    /// Sign `msg` under `ctx` without spending any leaf.
+    /// Sign `msg` under `ctx` without spending any leaf, spending one unit
+    /// of this key's few-time stateless budget instead.
     ///
     /// Available because H5 and H6 pair their stateful fast path with a
-    /// stateless few-time path (SHRINCS specification section 21); no
-    /// journal is needed and this key is not modified.
+    /// stateless few-time path (SHRINCS specification section 21). No leaf
+    /// is spent and this key is not modified, but the stateless path has a
+    /// hard bound of its own -- `2**20` signatures, `2**18` under the
+    /// low-budget profile -- shared with rotation and recovery, and
+    /// exceeding it degrades the security assumption of the underlying
+    /// few-time scheme.
+    ///
+    /// The spend goes through the `budget` object bound to this key at
+    /// construction, never one supplied at call time, for the same reason
+    /// signing goes through the bound journal: a caller who could pass a
+    /// fresh store on each call would hold a bound that never advances. The
+    /// store must implement `consumed(key: bytes) -> int | None` and
+    /// `record(key: bytes, count: int) -> None`, and `record` must not
+    /// return until the write is durable.
     ///
     /// Returns the signature as `bytes`.
+    ///
+    /// # Errors
+    ///
+    /// `StatelessBudgetExhaustedError` if this key's stateless budget is
+    /// spent; nothing was recorded and no signature was built.
+    /// `BudgetStoreFailedError` if `budget.record` raised or otherwise
+    /// failed to run; nothing was recorded. Any exception `budget.consumed`
+    /// or `budget.record` itself raised is re-raised unchanged.
     fn sign_stateless(
         &self,
         py: Python<'_>,
@@ -192,8 +382,25 @@ impl StatefulSecretKey {
         let suite: pqhybridsign_abi::Suite = self.suite.into();
 
         let mut sig_out = vec![0u8; pqhybridsign_abi::signature_len(suite)];
-        let n = pqhybridsign_abi::sign_stateless(suite, &self.bytes, &msg, &ctx, &mut sig_out)
-            .map_err(to_py_err)?;
+        let mut budget = PyBudget::new(self.budget.bind(py).clone());
+        let outcome = pqhybridsign_abi::sign_stateless(
+            suite,
+            &self.bytes,
+            &mut budget,
+            &msg,
+            &ctx,
+            &mut sig_out,
+        );
+
+        // The recorded Python exception wins over the ABI's flat code: a
+        // store that raised from `consumed` reports `None` to the ABI, which
+        // reads as an untracked material and a full budget, so the ABI code
+        // alone would describe a successful signature rather than a broken
+        // store.
+        if let Some(err) = budget.take_error() {
+            return Err(err);
+        }
+        let n = outcome.map_err(to_py_err)?;
         Ok(PyBytes::new(py, &sig_out[..n]).unbind())
     }
 
@@ -244,8 +451,129 @@ impl PySuite {
     }
 }
 
+/// The identity a leaf journal records for the key `public_key` names.
+///
+/// `public_key` is the `bytes` `keygen_stateful_from_seed` returned. It is
+/// public material, so this identity can be computed by anyone holding the
+/// public key and discloses nothing about the secret one.
+///
+/// Pass it to `adopt_key` once, when the key's durable journal is created.
+/// `key_identity_from_secret_key` returns the same value for the matching
+/// exported blob.
+///
+/// # Errors
+///
+/// `WrongEntryPointForSuiteError` for H1 through H4, which have no journal
+/// and so no identity. `BadLengthError` if `public_key` is the wrong length
+/// for `suite`.
+#[pyfunction]
+fn key_identity<'py>(
+    py: Python<'py>,
+    suite: PySuite,
+    public_key: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let public_key = extract_bytes(py, public_key)?;
+    let identity = pqhybridsign_abi::key_identity(suite.into(), &public_key).map_err(to_py_err)?;
+    Ok(PyBytes::new(py, identity.as_bytes()))
+}
+
+/// The identity a leaf journal records for the key an exported blob holds.
+///
+/// The same value `key_identity` returns for the matching public key: it
+/// comes from the blob's cached post-quantum verify key, which is public.
+/// This exists because the restart path has the blob in hand and may not have
+/// kept the public key.
+///
+/// # Errors
+///
+/// `WrongEntryPointForSuiteError` for H1 through H4. `BadLengthError` if
+/// `blob` is not `secret_key_len(suite)` bytes. `ComponentFailureError` if
+/// the blob does not import.
+#[pyfunction]
+fn key_identity_from_secret_key<'py>(
+    py: Python<'py>,
+    suite: PySuite,
+    blob: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let blob = extract_bytes(py, blob)?;
+    let identity =
+        pqhybridsign_abi::key_identity_from_secret_key(suite.into(), &blob).map_err(to_py_err)?;
+    Ok(PyBytes::new(py, identity.as_bytes()))
+}
+
+/// Bind `journal` to the key `identity` names, unless it already belongs to
+/// a different key.
+///
+/// This is the explicit act performed once, when a key's durable journal is
+/// created. `load_stateful_secret_key` never does it: pairing a key with a
+/// journal that has never seen it is how one key's one-time leaves get spent
+/// twice, and it raises `JournalKeyMismatchError` instead.
+///
+/// Calling this on a journal already bound to `identity` is a no-op, so a
+/// provisioning step is safe to re-run. Calling it on a fresh journal at
+/// every process start is not: that mints a new binding each time and starts
+/// the leaf budget over, which is the defect the binding closes.
+///
+/// # Errors
+///
+/// `BadLengthError` if `identity` is not the length `key_identity` returns.
+/// `JournalKeyMismatchError` if `journal` already belongs to another key;
+/// nothing is written. `JournalFailedError` if `journal.bind_key` reported
+/// the write did not become durable. Any exception `journal.bound_key` or
+/// `journal.bind_key` itself raised is re-raised unchanged.
+#[pyfunction]
+fn adopt_key(
+    py: Python<'_>,
+    journal: &Bound<'_, PyAny>,
+    identity: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let identity = extract_bytes(py, identity)?;
+    let bytes = <[u8; KEY_IDENTITY_LEN]>::try_from(&identity[..])
+        .map_err(|_| to_py_err(pqhybridsign_abi::AbiError::BadLength))?;
+    let mut journal = PyJournal::new(journal.clone());
+    let outcome = pqhybridsign_abi::adopt_key(&mut journal, KeyIdentity::from_bytes(bytes));
+    if let Some(err) = journal.take_error() {
+        return Err(err);
+    }
+    outcome.map_err(to_py_err)
+}
+
+/// Refuse `journal` unless it already carries the identity of the key in
+/// `blob`.
+///
+/// Shared by `keygen_stateful_from_seed` -- which adopts first, so the check
+/// always passes -- and `load_stateful_secret_key`, which does not.
+fn require_journal_owns(suite: PySuite, blob: &[u8], journal: &Bound<'_, PyAny>) -> PyResult<()> {
+    let identity =
+        pqhybridsign_abi::key_identity_from_secret_key(suite.into(), blob).map_err(to_py_err)?;
+    let py_journal = PyJournal::new(journal.clone());
+    let outcome = pqhybridsign_abi::require_bound_key(&py_journal, identity);
+    if let Some(err) = py_journal.take_error() {
+        return Err(err);
+    }
+    outcome.map_err(to_py_err)
+}
+
 /// Derive a stateful keypair for `suite` from a 32-byte master seed, with a
 /// budget of `max_stateful_signatures` one-time leaves.
+///
+/// `journal` is bound to the returned key for its whole lifetime: every
+/// later `sign_stateful` call on it spends leaves through this same
+/// journal object.
+///
+/// `budget` is bound the same way, and every later `sign_stateless` call
+/// spends the few-time stateless budget through it. It is required, on the
+/// same grounds `journal` is: the stateless bound of specification section
+/// 21 is a security assumption, not a quota, and a key with no store to
+/// charge would have no bound at all. Unlike `journal`, `budget` needs no
+/// adoption step -- its entries are keyed by the key's own stateless
+/// material -- so one store object may serve every key a process holds.
+///
+/// This function also **adopts** `journal` for the new key, writing the key's
+/// identity into it, which is what `load_stateful_secret_key` later checks
+/// for. Adopting here is safe where adopting on a restart is not: the key is
+/// brand new, so there is no spending history for a second journal to fork.
+/// A `journal` already bound to some other key is refused.
 ///
 /// Returns `(StatefulSecretKey, public_key: bytes)`.
 ///
@@ -254,13 +582,17 @@ impl PySuite {
 /// `WrongEntryPointForSuiteError` for H1 through H4: use
 /// `keygen_from_seed` instead. `BadLengthError` if `seed` is not 32 bytes.
 /// `ComponentFailureError` if `max_stateful_signatures` is zero or exceeds
-/// the component's leaf capacity limit.
+/// the component's leaf capacity limit. `JournalKeyMismatchError` if
+/// `journal` already belongs to a different key. `JournalFailedError` if
+/// `journal.bind_key` could not durably record the binding.
 #[pyfunction]
 fn keygen_stateful_from_seed(
     py: Python<'_>,
     suite: PySuite,
     seed: &Bound<'_, PyAny>,
     max_stateful_signatures: u32,
+    journal: &Bound<'_, PyAny>,
+    budget: &Bound<'_, PyAny>,
 ) -> PyResult<(StatefulSecretKey, Py<PyBytes>)> {
     let abi_suite: pqhybridsign_abi::Suite = suite.into();
     let seed = extract_bytes(py, seed)?;
@@ -276,13 +608,26 @@ fn keygen_stateful_from_seed(
     )
     .map_err(to_py_err)?;
 
+    let identity = PyBytes::new(
+        py,
+        pqhybridsign_abi::key_identity(abi_suite, &pk)
+            .map_err(to_py_err)?
+            .as_bytes(),
+    );
+    adopt_key(py, journal, identity.as_any())?;
+
     Ok((
-        StatefulSecretKey { suite, bytes: sk },
+        StatefulSecretKey {
+            suite,
+            bytes: sk,
+            journal: journal.clone().unbind(),
+            budget: budget.clone().unbind(),
+        },
         PyBytes::new(py, &pk).unbind(),
     ))
 }
 
-/// Load a previously exported stateful secret key.
+/// Load a previously exported stateful secret key and bind it to `journal`.
 ///
 /// `blob` must be exactly `secret_key_len(suite)` bytes, in the form
 /// `StatefulSecretKey.export` produces: it carries the leaf counter and
@@ -290,15 +635,48 @@ fn keygen_stateful_from_seed(
 /// arbitrary component key bytes here fails rather than silently
 /// resetting the leaf counter to zero.
 ///
+/// `journal` must already carry this key's identity, which is checked here
+/// rather than deferred to the first signature. A journal that has never
+/// been bound to any key, and one bound to a different key, are both refused
+/// with `JournalKeyMismatchError`. That refusal is the whole point: a
+/// brand-new journal reports that leaf 0 is next, so does the key's own
+/// journal for a key that has spent nothing, and proceeding on that
+/// agreement is how one key's one-time leaves get spent twice under two
+/// different messages. Adopting a journal for an existing key is still
+/// possible, through an explicit `adopt_key` call the caller has to write.
+///
+/// `journal` is then bound to the returned key for its whole lifetime: every
+/// later `sign_stateful` call on it spends leaves through this same journal
+/// object, never one supplied at call time.
+///
+/// `budget` is bound the same way and serves `sign_stateless`. It carries no
+/// identity check, because its entries are keyed by the key's own stateless
+/// material rather than by an identity written alongside a bare counter: a
+/// store that has never seen this material reports nothing for this material
+/// alone, and cannot be confused with a store holding a different key's
+/// count. What a wrong store loses is history, not attribution, so the
+/// obligation it carries is durability -- reopen the same store after a
+/// restart, or the bound restarts at zero.
+///
+/// The identity check does not validate the *counter*. A journal that is
+/// this key's but out of step with `blob` still surfaces as
+/// `CountersDivergedError` from the first `sign_stateful` call, because this
+/// crate cannot read the key's counter without attempting a signature.
+///
 /// # Errors
 ///
 /// `WrongEntryPointForSuiteError` for H1 through H4. `BadLengthError` if
 /// `blob` is not exactly `secret_key_len(suite)` bytes for `suite`.
+/// `JournalKeyMismatchError` if `journal` does not already belong to this
+/// key. Any exception `journal.bound_key` itself raised is re-raised
+/// unchanged.
 #[pyfunction]
 fn load_stateful_secret_key(
     py: Python<'_>,
     suite: PySuite,
     blob: &Bound<'_, PyAny>,
+    journal: &Bound<'_, PyAny>,
+    budget: &Bound<'_, PyAny>,
 ) -> PyResult<StatefulSecretKey> {
     let abi_suite: pqhybridsign_abi::Suite = suite.into();
     if !abi_suite.is_stateful() {
@@ -306,16 +684,28 @@ fn load_stateful_secret_key(
             pqhybridsign_abi::AbiError::WrongEntryPointForSuite,
         ));
     }
-    let blob = extract_bytes(py, blob)?;
+    let mut blob = extract_bytes(py, blob)?;
     if blob.len() != pqhybridsign_abi::secret_key_len(abi_suite) {
         return Err(to_py_err(pqhybridsign_abi::AbiError::BadLength));
     }
-    Ok(StatefulSecretKey { suite, bytes: blob })
+    require_journal_owns(suite, &blob, journal)?;
+    // Take the bytes out of the `Zeroizing` wrapper so this type's
+    // `Drop` owns the only remaining copy. The wrapper then drops an
+    // empty `Vec`.
+    Ok(StatefulSecretKey {
+        suite,
+        bytes: std::mem::take(&mut *blob),
+        journal: journal.clone().unbind(),
+        budget: budget.clone().unbind(),
+    })
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StatefulSecretKey>()?;
     m.add_function(wrap_pyfunction!(keygen_stateful_from_seed, m)?)?;
     m.add_function(wrap_pyfunction!(load_stateful_secret_key, m)?)?;
+    m.add_function(wrap_pyfunction!(key_identity, m)?)?;
+    m.add_function(wrap_pyfunction!(key_identity_from_secret_key, m)?)?;
+    m.add_function(wrap_pyfunction!(adopt_key, m)?)?;
     Ok(())
 }

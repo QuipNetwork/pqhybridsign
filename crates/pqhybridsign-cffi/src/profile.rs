@@ -17,7 +17,13 @@ static PROFILE_NAME: OnceLock<CString> = OnceLock::new();
 /// is valid for the lifetime of the process and must not be freed or
 /// written through.
 ///
-/// This call cannot fail: it always returns a valid pointer.
+/// This entry point has no error channel, so the panic guard every function
+/// in this crate carries has nowhere to report a caught panic: it returns a
+/// null pointer instead of unwinding into C. Check the result for null
+/// before reading it. Nothing on this path is expected to panic -- the
+/// profile name is a fixed ASCII literal cached on first call -- so a null
+/// return means something is wrong underneath, not that the profile is
+/// unknown.
 #[no_mangle]
 pub extern "C" fn pqhs_profile_name() -> *const c_char {
     crate::ffi::guard_infallible(|| {

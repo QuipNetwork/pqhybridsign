@@ -29,8 +29,11 @@ pub trait ClassicalScheme {
     /// bytes into `pk_out`.
     fn derive(seed: &[u8; 32], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()>;
 
-    /// Hedged signing. `label` is the suite label, used as the schnorrkel
-    /// signing context where the component needs one.
+    /// Hedged signing. `label` is the suite's domain-separation label
+    /// ([`Suite::LABEL`](crate::Suite::LABEL), or
+    /// [`StatefulSuite::ROTATE_LABEL`](crate::StatefulSuite::ROTATE_LABEL)
+    /// on the rotation path), used as the schnorrkel signing context where
+    /// the component needs one.
     fn sign(
         sk: &[u8],
         msg: &[u8],

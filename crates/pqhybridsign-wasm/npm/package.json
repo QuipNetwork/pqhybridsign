@@ -1,6 +1,6 @@
 {
   "name": "pqhybridsign",
-  "version": "0.1.0",
+  "version": "0.0.0-rc1",
   "description": "Hybrid classical/post-quantum signing (H1-H4) compiled to WebAssembly",
   "license": "AGPL-3.0-or-later",
   "repository": {

@@ -108,6 +108,32 @@ pub enum StatelessBudgetRejected {
     StoreFailed,
 }
 
+impl From<StatelessBudgetRejected> for crate::Error {
+    /// The `consumed` and `budget` figures do not survive the conversion.
+    /// Every type downstream of this one -- [`crate::Error`],
+    /// `pqhybridsign_abi::AbiError`, a C integer -- is a flat code, so
+    /// carrying the pair further would only postpone dropping it. A caller
+    /// that wants the numbers calls [`spend_stateless_budget`] itself and
+    /// reads them off [`StatelessBudgetRejected`] before this conversion.
+    fn from(rejected: StatelessBudgetRejected) -> Self {
+        match rejected {
+            StatelessBudgetRejected::BudgetExhausted { .. } => Self::StatelessBudgetExhausted,
+            StatelessBudgetRejected::StoreFailed => Self::BudgetStoreFailed,
+        }
+    }
+}
+
+impl From<StatelessBudgetRejected> for crate::stateful::StatefulSignError {
+    /// Loses the same two figures, for the same reason as the
+    /// [`crate::Error`] conversion above.
+    fn from(rejected: StatelessBudgetRejected) -> Self {
+        match rejected {
+            StatelessBudgetRejected::BudgetExhausted { .. } => Self::StatelessBudgetExhausted,
+            StatelessBudgetRejected::StoreFailed => Self::BudgetStoreFailed,
+        }
+    }
+}
+
 impl fmt::Display for StatelessBudgetRejected {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -214,18 +240,85 @@ pub fn spend_before_rotation<S: StatelessBudgetStore>(
     Ok(RotationBudgetCharged(key))
 }
 
+/// Charge the rotation authorization against the pre-rotation budget, then
+/// build the signature: the reference flow for a rotation-signing routine,
+/// and the budget-side counterpart of
+/// [`crate::stateful::sign_after_commit`].
+///
+/// `build` receives the [`RotationBudgetCharged`] token, so it cannot run
+/// until the charge against `pre_rotation_material` is already durable. That
+/// is the whole reason the token exists and the whole reason this function
+/// takes a closure rather than returning the token: a routine that took the
+/// token as an ordinary parameter could still be handed one minted for some
+/// other material, and a routine that returned it could be driven by a
+/// caller who ignores it. Here the only way to reach the signature is
+/// through a charge this function aimed at the material itself.
+///
+/// Validate the inputs before calling this. Work done inside `build` that
+/// fails has already cost a unit of a budget that never refills while the
+/// stateless material survives.
+///
+/// `E` is the caller's own error type rather than
+/// [`StatelessBudgetRejected`] because the two consumers report different
+/// vocabularies: rotation returns [`crate::Error`] and stateless signing
+/// returns [`crate::stateful::StatefulSignError`]. Both implement the
+/// required `From`.
+///
+/// # Errors
+///
+/// Whatever `E` the [`StatelessBudgetRejected`] conversion produces if the
+/// charge is refused; nothing is spent and `build` does not run. Otherwise
+/// whatever `build` returns. A failure inside `build` still spends the
+/// unit, on the same terms as a failure after
+/// [`crate::stateful::LeafJournal::commit`] still spends the leaf.
+pub fn sign_rotation_after_charge<S, T, E, F>(
+    store: &mut S,
+    pre_rotation_material: &[u8],
+    budget: u64,
+    build: F,
+) -> Result<T, E>
+where
+    S: StatelessBudgetStore,
+    E: From<StatelessBudgetRejected>,
+    F: FnOnce(RotationBudgetCharged) -> Result<T, E>,
+{
+    let charged = spend_before_rotation(store, pre_rotation_material, budget)?;
+    build(charged)
+}
+
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_store {
+    use super::{BudgetKey, StatelessBudgetStore};
 
     /// A store that can be told to fail, so the atomicity and fail-closed
     /// paths are testable without I/O. Small, fixed-capacity map: this
     /// module has no `alloc` feature, so tests use a linear scan over a
     /// bounded array rather than a `HashMap`.
+    ///
+    /// Shared with `crate::rotation` and `crate::stateful_composite`, whose
+    /// tests need the same thing: every stateless entry point now takes a
+    /// store, so every test that signs needs one, and three copies of this
+    /// would drift.
     #[derive(Default)]
-    struct MemoryStore {
-        entries: [(Option<BudgetKey>, u64); 4],
-        fail: bool,
+    pub(crate) struct MemoryStore {
+        entries: [(Option<BudgetKey>, u64); 8],
+        /// When set, `record` reports failure and writes nothing.
+        pub(crate) fail: bool,
+    }
+
+    impl MemoryStore {
+        /// Put `count` on record for `material` without going through a
+        /// spend, so a test can start at an arbitrary point in a budget
+        /// far too large to walk to.
+        pub(crate) fn preload(&mut self, material: &[u8], count: u64) {
+            let key = BudgetKey::from_material(material);
+            self.record(&key, count).expect("preload records");
+        }
+
+        /// The count on record for `material`, or `None` if untracked.
+        pub(crate) fn consumed_for(&self, material: &[u8]) -> Option<u64> {
+            self.consumed(&BudgetKey::from_material(material))
+        }
     }
 
     impl StatelessBudgetStore for MemoryStore {
@@ -255,6 +348,12 @@ mod tests {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_store::MemoryStore;
+    use super::*;
 
     const MATERIAL_A: [u8; 64] = [0xA1; 64];
     const MATERIAL_B: [u8; 64] = [0xB2; 64];
@@ -436,10 +535,8 @@ mod tests {
     // apply.
     #[test]
     fn a_store_failure_refuses_the_spend_and_records_nothing() {
-        let mut store = MemoryStore {
-            fail: true,
-            ..Default::default()
-        };
+        let mut store = MemoryStore::default();
+        store.fail = true;
 
         let outcome = spend_stateless_budget(&mut store, &MATERIAL_A, 10);
 
@@ -452,5 +549,106 @@ mod tests {
         store.fail = false;
         assert!(spend_stateless_budget(&mut store, &MATERIAL_A, 10).is_ok());
         assert_eq!(store.consumed(&key), Some(1));
+    }
+
+    // The ordering helper is the reason `RotationBudgetCharged` is not
+    // decorative: the closure that builds a rotation signature receives the
+    // token, so it cannot start before the charge is durable. Here the
+    // closure asserts that the count is already on record by the time it
+    // runs, and that the token names the material charged.
+    #[test]
+    fn the_charge_is_durable_before_the_build_closure_runs() {
+        let mut store = MemoryStore::default();
+        let key = BudgetKey::from_material(&MATERIAL_A);
+
+        let built: Result<&str, StatelessBudgetRejected> =
+            sign_rotation_after_charge(&mut store, &MATERIAL_A, 10, |charged| {
+                assert_eq!(charged.charged_key(), key);
+                Ok("signature")
+            });
+
+        assert_eq!(built, Ok("signature"));
+        assert_eq!(store.consumed(&key), Some(1));
+    }
+
+    // A refused charge must not run the build closure at all. A rotation
+    // signature that came into existence before its charge landed is a
+    // rotation the budget never saw.
+    #[test]
+    fn a_refused_charge_never_reaches_the_build_closure() {
+        let mut store = MemoryStore::default();
+        store.preload(&MATERIAL_A, 4);
+
+        let built: Result<&str, StatelessBudgetRejected> =
+            sign_rotation_after_charge(&mut store, &MATERIAL_A, 4, |_charged| {
+                panic!("build must not run for a refused charge")
+            });
+
+        assert_eq!(
+            built,
+            Err(StatelessBudgetRejected::BudgetExhausted {
+                consumed: 4,
+                budget: 4
+            })
+        );
+        assert_eq!(store.consumed_for(&MATERIAL_A), Some(4));
+    }
+
+    // A store failure is refused the same way, and again without building.
+    #[test]
+    fn a_store_failure_never_reaches_the_build_closure() {
+        let mut store = MemoryStore::default();
+        store.fail = true;
+
+        let built: Result<&str, StatelessBudgetRejected> =
+            sign_rotation_after_charge(&mut store, &MATERIAL_A, 10, |_charged| {
+                panic!("build must not run when the store failed")
+            });
+
+        assert_eq!(built, Err(StatelessBudgetRejected::StoreFailed));
+        assert_eq!(store.consumed_for(&MATERIAL_A), None);
+    }
+
+    // Both rejections must survive conversion into the two crate error
+    // types as distinct variants: an exhausted bound is permanent and a
+    // store fault is transient, and collapsing them would tell an operator
+    // to retry a bound that never refills, or to give up on a disk that
+    // only needed repairing.
+    #[test]
+    fn each_rejection_converts_to_its_own_variant_in_both_error_types() {
+        let exhausted = StatelessBudgetRejected::BudgetExhausted {
+            consumed: 1,
+            budget: 1,
+        };
+        assert_eq!(
+            crate::Error::from(exhausted),
+            crate::Error::StatelessBudgetExhausted
+        );
+        assert_eq!(
+            crate::Error::from(StatelessBudgetRejected::StoreFailed),
+            crate::Error::BudgetStoreFailed
+        );
+
+        use crate::stateful::StatefulSignError;
+        assert_eq!(
+            StatefulSignError::from(exhausted),
+            StatefulSignError::StatelessBudgetExhausted
+        );
+        assert_eq!(
+            StatefulSignError::from(StatelessBudgetRejected::StoreFailed),
+            StatefulSignError::BudgetStoreFailed
+        );
+
+        // And the stateless bound must never be mistaken for the stateful
+        // one: the two budgets are exhausted by different things and have
+        // different remedies.
+        assert_ne!(
+            StatefulSignError::StatelessBudgetExhausted,
+            StatefulSignError::LeavesExhausted
+        );
+        assert_ne!(
+            StatefulSignError::BudgetStoreFailed,
+            StatefulSignError::JournalFailed
+        );
     }
 }

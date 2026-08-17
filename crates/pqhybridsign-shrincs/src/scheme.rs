@@ -28,6 +28,7 @@ use hashsigs_rs::shrincs::{
     Keys, PublicKey as ShrincsBundlePublicKey, ShrincsSigner, ShrincsVerifier,
 };
 use pqhybridsign_core::rotation::RotationPayload;
+use pqhybridsign_core::stateful_composite::CommittedVerifyKey;
 use pqhybridsign_core::{Error, PqStatefulScheme, Result};
 use subtle::Choice;
 use zeroize::Zeroize;
@@ -264,6 +265,11 @@ impl PqStatefulScheme for ShrincsScheme {
         write_flat_stateless(&sig, sig_out)
     }
 
+    /// `vk` must already be bound to the key the verifier installed. On its
+    /// own this method checks only that `vk` is internally consistent, which
+    /// every generated bundle is, an attacker's included. Binding `vk` to
+    /// the installed key is
+    /// [`PublicKey::from_stored_commitment_and_bundle`](pqhybridsign_core::stateful_composite::PublicKey::from_stored_commitment_and_bundle).
     fn verify_stateful(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice {
         let Some((commitment, public_key)) = verify_bundle_self_consistent(vk) else {
             return Choice::from(0u8);
@@ -280,6 +286,7 @@ impl PqStatefulScheme for ShrincsScheme {
         )))
     }
 
+    /// Same `vk` obligation as [`Self::verify_stateful`].
     fn verify_stateless(vk: &[u8], msg: &[u8], sig: &[u8]) -> Choice {
         let Some((commitment, public_key)) = verify_bundle_self_consistent(vk) else {
             return Choice::from(0u8);
@@ -325,6 +332,7 @@ impl PqStatefulScheme for ShrincsScheme {
         write_flat_stateless(&sig, sig_out)
     }
 
+    /// Same `vk` obligation as [`Self::verify_stateful`].
     fn verify_stateless_rotation(
         vk: &[u8],
         payload: &RotationPayload,
@@ -368,6 +376,40 @@ impl PqStatefulScheme for ShrincsScheme {
     }
 }
 
+impl CommittedVerifyKey for ShrincsScheme {
+    /// Recomputes the commitment from `bundle`'s `statefulPublicKey`,
+    /// `pkSeed` and `hypertreeRoot`, and matches it against the 32-byte
+    /// `stored_commitment` the verifier installed
+    /// ([`bundle::verify_bundle`]). The commitment `bundle` carries in bytes
+    /// 68..100 is never the trusted side of that comparison.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `stored_commitment` is not 32 bytes or
+    /// `bundle` is not [`bundle::BUNDLE_LEN`] bytes.
+    /// [`Error::ComponentFailure`] for an all-zero `stored_commitment`
+    /// (uninstalled, and no bundle may ever match it) and for a bundle whose
+    /// recomputed commitment is not the stored one -- the two cases a
+    /// verifier must treat identically, since telling them apart tells a
+    /// caller whether an account was ever installed.
+    fn verify_committed_key(stored_commitment: &[u8], bundle: &[u8]) -> Result<()> {
+        let stored: &[u8; 32] = stored_commitment.try_into().map_err(|_| Error::BadLength {
+            expected: Self::PUBLIC_KEY_LEN,
+            actual: stored_commitment.len(),
+        })?;
+        match bundle::verify_bundle(bundle, stored) {
+            Ok(_) => Ok(()),
+            Err(bundle::BundleError::InvalidLength) => Err(Error::BadLength {
+                expected: bundle::BUNDLE_LEN,
+                actual: bundle.len(),
+            }),
+            Err(bundle::BundleError::ZeroCommitment | bundle::BundleError::CommitmentMismatch) => {
+                Err(Error::ComponentFailure)
+            }
+        }
+    }
+}
+
 /// Flatten a `hashsigs_rs::shrincs::PublicKey` into the
 /// [`bundle::BUNDLE_LEN`]-byte bundle layout `statefulPublicKey(68) ||
 /// commitment(32) || pkSeed(32) || hypertreeRoot(32)`.
@@ -403,10 +445,30 @@ fn parse_bundle(vk: &[u8]) -> Result<ShrincsBundlePublicKey> {
     })
 }
 
-/// Parse and self-verify a possibly-untrusted `vk` on the verification
-/// side: recomputes the commitment from the bundle and rejects any
-/// mismatch (`bundle::verify_bundle`), so a single tampered byte anywhere
-/// in `vk` is caught here rather than silently accepted.
+/// Parse `vk` and check that it is **internally consistent**: recompute the
+/// commitment from the bundle's `statefulPublicKey`, `pkSeed` and
+/// `hypertreeRoot`, and reject the bundle unless the commitment it carries
+/// in bytes 68..100 equals that recomputation.
+///
+/// # What this proves, and what it does not
+///
+/// It proves that the four fields of `vk` belong to one key: a bundle with
+/// one tampered byte, or a field spliced in from a second key, is rejected
+/// here. That is all it proves.
+///
+/// It does **not** prove that `vk` is the key the verifier installed. The
+/// commitment it compares against comes out of `vk` itself, so any bundle
+/// that a `keygen` produced passes -- including one an attacker generated
+/// from their own seed. A caller who takes `vk` from the wire and stops here
+/// verifies against whichever key the sender chose.
+///
+/// Binding `vk` to the installed key is
+/// [`PublicKey::from_stored_commitment_and_bundle`](pqhybridsign_core::stateful_composite::PublicKey::from_stored_commitment_and_bundle),
+/// which matches the recomputed commitment against the 32 bytes the
+/// verifier stores (this crate's [`CommittedVerifyKey`] implementation, over
+/// [`bundle::verify_bundle`]). Once that constructor has run, the commitment
+/// this function derives from `vk` is provably the stored one, which is why
+/// the three `verify_*` methods below may go on using it.
 fn verify_bundle_self_consistent(vk: &[u8]) -> Option<([u8; 32], ShrincsBundlePublicKey)> {
     if vk.len() != bundle::BUNDLE_LEN {
         return None;
@@ -480,7 +542,9 @@ fn write_bytes(out: &mut [u8], at: &mut usize, bytes: &[u8]) {
 }
 
 fn read_flat_stateful(bytes: &[u8]) -> Option<hashsigs_rs::shrincs::Signature> {
-    if bytes.len() < FIXED_STATEFUL_LEN || (bytes.len() - FIXED_STATEFUL_LEN) % HASH_LEN != 0 {
+    if bytes.len() < FIXED_STATEFUL_LEN
+        || !(bytes.len() - FIXED_STATEFUL_LEN).is_multiple_of(HASH_LEN)
+    {
         return None;
     }
     let mut at = 0;
@@ -565,6 +629,30 @@ fn read_hashes(bytes: &[u8], at: &mut usize, count: usize) -> Option<Vec<[u8; HA
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
+
+    /// An in-memory `StatelessBudgetStore`. Not durable, which is fine
+    /// here: `sign_stateless` requires a store to be callable at all, and
+    /// these tests are about what the component signs, not about
+    /// persistence.
+    #[derive(Default)]
+    struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+
+    impl StatelessBudgetStore for MemoryBudget {
+        type Error = core::convert::Infallible;
+
+        fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+            self.0.get(key.as_bytes()).copied()
+        }
+
+        // `core::result::Result`, spelled out: `use super::*` pulls in this
+        // crate's one-parameter `Result<T>` alias, which cannot name this
+        // store's own error type.
+        fn record(&mut self, key: &BudgetKey, count: u64) -> core::result::Result<(), Self::Error> {
+            self.0.insert(*key.as_bytes(), count);
+            Ok(())
+        }
+    }
 
     const SEED: [u8; 32] = [0x11; 32];
 
@@ -654,6 +742,94 @@ mod tests {
                 expected: bundle::BUNDLE_LEN,
                 actual: 10,
             })
+        );
+    }
+
+    /// A bundle an attacker generated from their own seed is internally
+    /// consistent, so [`verify_bundle_self_consistent`] accepts it and the
+    /// component verifies the attacker's own signature against it. Only the
+    /// stored commitment tells the two keys apart, and only
+    /// `PublicKey::from_stored_commitment_and_bundle` consults it. This test
+    /// pins both halves of that difference: if the constructor ever stops
+    /// consulting the stored commitment, the first assertion fails.
+    ///
+    /// Calls `keygen_from_seed` twice and signs once on the stateless path,
+    /// which costs minutes at the 128s profiles. Which key a commitment
+    /// names does not depend on the SHRINCS parameter set.
+    #[cfg(feature = "profile-256s")]
+    #[test]
+    fn an_attacker_generated_bundle_is_refused_only_against_the_stored_commitment() {
+        use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
+        use pqhybridsign_core::stateful_composite::{keygen, PublicKey};
+        use pqhybridsign_core::{ClassicalScheme, StatefulSuite};
+
+        use crate::H5;
+
+        type Classical = <H5 as StatefulSuite>::Classical;
+        const CLASSICAL_LEN: usize = <Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+
+        /// The small on-storage form: classical public key || 32-byte
+        /// commitment, taken from a composite verify key the holder produced
+        /// themselves and therefore trusts.
+        fn store(verify_public_key: &[u8]) -> Vec<u8> {
+            let mut stored = Vec::with_capacity(<H5 as StatefulSuite>::STORED_PUBLIC_KEY_LEN);
+            stored.extend_from_slice(&verify_public_key[..CLASSICAL_LEN]);
+            stored.extend_from_slice(
+                &verify_public_key[CLASSICAL_LEN + BUNDLE_COMMITMENT_OFFSET..][..32],
+            );
+            stored
+        }
+
+        let (_victim_sk, victim_pk) = keygen::<H5>(&[0xA1; 32], 4).expect("victim keygen");
+        let (attacker_sk, attacker_pk) = keygen::<H5>(&[0xB2; 32], 4).expect("attacker keygen");
+
+        let victim_stored = store(victim_pk.as_ref());
+        let victim_bundle = &victim_pk.as_ref()[CLASSICAL_LEN..];
+        let attacker_bundle = &attacker_pk.as_ref()[CLASSICAL_LEN..];
+
+        // The fix: the attacker's bundle is not the key the victim's account
+        // committed to, and the constructor says so.
+        assert_eq!(
+            PublicKey::<H5>::from_stored_commitment_and_bundle(&victim_stored, attacker_bundle)
+                .err(),
+            Some(Error::ComponentFailure),
+            "a bundle the stored commitment does not name must be refused"
+        );
+
+        // The victim's own bundle rebuilds the key `keygen` handed back.
+        let rebuilt =
+            PublicKey::<H5>::from_stored_commitment_and_bundle(&victim_stored, victim_bundle)
+                .expect("the installed bundle must be accepted");
+        assert_eq!(rebuilt.as_ref(), victim_pk.as_ref());
+
+        // The self-consistency check, on its own, cannot tell the two apart:
+        // the attacker's bundle passes it, and the component then verifies
+        // the attacker's own signature against the attacker's own key. This
+        // is the behaviour the corrected doc comment on
+        // `verify_bundle_self_consistent` describes, pinned so the claim
+        // stays true.
+        assert!(
+            verify_bundle_self_consistent(attacker_bundle).is_some(),
+            "an internally consistent bundle passes the self-consistency check"
+        );
+        let signature = <H5 as StatefulHybridSignatureScheme>::sign_stateless(
+            &attacker_sk,
+            &mut MemoryBudget::default(),
+            b"transfer everything",
+            b"",
+        )
+        .expect("attacker signs under their own key");
+        let unchecked = PublicKey::<H5>::from_bytes(attacker_pk.as_ref())
+            .expect("from_bytes checks only the length");
+        assert!(
+            <H5 as StatefulHybridSignatureScheme>::verify(
+                &unchecked,
+                b"transfer everything",
+                b"",
+                &signature
+            ),
+            "an unchecked verify key verifies whatever signed it, which is \
+             why the constructor above is the one to use"
         );
     }
 

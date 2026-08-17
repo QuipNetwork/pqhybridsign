@@ -38,7 +38,12 @@ for one suite cannot verify under another.
 |---|---|
 | `pqhybridsign-core` | Composition layer: suite macros, message binding, key derivation, wire encoding, and the stateful signer and verifier ports. Carries no cryptography of its own. |
 | `pqhybridsign` | H1 through H4, over `ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`. |
-| `pqhybridsign-shrincs` | H5 and H6, over `hashsigs-rs`. |
+| `pqhybridsign-shrincs` | H5 and H6, over `hashsigs-rs` pinned by revision. Depends on `pqhybridsign-core` and `pqhybridsign`. |
+
+H5 and H6 reuse the lattice crate classical components. They do not write
+those schemes again. Those components come from `ed25519-zebra` and
+`schnorrkel` through `pqhybridsign`. A license or dependency audit that
+reads only this table misses those crates.
 
 ## Stateless signing, H1 and H3
 
@@ -124,7 +129,7 @@ same suite under another parameter set.
 workspace builds for `wasm32-unknown-unknown`, and continuous integration
 checks it.
 
-The minimum supported Rust version is 1.82, set by `fn-dsa`.
+The minimum supported Rust version is 1.89, set by `hashsigs-rs`.
 
 ## Testing
 
@@ -203,6 +208,12 @@ carries no security consequence. `DESIGN.md` records the analysis.
 **Restoring a signer from a stored key is not a fast path.**
 `SecretKey::import` costs about the same as `keygen` at 128s, because it
 re-derives the hypertree root to validate the blob.
+
+The C and Python bindings call `import` on every stateful signature.
+A C or Python H5 signer under a 128s profile spends about 47 seconds
+per signature. The in-process Rust API signs in under 0.01 seconds.
+The performance table measures the Rust API. It does not measure the
+bindings.
 
 ## Limitations
 

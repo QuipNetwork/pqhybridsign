@@ -7,7 +7,10 @@
 // test does not depend on the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_shrincs::{keygen, H5, H6};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,6 +21,20 @@ use std::rc::Rc;
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter. A journal that has never been bound owns no key.
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
+}
+
+impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    /// Signing refuses a journal that is not the key's.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
 }
 
 impl LeafJournal for MemoryJournal {
@@ -36,6 +53,14 @@ impl LeafJournal for MemoryJournal {
             .max()
             .map_or(0, |m| m + 1)
     }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
+    }
 }
 
 // 1. keygen -> sign_stateful -> verify, for both H5 and H6.
@@ -43,7 +68,7 @@ impl LeafJournal for MemoryJournal {
 #[test]
 fn h5_stateful_round_trip_verifies() {
     let (mut sk, pk) = keygen::<H5>(&[1u8; 32], 4).expect("keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
 
     let sig = H5::sign_stateful(&mut sk, &mut journal, b"hello H5", b"ctx").expect("sign");
 
@@ -53,7 +78,7 @@ fn h5_stateful_round_trip_verifies() {
 #[test]
 fn h6_stateful_round_trip_verifies() {
     let (mut sk, pk) = keygen::<H6>(&[1u8; 32], 4).expect("keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
 
     let sig = H6::sign_stateful(&mut sk, &mut journal, b"hello H6", b"ctx").expect("sign");
 
@@ -69,7 +94,7 @@ fn h6_stateful_round_trip_verifies() {
 #[test]
 fn successive_stateful_signatures_advance_the_leaf_and_both_verify() {
     let (mut sk, pk) = keygen::<H5>(&[3u8; 32], 4).expect("keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
 
     let first = H5::sign_stateful(&mut sk, &mut journal, b"message one", b"").expect("first sign");
     assert_eq!(*journal.committed.borrow(), vec![0]);
@@ -91,7 +116,7 @@ fn successive_stateful_signatures_advance_the_leaf_and_both_verify() {
 fn h5_signature_does_not_verify_under_h6() {
     let (mut sk_h5, _pk_h5) = keygen::<H5>(&[4u8; 32], 4).expect("h5 keygen");
     let (_sk_h6, pk_h6) = keygen::<H6>(&[4u8; 32], 4).expect("h6 keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk_h5.key_identity());
 
     let sig = H5::sign_stateful(&mut sk_h5, &mut journal, b"cross-suite", b"").expect("sign");
 
@@ -104,7 +129,7 @@ fn h5_signature_does_not_verify_under_h6() {
 #[test]
 fn tampering_either_half_fails_verification() {
     let (mut sk, pk) = keygen::<H5>(&[5u8; 32], 4).expect("keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
     let sig = H5::sign_stateful(&mut sk, &mut journal, b"tamper me", b"").expect("sign");
     assert!(H5::verify(&pk, b"tamper me", b"", &sig));
 
@@ -139,8 +164,11 @@ fn tampering_either_half_fails_verification() {
 fn stateless_signature_verifies_and_resigning_is_byte_identical() {
     let (sk, pk) = keygen::<H5>(&[7u8; 32], 4).expect("keygen");
 
-    let a = H5::sign_stateless(&sk, b"stateless message", b"ctx").expect("sign a");
-    let b = H5::sign_stateless(&sk, b"stateless message", b"ctx").expect("sign b");
+    // One store across both calls: a resign draws a second unit of the same
+    // budget, and the signature bytes must still match.
+    let mut budget = MemoryBudget::default();
+    let a = H5::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign a");
+    let b = H5::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign b");
 
     assert_eq!(a, b, "resigning the same message must be byte-identical");
     assert!(H5::verify(&pk, b"stateless message", b"ctx", &a));
@@ -150,7 +178,29 @@ fn stateless_signature_verifies_and_resigning_is_byte_identical() {
 fn h6_stateless_signature_verifies() {
     let (sk, pk) = keygen::<H6>(&[8u8; 32], 4).expect("keygen");
 
-    let sig = H6::sign_stateless(&sk, b"h6 stateless", b"").expect("sign");
+    let sig =
+        H6::sign_stateless(&sk, &mut MemoryBudget::default(), b"h6 stateless", b"").expect("sign");
 
     assert!(H6::verify(&pk, b"h6 stateless", b"", &sig));
+}
+
+/// An in-memory `StatelessBudgetStore`. Not durable across a process
+/// restart, which is fine for a test: the property under test is that the
+/// count is consulted and advanced at all, not real persistence. A
+/// deployment must persist this, or the few-time bound of specification
+/// section 21 can be exceeded silently after any restart.
+#[derive(Default)]
+struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+
+impl StatelessBudgetStore for MemoryBudget {
+    type Error = core::convert::Infallible;
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        self.0.get(key.as_bytes()).copied()
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        self.0.insert(*key.as_bytes(), count);
+        Ok(())
+    }
 }

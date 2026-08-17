@@ -46,11 +46,13 @@
 #![cfg(feature = "profile-128s-q18")]
 
 // Shared loader exposes fields for every consumer. This binary only needs the
-// H5 public key and stateful leaf-1 material, so the rest is unused here.
-#[allow(dead_code)]
+// H5 public key and stateful leaf-1 material; the loader allows the unused
+// rest.
 mod fixture;
 
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_shrincs::{keygen, H5};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -58,6 +60,20 @@ use std::rc::Rc;
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter. A journal that has never been bound owns no key.
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
+}
+
+impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    /// Signing refuses a journal that is not the key's.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
 }
 
 impl LeafJournal for MemoryJournal {
@@ -76,6 +92,14 @@ impl LeafJournal for MemoryJournal {
             .max()
             .map_or(0, |m| m + 1)
     }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
+    }
 }
 
 #[test]
@@ -90,7 +114,7 @@ fn keygen_matches_h5_fixture_and_stateful_leaf_1_is_reproducible() {
         "keygen public key must match the pinned H5 fixture bytes"
     );
 
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
     let sig = H5::sign_stateful(&mut sk, &mut journal, &f.stateful_msg, &f.stateful_ctx)
         .expect("stateful leaf 1");
 

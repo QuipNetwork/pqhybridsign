@@ -4,6 +4,110 @@
  * run `cargo run --example gen_header -p pqhybridsign-cffi` and commit the
  * result. `cargo test -p pqhybridsign-cffi` fails if this file drifts from
  * the source it was generated from.
+ *
+ * ===========================================================================
+ * The contract this boundary keeps
+ * ===========================================================================
+ *
+ * Every function here is prefixed `pqhs_`.
+ *
+ * --- Every entry point returns an error code ---
+ *
+ * `0` (PQHS_OK) is success. A nonzero return is one of the PQHS_ERR_*
+ * constants below: 1..=18 mirror the Rust `pqhybridsign_abi::AbiError`
+ * codes one for one, and 100 and above are this binding's own codes for
+ * situations that only exist at a raw-pointer boundary. pqhs_error_message
+ * turns any of them into a human-readable string. pqhs_verify is the one
+ * exception: an invalid signature is reported through its `bool`
+ * out-parameter, not the return code, because rejecting a signature is not
+ * a call failure.
+ *
+ * --- What an error code means ---
+ *
+ * Every argument that can be checked before work starts is checked before
+ * work starts: the suite, every pointer, and the exact length of every
+ * fixed-size buffer. A call rejected on one of those has changed nothing
+ * the caller can observe, so it is safe to fix the argument and call again.
+ *
+ * Two cases on the stateful path are different, and both are deliberate.
+ *
+ * First, once pqhs_sign_stateful has durably committed a one-time leaf to
+ * the caller's journal, `sk_out` is written even if signing then fails,
+ * because leaving the caller's key behind the journal is worse than
+ * reporting an error alongside an advanced key.
+ *
+ * Second, a `sig_out` too small to hold the finished signature can only be
+ * discovered once that signature exists. PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL
+ * from pqhs_sign_stateful therefore means the leaf IS spent and `sk_out`
+ * holds the advanced key: persist `sk_out`, then re-sign with a correctly
+ * sized buffer, which will spend the next leaf. It is not a call that can
+ * be retried as though it had not happened. Sizing every output buffer from
+ * pqhs_signature_len, pqhs_secret_key_len and pqhs_public_key_len avoids
+ * this case altogether, and is what an integration should do.
+ *
+ * --- The caller owns every buffer ---
+ *
+ * Every buffer parameter is a pointer plus a length. This library never
+ * allocates a buffer it hands back, and never retains one after a call
+ * returns. A length is always checked against what the call needs before
+ * anything is written -- a caller-supplied length is never trusted past
+ * that check -- and a buffer that is too small comes back as an error code,
+ * never a partial write past its bound. A null pointer is likewise always
+ * an error code and never a dereference; a null pointer paired with a
+ * length of 0 is read as an empty buffer, not an error.
+ *
+ * No two pointer arguments to one call may refer to overlapping memory.
+ * pqhs_sign_stateful detects and refuses the one overlap a C integrator is
+ * most likely to write by accident, `sk_out == sk`; every other pair is the
+ * caller's obligation to keep apart.
+ *
+ * --- Zeroizing secret key material is the caller's job ---
+ *
+ * Because this library holds no secret key material of its own between
+ * calls -- keys live only in the caller's buffers, passed in and read back
+ * out -- there is nothing here for it to wipe on shutdown. Wiping a secret
+ * key buffer once you are done with it is your own responsibility.
+ *
+ * --- H5 and H6 keep their guardrails ---
+ *
+ * H5 and H6 spend a one-time leaf per signature; reusing one is a total
+ * loss of the key's post-quantum security. This library offers no call
+ * shaped like an ordinary stateless sign that can reach either suite:
+ * pqhs_sign and pqhs_sign_deterministic reject them with
+ * PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, and the only way to spend a leaf is
+ * pqhs_sign_stateful, which requires a PqhsLeafJournal -- a durable,
+ * caller-owned log of spent leaves -- as an argument, not an option.
+ *
+ * That journal must also be bound to the key it is spending for, once, by
+ * pqhs_adopt_key. A journal records both how far a key has spent and which
+ * key it belongs to, because the counter alone cannot tell a journal
+ * correctly reopened for its own key from a brand-new one handed the same
+ * key by mistake: both report leaf 0 for a key that has spent nothing.
+ * pqhs_sign_stateful refuses an unbound or wrongly bound journal with
+ * PQHS_ERR_JOURNAL_KEY_MISMATCH, having spent nothing.
+ *
+ * --- Threading ---
+ *
+ * Every entry point is stateless: key, signature and leaf state live only
+ * in the caller's buffers for the duration of one call, so calls on
+ * different threads over different buffers do not interact. The only
+ * process-wide state is the string cached by pqhs_profile_name, which is
+ * initialised once and never mutated. The caller's own journal is the part
+ * that is not thread-safe: see PqhsLeafJournal.
+ *
+ * --- No panics cross this boundary ---
+ *
+ * Every entry point is wrapped in an internal panic guard, which catches an
+ * unwinding Rust panic from anywhere underneath and turns it into
+ * PQHS_ERR_PANIC instead of letting it cross into C, which would be
+ * undefined behaviour. The Rust layers below are written not to panic; this
+ * is a backstop, not the primary contract.
+ *
+ * --- Reading the doc comments ---
+ *
+ * The per-item comments below are generated from Rust doc comments, so
+ * cross-references appear in Rust's `[`name`](path)` link form. Read those
+ * as plain references to the C function of the same name.
  */
 
 #ifndef PQHYBRIDSIGN_H
@@ -115,6 +219,50 @@
 #define PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE 16
 
 /**
+ * H5/H6 only: the secret key's leaf counter and the leaf journal no longer
+ * agree, so this key can sign no more. Rotate it. Do not repair the
+ * counters by hand: that reissues a spent leaf, which destroys the key's
+ * security. Distinct from `PQHS_ERR_SIGNING_FAILED`, which may be worth
+ * retrying. Mirrors `AbiError::CountersDiverged`.
+ */
+#define PQHS_ERR_COUNTERS_DIVERGED 17
+
+/**
+ * H5/H6 only: the journal does not belong to this key. Its `bound_key`
+ * callback reported no binding at all, or a binding to a different key.
+ * Nothing was spent and the key is intact -- unlike
+ * `PQHS_ERR_COUNTERS_DIVERGED`, this is not a reason to rotate. Reopen the
+ * durable journal that belongs to this key, or, if there genuinely is none,
+ * bind one explicitly with [`crate::pqhs_adopt_key`]. Mirrors
+ * `AbiError::JournalKeyMismatch`.
+ */
+#define PQHS_ERR_JOURNAL_KEY_MISMATCH 18
+
+/**
+ * H5/H6 only: the few-time stateless budget for this key's stateless
+ * material is spent (specification section 21). Nothing was spent on the
+ * refused attempt.
+ *
+ * Distinct from `PQHS_ERR_LEAVES_EXHAUSTED`, which is the stateful path's
+ * separate one-time leaf budget. This bound is shared by stateless signing,
+ * rotation authorization and recovery, and it is not a quota to raise:
+ * exceeding it degrades the security assumption of the underlying few-time
+ * scheme. It clears only when a rotation actually changes the stateless key
+ * material. Mirrors `AbiError::StatelessBudgetExhausted`.
+ */
+#define PQHS_ERR_STATELESS_BUDGET_EXHAUSTED 19
+
+/**
+ * H5/H6 only: the caller's [`crate::PqhsStatelessBudget`] reported that it
+ * could not durably record the spend, so no stateless signature was
+ * released. The stateless counterpart of `PQHS_ERR_JOURNAL_FAILED`, and
+ * transient on the same terms: nothing was recorded, so the same unit of
+ * budget is still available once the storage fault is repaired. Mirrors
+ * `AbiError::BudgetStoreFailed`.
+ */
+#define PQHS_ERR_BUDGET_STORE_FAILED 20
+
+/**
  * A required pointer argument was null while its paired length was
  * nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
  * raw pointer, so it has no code for a null one. A null pointer paired
@@ -133,6 +281,43 @@
 #define PQHS_ERR_PANIC 101
 
 /**
+ * Two buffer arguments that must not alias pointed at overlapping memory.
+ * This crate's own code, for the same reason as
+ * [`PQHS_ERR_NULL_POINTER`]: [`pqhybridsign_abi`] receives Rust slices,
+ * which cannot overlap in the first place. Nothing was read, written or
+ * spent. Today this is raised only for an `sk`/`sk_out` pair in
+ * [`crate::pqhs_sign_stateful`], where passing the same buffer twice is
+ * the most natural way to write an in-place key update in C.
+ */
+#define PQHS_ERR_ALIASED_BUFFERS 102
+
+/**
+ * Width in bytes of a key identity: the value
+ * [`PqhsLeafJournal::bound_key`] reports, [`PqhsLeafJournal::bind_key`]
+ * stores, and [`pqhs_key_identity`] writes.
+ *
+ * Written as a literal rather than as an alias for
+ * `pqhybridsign_abi::KEY_IDENTITY_LEN`, because cbindgen copies the
+ * initialising expression into the header verbatim and a C compiler has no
+ * `KEY_IDENTITY_LEN` to expand. The assertion below is what keeps the two in
+ * step: a change upstream fails this build rather than shipping a header
+ * that disagrees with the library.
+ */
+#define PQHS_KEY_IDENTITY_LEN 32
+
+/**
+ * Width in bytes of a budget key: the value a
+ * [`PqhsStatelessBudget`] callback receives to identify which stateless
+ * material a count belongs to.
+ *
+ * Written as a literal for the same reason as [`PQHS_KEY_IDENTITY_LEN`]:
+ * cbindgen copies the initialising expression into the header verbatim, and
+ * a C compiler has no Rust constant to expand. The assertion below keeps it
+ * in step with the library.
+ */
+#define PQHS_BUDGET_KEY_LEN 32
+
+/**
  * A caller-owned durable log of spent one-time leaves, passed to
  * [`pqhs_sign_stateful`].
  *
@@ -143,13 +328,56 @@
  * is a total loss of the key's post-quantum security. Returning nonzero
  * from `commit` MUST mean nothing was recorded.
  *
- * `ctx` is passed back unchanged to both callbacks and is never
+ * A journal also records **which key** it belongs to, through `bound_key`
+ * and `bind_key`. That binding is as durable as the counter and is what
+ * separates a journal correctly reopened for its own key from a brand-new
+ * one handed the same key by mistake: both report `0` from `next_leaf` for a
+ * key that has spent nothing, and signing under the second reissues every
+ * leaf the first spent. [`pqhs_sign_stateful`] refuses a journal that is not
+ * bound to the key it was handed, with `PQHS_ERR_JOURNAL_KEY_MISMATCH`;
+ * [`pqhs_adopt_key`] is the one call that creates a binding.
+ *
+ * `ctx` is passed back unchanged to every callback and is never
  * dereferenced by this crate; it exists so a caller can close over its own
  * state without a second, language-specific registration mechanism.
+ *
+ * # No callback may re-enter this library
+ *
+ * `commit`, `next_leaf`, `bound_key` and `bind_key` MUST NOT call any
+ * `pqhs_*` function, directly
+ * or indirectly. All run while [`pqhs_sign_stateful`] holds live
+ * references to the caller's `sk`, `sk_out` and `sig_out` buffers, so a
+ * callback that re-enters with any of those buffers is the same aliasing
+ * undefined behaviour `PQHS_ERR_ALIASED_BUFFERS` exists to catch on the
+ * argument list -- and nothing detects it from inside a callback. A
+ * callback that re-enters with the same journal is worse still: it spends
+ * leaves in an order the outer call does not expect, which is exactly the
+ * leaf reuse the journal exists to prevent. Do the work the callback needs
+ * (the durable write) and return.
+ *
+ * # Threading
+ *
+ * Both callbacks are plain C calls made on whatever thread called
+ * [`pqhs_sign_stateful`]; this library starts no threads and hands the
+ * `ctx` pointer to nothing else.
+ *
+ * Every entry point in this library is stateless -- keys, signatures and
+ * leaf state live only in the caller's own buffers, for the duration of
+ * one call -- so calls on different threads over different buffers do not
+ * interact. The one piece of process-wide state is the cached string
+ * behind [`pqhs_profile_name`](crate::pqhs_profile_name), which is
+ * initialised once and never mutated.
+ *
+ * What is *not* thread-safe is the caller's own journal. Two threads
+ * signing with the same journal, or with two copies of the same stateful
+ * secret key, can be handed the same leaf. Serialising access to a journal
+ * and to the key blob it tracks is the caller's responsibility, and it is
+ * not optional: a reused leaf is a total loss of the key's post-quantum
+ * security.
  */
 typedef struct {
   /**
-   * Opaque caller state, passed unchanged to `commit` and `next_leaf`.
+   * Opaque caller state, passed unchanged to every callback.
    */
   void *ctx;
   /**
@@ -161,7 +389,102 @@ typedef struct {
    * The next unused leaf, as last committed. `0` for a fresh journal.
    */
   uint32_t (*next_leaf)(void *ctx);
+  /**
+   * Report the key this journal belongs to. Returns `0` and writes exactly
+   * `PQHS_KEY_IDENTITY_LEN` bytes to `out` if a binding exists, or any
+   * nonzero value -- writing nothing -- if the journal has never been
+   * bound.
+   *
+   * Nonzero MUST mean "never bound", never "could not read". A storage
+   * error reported as "never bound" invites [`pqhs_adopt_key`] to write a
+   * binding over one that already exists, which is what forks the leaf
+   * budget. Fail before constructing the journal instead.
+   */
+  int (*bound_key)(void *ctx, uint8_t *out, size_t out_len);
+  /**
+   * Durably record that this journal belongs to the
+   * `PQHS_KEY_IDENTITY_LEN`-byte identity at `key`. Returns `0` once the
+   * write is durable, or any nonzero value to report that nothing was
+   * written. The same durability rule `commit` follows.
+   */
+  int (*bind_key)(void *ctx, const uint8_t *key, size_t key_len);
 } PqhsLeafJournal;
+
+/**
+ * A caller-owned durable record of how much of the few-time stateless
+ * budget each stateless key material has consumed, passed to
+ * [`pqhs_sign_stateless`].
+ *
+ * The stateless counterpart of [`PqhsLeafJournal`], and required on the
+ * same terms: [`pqhs_sign_stateless`] cannot be called without one. The
+ * stateless path has a hard security bound of its own -- `2^20` signatures,
+ * `2^18` under the low-budget profile -- shared with rotation and recovery,
+ * and exceeding it degrades the security assumption of the underlying
+ * few-time scheme. It is not a quota to enforce loosely.
+ *
+ * `record` MUST NOT return until the count is durably stored, for the same
+ * reason [`PqhsLeafJournal::commit`] must not: a crash after `record`
+ * returns `0` but before the write reaches stable storage hands the same
+ * unit of budget out again after a restart, and enough of those exceed the
+ * bound with nothing reporting it. Returning nonzero from `record` MUST
+ * mean nothing was stored.
+ *
+ * Entries are keyed by a `PQHS_BUDGET_KEY_LEN`-byte value derived from the
+ * key's stateless material (`pkSeed || hypertreeRoot`), so one store serves
+ * every key an integrator holds and there is no separate binding step: two
+ * keys sharing stateless material always produce the same budget key, and
+ * two keys with different stateless material never do. A rotation that does
+ * not change that material therefore continues the same count rather than
+ * starting a new one, which is exactly what stops a rotation from refilling
+ * the bound.
+ *
+ * `ctx` is passed back unchanged to every callback and is never
+ * dereferenced by this crate.
+ *
+ * # No callback may re-enter this library
+ *
+ * `consumed` and `record` MUST NOT call any `pqhs_*` function, directly or
+ * indirectly, on the same terms as [`PqhsLeafJournal`]'s callbacks: they
+ * run while [`pqhs_sign_stateless`] holds live references to the caller's
+ * `sk` and `sig_out` buffers.
+ *
+ * # Threading
+ *
+ * As with [`PqhsLeafJournal`], the callbacks are plain C calls on the
+ * calling thread, and serialising access to the store is the caller's
+ * responsibility. Two threads signing against one unserialised store can
+ * each read the same count and each write back the same increment, which
+ * loses one spend per race and lets the bound be exceeded.
+ */
+typedef struct {
+  /**
+   * Opaque caller state, passed unchanged to every callback.
+   */
+  void *ctx;
+  /**
+   * Report how many stateless signatures have already been produced for
+   * the `PQHS_BUDGET_KEY_LEN`-byte budget key at `key`. Returns `0` and
+   * writes the count to `out_consumed` if this material is tracked, or
+   * any nonzero value -- writing nothing -- if it has never been tracked.
+   *
+   * Nonzero MUST mean "never tracked", never "could not read". A storage
+   * error reported as "never tracked" is read here as a count of zero,
+   * which hands the caller a full budget for material that may have spent
+   * most of it. Fail before constructing the store instead.
+   */
+  int (*consumed)(void *ctx, const uint8_t *key, size_t key_len, uint64_t *out_consumed);
+  /**
+   * Durably record that `count` stateless signatures have now been
+   * produced for the `PQHS_BUDGET_KEY_LEN`-byte budget key at `key`.
+   * Returns `0` once the write is durable, or any nonzero value to report
+   * that nothing was stored.
+   */
+  int (*record)(void *ctx, const uint8_t *key, size_t key_len, uint64_t count);
+} PqhsStatelessBudget;
+
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
 
 /**
  * A human-readable, `NUL`-terminated, `'static` message for `code`.
@@ -256,7 +579,13 @@ int pqhs_keygen_stateful_from_seed(uint8_t suite,
  * is valid for the lifetime of the process and must not be freed or
  * written through.
  *
- * This call cannot fail: it always returns a valid pointer.
+ * This entry point has no error channel, so the panic guard every function
+ * in this crate carries has nowhere to report a caught panic: it returns a
+ * null pointer instead of unwinding into C. Check the result for null
+ * before reading it. Nothing on this path is expected to panic -- the
+ * profile name is a fixed ASCII literal cached on first call -- so a null
+ * return means something is wrong underneath, not that the profile is
+ * unknown.
  */
 const char *pqhs_profile_name(void);
 
@@ -329,12 +658,18 @@ int pqhs_sign_deterministic(uint8_t suite,
  * six suites.
  *
  * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
- * cases: an invalid signature is not a call failure. A return code other
- * than `PQHS_OK` means the call itself could not be made (a null pointer,
- * an unknown suite) and `*valid_out` was not written. A malformed `pk` or
+ * cases: an invalid signature is not a call failure. A malformed `pk` or
  * `sig` simply fails to verify -- the same design every underlying verify
  * function in this workspace uses, so a caller cannot learn which
  * component or encoding rejected from a timing or error-code side channel.
+ *
+ * `*valid_out` is set to `false` before anything else happens, so it is
+ * `false` on every path that returns a code other than `PQHS_OK` as well
+ * (an unknown suite, a null buffer). Ignoring the return code is the most
+ * common mistake a C caller makes, and the only safe reading of
+ * `*valid_out` after a call that did not verify anything is `false`. The
+ * one case that cannot fail closed is a null `valid_out` itself, which is
+ * rejected before any other check.
  *
  * # Errors
  *
@@ -416,6 +751,103 @@ int pqhs_secret_key_len(uint8_t suite, size_t *out);
 int pqhs_signature_len(uint8_t suite, size_t *out);
 
 /**
+ * Bind `journal` to the key `key` names, unless it already belongs to a
+ * different key.
+ *
+ * This is the explicit act an integrator performs once, when a key's durable
+ * journal is first created. [`pqhs_sign_stateful`] never does it: pairing a
+ * key with a journal that has never seen it is how one key's one-time leaves
+ * get spent twice, and it is refused with `PQHS_ERR_JOURNAL_KEY_MISMATCH`
+ * rather than silently accepted.
+ *
+ * `key` is the [`PQHS_KEY_IDENTITY_LEN`]-byte value
+ * [`pqhs_key_identity`] or [`pqhs_key_identity_from_secret_key`] produced.
+ * Calling this is idempotent for a journal already bound to `key`.
+ *
+ * Do not call it on a fresh journal at every process start: that mints a new
+ * binding each time and starts the leaf budget over, which is the defect the
+ * binding exists to close.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_NULL_POINTER` if `journal` or `key` is null, or if
+ * `journal->bound_key` or `journal->bind_key` is null.
+ * `PQHS_ERR_BAD_LENGTH` if `key_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+ * `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal` already belongs to another
+ * key; nothing is written. `PQHS_ERR_JOURNAL_FAILED` if `bind_key` reported
+ * the write did not become durable.
+ *
+ * # Safety
+ *
+ * `journal`, if non-null, must point to a valid `PqhsLeafJournal` whose
+ * `ctx` is a pointer its own callbacks are prepared to receive, and whose
+ * callbacks do not call back into this library (see [`PqhsLeafJournal`]).
+ * `key`, if non-null, must be valid for reads for `key_len` bytes for the
+ * duration of this call.
+ */
+int pqhs_adopt_key(const PqhsLeafJournal *journal, const uint8_t *key, size_t key_len);
+
+/**
+ * Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key `pk`
+ * describes into `out`.
+ *
+ * `pk` is the verify-form public key
+ * [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
+ * wrote, exactly [`pqhs_public_key_len`](crate::pqhs_public_key_len) bytes
+ * for `suite`. It is public material, so this identity can be computed
+ * without ever holding the secret key.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4, which have no journal
+ * and so no identity. `PQHS_ERR_BAD_LENGTH` if `pk` is not the suite's
+ * public key length or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `pk`, writes for `out`) for exactly its paired length in
+ * bytes, and must not be aliased by another live pointer for the duration of
+ * this call. A null pointer is only valid when its paired length is `0`.
+ */
+int pqhs_key_identity(uint8_t suite,
+                      const uint8_t *pk,
+                      size_t pk_len,
+                      uint8_t *out,
+                      size_t out_len);
+
+/**
+ * Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key an exported
+ * secret key blob holds into `out`.
+ *
+ * The same value [`pqhs_key_identity`] writes for the matching public key:
+ * it comes from the blob's cached post-quantum verify key, which is public,
+ * and no secret byte reaches it. This exists because the restart path has
+ * the blob in hand and may not have kept the public key.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4. `PQHS_ERR_BAD_LENGTH` if
+ * `sk` is not [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for
+ * `suite` or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+ * `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `sk`, writes for `out`) for exactly its paired length in
+ * bytes, and must not be aliased by another live pointer for the duration of
+ * this call. A null pointer is only valid when its paired length is `0`.
+ */
+int pqhs_key_identity_from_secret_key(uint8_t suite,
+                                      const uint8_t *sk,
+                                      size_t sk_len,
+                                      uint8_t *out,
+                                      size_t out_len);
+
+/**
  * Sign `msg` under `ctx` for `suite`, spending one leaf recorded through
  * `journal`.
  *
@@ -429,8 +861,22 @@ int pqhs_signature_len(uint8_t suite, size_t *out);
  * Writing `sk_out` unconditionally in that case keeps the caller's copy of
  * the key in step with the journal; skipping it is exactly the
  * silent-leaf-drift failure mode this entry point exists to rule out.
- * `sk_out` is not written if `sk` fails to import or if `sk_out` itself is
- * the wrong length.
+ * `sk_out` is not written if `sk` fails to import, which happens before
+ * any leaf is spent.
+ *
+ * Every argument check -- the suite, the pointers, and the lengths of
+ * `sk` and `sk_out` -- happens before the component signer runs, so a
+ * rejected call has spent nothing and left `journal` untouched. That
+ * ordering is what makes an error code safe to act on: an error raised
+ * after a leaf had been committed but before the advanced key was handed
+ * back would leave `journal` permanently ahead of every copy of the key
+ * the caller holds, and the key unusable for the rest of its budget.
+ *
+ * `sk` and `sk_out` must be separate buffers. Passing the same buffer for
+ * both -- the natural way to write an in-place key update in C -- is
+ * `PQHS_ERR_ALIASED_BUFFERS`, and so is any partial overlap between them.
+ * Copy `sk` into `sk_out`'s buffer afterwards if that is the shape the
+ * integration wants.
  *
  * # Errors
  *
@@ -438,12 +884,16 @@ int pqhs_signature_len(uint8_t suite, size_t *out);
  * [`pqhs_sign`](crate::pqhs_sign) or
  * [`pqhs_sign_deterministic`](crate::pqhs_sign_deterministic) instead.
  * `PQHS_ERR_BAD_LENGTH` if `sk` or `sk_out` is not exactly
- * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
- * `PQHS_ERR_LEAVES_EXHAUSTED` if the key's leaf budget is spent, checked
- * before the journal is touched. `PQHS_ERR_JOURNAL_FAILED` if `journal`
- * could not durably commit; nothing was spent. `PQHS_ERR_NULL_POINTER` if
- * `journal` is null or either of its callbacks is null, or if any buffer
- * pointer paired with a nonzero length is null.
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`,
+ * checked before the journal is touched. `PQHS_ERR_LEAVES_EXHAUSTED` if
+ * the key's leaf budget is spent, also checked before the journal is
+ * touched. `PQHS_ERR_JOURNAL_FAILED` if `journal` could not durably
+ * commit; nothing was spent. `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal`
+ * is not bound to this key; nothing was spent and the key is intact.
+ * `PQHS_ERR_NULL_POINTER` if `journal` is null
+ * or any of its four callbacks is null, if `sig_written` is null, or if any
+ * buffer pointer paired with a nonzero length is null.
+ * `PQHS_ERR_ALIASED_BUFFERS` if `sk` and `sk_out` overlap.
  *
  * # Safety
  *
@@ -451,9 +901,13 @@ int pqhs_signature_len(uint8_t suite, size_t *out);
  * access (reads for `sk`/`journal`/`msg`/`ctx`, writes for
  * `sk_out`/`sig_out`/`sig_written`) for exactly its paired length in
  * bytes, and must not be aliased by another live pointer for the duration
- * of this call. A null pointer is only valid when its paired length is
- * `0`; `journal`, if non-null, must point to a valid `PqhsLeafJournal`
- * whose `ctx` is a pointer its own callbacks are prepared to receive.
+ * of this call. The `sk`/`sk_out` pair is the one overlap this function
+ * detects and refuses rather than leaving to the caller; every other pair
+ * is still the caller's obligation. A null pointer is only valid when its
+ * paired length is `0`; `journal`, if non-null, must point to a valid
+ * `PqhsLeafJournal` whose `ctx` is a pointer its own callbacks are
+ * prepared to receive, and whose callbacks do not call back into this
+ * library (see [`PqhsLeafJournal`]).
  */
 int pqhs_sign_stateful(uint8_t suite,
                        const uint8_t *sk,
@@ -471,7 +925,14 @@ int pqhs_sign_stateful(uint8_t suite,
 
 /**
  * Sign `msg` under `ctx` for `suite` without spending any leaf state, using
- * SHRINCS's stateless few-time path (specification section 21).
+ * SHRINCS's stateless few-time path (specification section 21), and
+ * spending one unit of the few-time stateless budget.
+ *
+ * `budget` is required. The stateless path has a hard bound of its own,
+ * shared with rotation and recovery, and the spend is made durable through
+ * `budget` before the signature is built -- the same order
+ * [`pqhs_sign_stateful`] commits its leaf in. See [`PqhsStatelessBudget`]
+ * for the durability contract the callbacks must honour.
  *
  * # Errors
  *
@@ -479,7 +940,12 @@ int pqhs_sign_stateful(uint8_t suite,
  * if `sk` is not exactly
  * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
  * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
- * null, or if `sig_written` is null.
+ * null, if `sig_written` is null, if `budget` is null, or if either of
+ * `budget`'s callbacks is null.
+ * `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's stateless budget is
+ * spent; nothing was recorded and no signature was built.
+ * `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+ * become durable; nothing was recorded either.
  *
  * # Safety
  *
@@ -488,11 +954,15 @@ int pqhs_sign_stateful(uint8_t suite,
  * for exactly its paired length in bytes, and must not be aliased by
  * another live pointer for the duration of this call. A null pointer is
  * only valid when its paired length is `0`; `sig_written` has no paired
- * length and must be a valid, non-null, writable `usize` pointer.
+ * length and must be a valid, non-null, writable `usize` pointer. `budget`
+ * must point to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its
+ * own callbacks are prepared to receive, and whose callbacks do not call
+ * back into this library.
  */
 int pqhs_sign_stateless(uint8_t suite,
                         const uint8_t *sk,
                         size_t sk_len,
+                        const PqhsStatelessBudget *budget,
                         const uint8_t *msg,
                         size_t msg_len,
                         const uint8_t *ctx,
@@ -500,5 +970,9 @@ int pqhs_sign_stateless(uint8_t suite,
                         uint8_t *sig_out,
                         size_t sig_out_len,
                         size_t *sig_written);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
 
 #endif  /* PQHYBRIDSIGN_H */

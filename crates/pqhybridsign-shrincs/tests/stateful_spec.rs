@@ -31,7 +31,9 @@ use pqhybridsign_core::encoding_path::{
     decode_path_selected, PathBody, PathProfile, TrustedMaxSignatures, AUTH_PATH_NODE_LEN,
     CLASSICAL_SIG_LEN, LEAF_COUNT_LEN, SELECTOR_LEN, SELECTOR_STATEFUL,
 };
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme, StatefulSignError};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme, StatefulSignError,
+};
 use pqhybridsign_core::{m_prime, Error, PqStatefulScheme, StatefulSuite};
 use pqhybridsign_shrincs::{action, keygen, PublicKey, ShrincsScheme, H5};
 use std::cell::RefCell;
@@ -48,9 +50,21 @@ use std::sync::OnceLock;
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter. A journal that has never been bound owns no key.
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
 }
 
 impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    /// Signing refuses a journal that is not the key's.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
+
     fn committed(&self) -> Vec<u32> {
         self.committed.borrow().clone()
     }
@@ -75,6 +89,14 @@ impl LeafJournal for MemoryJournal {
             .copied()
             .max()
             .map_or(0, |m| m + 1)
+    }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
     }
 }
 
@@ -153,7 +175,7 @@ fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let (mut sk, public_key) = keygen::<H5>(&[17u8; 32], FIXTURE_MAX).expect("keygen");
-        let mut journal = MemoryJournal::default();
+        let mut journal = MemoryJournal::adopted(sk.key_identity());
         let signatures = FIXTURE_MESSAGES
             .iter()
             .map(|msg| {
@@ -281,7 +303,7 @@ fn signer_guard_is_a_budget_check_not_a_reuse_detector() {
     let seed = [16u8; 32];
 
     let (mut sk, pk) = keygen::<H5>(&seed, 4).expect("keygen");
-    let journal = MemoryJournal::default();
+    let journal = MemoryJournal::adopted(sk.key_identity());
     let mut journal_handle = journal.clone();
     let first = H5::sign_stateful(&mut sk, &mut journal_handle, b"guard", b"").expect("first sign");
     assert_eq!(wire_leaf_count(&first), 1);
@@ -293,7 +315,7 @@ fn signer_guard_is_a_budget_check_not_a_reuse_detector() {
     // that its two counters disagree.
     journal.rewind_to(0);
     let outcome = H5::sign_stateful(&mut sk, &mut journal_handle, b"guard again", b"");
-    assert_eq!(outcome, Err(StatefulSignError::SigningFailed));
+    assert_eq!(outcome, Err(StatefulSignError::CountersDiverged));
     assert!(
         journal.committed().is_empty(),
         "the rejected attempt committed nothing"
@@ -305,7 +327,11 @@ fn signer_guard_is_a_budget_check_not_a_reuse_detector() {
     // guards pass, and leaf 1 is spent a second time over a different
     // message.
     let (mut restored_sk, restored_pk) = keygen::<H5>(&seed, 4).expect("re-keygen");
-    let mut restored_journal = MemoryJournal::default();
+    // The identity binding does not stop this either, and cannot: the
+    // rebuilt key is the same key, so it has the same identity, and adopting
+    // a fresh journal for it succeeds. What the binding changes is that the
+    // adoption is now a line somebody had to write.
+    let mut restored_journal = MemoryJournal::adopted(restored_sk.key_identity());
     let reissued = H5::sign_stateful(&mut restored_sk, &mut restored_journal, b"reissued", b"")
         .expect("the guard does not stop this");
 
@@ -441,13 +467,15 @@ fn two_messages_under_one_leaf_both_verify_because_it_is_not_a_verifier_property
     let seed = [18u8; 32];
 
     let (mut sk_a, pk) = keygen::<H5>(&seed, 4).expect("keygen");
-    let mut journal_a = MemoryJournal::default();
+    let mut journal_a = MemoryJournal::adopted(sk_a.key_identity());
     let sig_a = H5::sign_stateful(&mut sk_a, &mut journal_a, b"pay alice 1", b"").expect("sign a");
 
     // A second holder of the same key state -- a restored backup, a copied
     // key file, a forked process.
     let (mut sk_b, _pk_b) = keygen::<H5>(&seed, 4).expect("keygen");
-    let mut journal_b = MemoryJournal::default();
+    // Same seed, so the same key and the same identity: adopting a second
+    // journal for it succeeds, deliberately and visibly.
+    let mut journal_b = MemoryJournal::adopted(sk_b.key_identity());
     let sig_b = H5::sign_stateful(&mut sk_b, &mut journal_b, b"pay bob 1000", b"").expect("sign b");
 
     assert_eq!(wire_leaf_count(&sig_a), 1);
@@ -469,7 +497,7 @@ fn two_messages_under_one_leaf_both_verify_because_it_is_not_a_verifier_property
 fn signing_past_the_budget_yields_leaves_exhausted_and_consumes_nothing() {
     let max = 2;
     let (mut sk, pk) = keygen::<H5>(&[19u8; 32], max).expect("keygen");
-    let journal = MemoryJournal::default();
+    let journal = MemoryJournal::adopted(sk.key_identity());
     let mut handle = journal.clone();
 
     for i in 0..max {
@@ -645,7 +673,7 @@ fn keygen_from_the_same_seed_is_byte_identical_and_resets_the_counter() {
     let seed = [24u8; 32];
 
     let (mut original, pk) = keygen::<H5>(&seed, 4).expect("keygen");
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(original.key_identity());
     let first = H5::sign_stateful(&mut original, &mut journal, b"spent", b"").expect("sign");
     let second = H5::sign_stateful(&mut original, &mut journal, b"also spent", b"").expect("sign");
     assert_eq!(wire_leaf_count(&first), 1);
@@ -663,7 +691,10 @@ fn keygen_from_the_same_seed_is_byte_identical_and_resets_the_counter() {
 
     // Counter back at the start. The rebuilt key spends leaf 1 again, and the
     // reissued signature verifies under the original public key.
-    let mut fresh_journal = MemoryJournal::default();
+    // Adopted explicitly: the rebuilt key has the same identity as the
+    // original, so the binding permits this, and the point of the test is
+    // what happens once it is permitted.
+    let mut fresh_journal = MemoryJournal::adopted(rebuilt.key_identity());
     let reissued =
         H5::sign_stateful(&mut rebuilt, &mut fresh_journal, b"reissued", b"").expect("sign");
     assert_eq!(
@@ -893,8 +924,8 @@ fn the_same_key_state_and_message_give_byte_identical_output() {
 
     let (mut first_key, _pk) = keygen::<H5>(&seed, 4).expect("keygen");
     let (mut second_key, _pk2) = keygen::<H5>(&seed, 4).expect("keygen");
-    let mut journal_a = MemoryJournal::default();
-    let mut journal_b = MemoryJournal::default();
+    let mut journal_a = MemoryJournal::adopted(first_key.key_identity());
+    let mut journal_b = MemoryJournal::adopted(second_key.key_identity());
 
     let a = H5::sign_stateful(&mut first_key, &mut journal_a, b"canonical", b"ctx").expect("a");
     let b = H5::sign_stateful(&mut second_key, &mut journal_b, b"canonical", b"ctx").expect("b");

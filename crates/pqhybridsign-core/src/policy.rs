@@ -35,8 +35,13 @@ use crate::stateful::{accept_monotonic_leaf, LeafIndexStore, ReplayRejected};
 /// stateful scheme's leaf-budget ceiling (`MAX_STATEFUL_SIGNATURES_LIMIT` in
 /// `pqhybridsign-shrincs`). Leaf indices are one-based (see
 /// [`crate::stateful::ReplayRejected::ZeroLeaf`]), so the addressable range
-/// is `1..LEAF_BITMAP_CAPACITY`; index `0` and any index at or above this
+/// is `1..=LEAF_BITMAP_CAPACITY`; index `0` and any index above this
 /// capacity are refused.
+///
+/// Leaf `n` occupies bit `n - 1`, so a key generated with the full budget of
+/// 4096 leaves has its last signature -- wire `LeafCount` 4096, which the
+/// scheme's own `verify` accepts -- land on the last bit rather than one
+/// past the end.
 pub const LEAF_BITMAP_CAPACITY: u32 = 4096;
 
 /// Bytes backing [`LeafBitmap`]: `LEAF_BITMAP_CAPACITY / 8`.
@@ -70,20 +75,31 @@ impl LeafBitmap {
         Self::default()
     }
 
-    fn is_set(&self, leaf: u32) -> bool {
-        let byte = (leaf / 8) as usize;
-        let bit = leaf % 8;
+    /// Both of these take a zero-based *bit* index, never a leaf index. The
+    /// one conversion from the one-based leaf index lives in
+    /// [`Self::accept`], so there is a single place the off-by-one can be
+    /// read and checked.
+    fn is_set(&self, bit_index: u32) -> bool {
+        let byte = (bit_index / 8) as usize;
+        let bit = bit_index % 8;
         self.bits[byte] & (1 << bit) != 0
     }
 
-    fn set(&mut self, leaf: u32) {
-        let byte = (leaf / 8) as usize;
-        let bit = leaf % 8;
+    fn set(&mut self, bit_index: u32) {
+        let byte = (bit_index / 8) as usize;
+        let bit = bit_index % 8;
         self.bits[byte] |= 1 << bit;
     }
 
     /// Accept `leaf` if it is in range and not already consumed, and mark it
     /// consumed in the same step.
+    ///
+    /// Leaf indices are one-based and the bitmap's bits are zero-based, so
+    /// leaf `n` is bit `n - 1`. Indexing the bitmap by the leaf index
+    /// directly would waste bit 0 and leave leaf
+    /// [`LEAF_BITMAP_CAPACITY`] -- the last leaf a full-budget key can
+    /// legally spend -- with no bit to occupy, so the verifier would refuse
+    /// a signature the cryptography accepts.
     ///
     /// The range check runs before any indexing, so an out-of-range `leaf`
     /// is refused rather than panicking.
@@ -91,16 +107,17 @@ impl LeafBitmap {
         if leaf == 0 {
             return Err(BitmapRejected::ZeroLeaf);
         }
-        if leaf >= LEAF_BITMAP_CAPACITY {
+        if leaf > LEAF_BITMAP_CAPACITY {
             return Err(BitmapRejected::OutOfRange {
                 leaf,
                 capacity: LEAF_BITMAP_CAPACITY,
             });
         }
-        if self.is_set(leaf) {
+        let bit_index = leaf - 1;
+        if self.is_set(bit_index) {
             return Err(BitmapRejected::AlreadyConsumed { leaf });
         }
-        self.set(leaf);
+        self.set(bit_index);
         Ok(())
     }
 }
@@ -689,8 +706,7 @@ mod tests {
     }
 
     // Negative case named explicitly in the brief: a leaf index of 0, and
-    // one at or above the bitmap's capacity, are both refused -- never a
-    // panic.
+    // one above the bitmap's capacity, are both refused -- never a panic.
     #[test]
     fn bitmap_leaf_zero_and_over_capacity_are_both_refused() {
         let mut machine = LeafPolicyMachine::new_epoch_bitmap();
@@ -699,9 +715,9 @@ mod tests {
             Err(LeafRejected::Bitmap(BitmapRejected::ZeroLeaf))
         );
         assert_eq!(
-            machine.accept_bitmap_leaf(LEAF_BITMAP_CAPACITY),
+            machine.accept_bitmap_leaf(LEAF_BITMAP_CAPACITY + 1),
             Err(LeafRejected::Bitmap(BitmapRejected::OutOfRange {
-                leaf: LEAF_BITMAP_CAPACITY,
+                leaf: LEAF_BITMAP_CAPACITY + 1,
                 capacity: LEAF_BITMAP_CAPACITY,
             }))
         );
@@ -712,8 +728,57 @@ mod tests {
                 capacity: LEAF_BITMAP_CAPACITY,
             }))
         );
-        // Neither refusal left the epoch frozen: nothing was consumed.
+        assert_eq!(
+            machine.accept_bitmap_leaf(u32::MAX),
+            Err(LeafRejected::Bitmap(BitmapRejected::OutOfRange {
+                leaf: u32::MAX,
+                capacity: LEAF_BITMAP_CAPACITY,
+            }))
+        );
+        // No refusal left the epoch frozen: nothing was consumed.
         assert!(!machine.is_frozen());
+    }
+
+    // The boundary the bitmap has to reach: a key generated with the full
+    // budget of `LEAF_BITMAP_CAPACITY` leaves signs a last signature whose
+    // wire `LeafCount` is `LEAF_BITMAP_CAPACITY`, and `verify` accepts it.
+    // A bitmap that refused that index would reject a signature the
+    // cryptography already accepted, for no reason a verifier could explain.
+    #[test]
+    fn the_last_leaf_of_a_full_budget_key_is_accepted() {
+        let mut machine = LeafPolicyMachine::new_epoch_bitmap();
+        assert_eq!(machine.accept_bitmap_leaf(LEAF_BITMAP_CAPACITY), Ok(()));
+        // And it is consumed, not merely in range.
+        assert_eq!(
+            machine.accept_bitmap_leaf(LEAF_BITMAP_CAPACITY),
+            Err(LeafRejected::Bitmap(BitmapRejected::AlreadyConsumed {
+                leaf: LEAF_BITMAP_CAPACITY
+            }))
+        );
+    }
+
+    // Every leaf in the legal range gets its own bit: accepting all of them
+    // succeeds, which is only possible if the bitmap holds exactly
+    // `LEAF_BITMAP_CAPACITY` usable bits and none of the leaves collide.
+    #[test]
+    fn every_leaf_in_the_legal_range_has_its_own_bit() {
+        let mut machine = LeafPolicyMachine::new_epoch_bitmap();
+        for leaf in 1..=LEAF_BITMAP_CAPACITY {
+            assert_eq!(
+                machine.accept_bitmap_leaf(leaf),
+                Ok(()),
+                "leaf {leaf} is inside the legal range"
+            );
+        }
+        // The bitmap is now full, so every one of them reads back consumed.
+        for leaf in 1..=LEAF_BITMAP_CAPACITY {
+            assert_eq!(
+                machine.accept_bitmap_leaf(leaf),
+                Err(LeafRejected::Bitmap(BitmapRejected::AlreadyConsumed {
+                    leaf
+                }))
+            );
+        }
     }
 
     // Owner authorization is checked, not assumed: a denied authorization

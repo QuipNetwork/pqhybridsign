@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Accept `bytes` or `bytearray` as byte-string input, copying either into
-//! an owned `Vec<u8>` the ABI layer can take a slice of.
+//! an owned [`zeroize::Zeroizing<Vec<u8>>`] the ABI layer can take a slice
+//! of. The copy is wiped when it drops, matching
+//! [`crate::stateful::StatefulSecretKey`].
 //!
 //! CPython's limited API -- which `abi3-py39` (see this crate's
 //! `Cargo.toml`) builds against, so one wheel serves every interpreter
@@ -22,21 +24,30 @@
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes};
+use zeroize::Zeroizing;
 
-/// Copy `obj`'s bytes into a new `Vec<u8>`.
+/// Copy `obj`'s bytes into a new [`Zeroizing<Vec<u8>>`].
+///
+/// The copy is zeroized when the returned value drops, so a secret key
+/// or seed argument does not linger in this crate's heap after the
+/// call returns. That is the same contract [`crate::stateful::StatefulSecretKey`]
+/// honours with its `Drop` impl.
 ///
 /// # Errors
 ///
 /// A Python `TypeError` if `obj` is neither `bytes` nor `bytearray`.
-pub(crate) fn extract_bytes(_py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+pub(crate) fn extract_bytes(
+    _py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<Zeroizing<Vec<u8>>> {
     if let Ok(b) = obj.cast::<PyBytes>() {
-        return Ok(b.as_bytes().to_vec());
+        return Ok(Zeroizing::new(b.as_bytes().to_vec()));
     }
     if let Ok(b) = obj.cast::<PyByteArray>() {
         // Safety-free copy: `to_vec` reads under the GIL we already hold,
         // before any other Python code can run and mutate the
         // `bytearray` out from under us.
-        return Ok(b.to_vec());
+        return Ok(Zeroizing::new(b.to_vec()));
     }
     Err(PyTypeError::new_err(
         "expected bytes or bytearray, got an object of a different type",

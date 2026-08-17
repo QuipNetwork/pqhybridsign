@@ -3,6 +3,10 @@
 
 /**
  * A stateless keypair: a secret key and its matching public key.
+ *
+ * A caller must call `free()`, call `[Symbol.dispose]()`, or declare
+ * the value with JavaScript `using`. A leaked `KeyPair` keeps its
+ * secret-key `Uint8Array` reachable.
  */
 export class KeyPair {
     private constructor();

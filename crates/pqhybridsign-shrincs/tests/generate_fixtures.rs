@@ -15,7 +15,10 @@
 //! file itself under `tests/vectors/` rather than printing to stdout. Four
 //! profiles produce four files; paste-from-stdout does not scale.
 
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
+use pqhybridsign_core::stateful::{
+    adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
+};
 use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
 use pqhybridsign_shrincs::{keygen, ShrincsScheme, H5, H6};
 use std::cell::RefCell;
@@ -25,6 +28,20 @@ use std::rc::Rc;
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    /// Which key this journal is the leaf record for, as durable here as
+    /// the counter. A journal that has never been bound owns no key.
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
+}
+
+impl MemoryJournal {
+    /// A journal already adopted by the key `identity` names: the one-off
+    /// act an integrator performs when a key's durable journal is created.
+    /// Signing refuses a journal that is not the key's.
+    fn adopted(identity: KeyIdentity) -> Self {
+        let mut journal = Self::default();
+        adopt_key(&mut journal, identity).expect("adopt");
+        journal
+    }
 }
 
 impl LeafJournal for MemoryJournal {
@@ -42,6 +59,14 @@ impl LeafJournal for MemoryJournal {
             .copied()
             .max()
             .map_or(0, |m| m + 1)
+    }
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
     }
 }
 
@@ -103,7 +128,7 @@ where
     let secret_key = sk.export().expect("export fresh secret key");
     let public_key = pk.as_ref().to_vec();
 
-    let mut journal = MemoryJournal::default();
+    let mut journal = MemoryJournal::adopted(sk.key_identity());
     let stateful_signature =
         S::sign_stateful(&mut sk, &mut journal, STATEFUL_MSG, STATEFUL_CTX).expect("leaf 1");
     assert!(
@@ -111,8 +136,13 @@ where
         "{name}: stateful leaf-1 signature must verify before the fixture is written"
     );
 
-    let stateless_signature =
-        S::sign_stateless(&sk, STATELESS_MSG, STATELESS_CTX).expect("stateless");
+    let stateless_signature = S::sign_stateless(
+        &sk,
+        &mut MemoryBudget::default(),
+        STATELESS_MSG,
+        STATELESS_CTX,
+    )
+    .expect("stateless");
     assert!(
         S::verify(&pk, STATELESS_MSG, STATELESS_CTX, &stateless_signature),
         "{name}: stateless signature must verify before the fixture is written"
@@ -168,4 +198,25 @@ fn generate_fixtures() {
         panic!("failed to write {}: {e}", out_path.display());
     });
     eprintln!("wrote {}", out_path.display());
+}
+
+/// An in-memory `StatelessBudgetStore`. Not durable across a process
+/// restart, which is fine for a test: the property under test is that the
+/// count is consulted and advanced at all, not real persistence. A
+/// deployment must persist this, or the few-time bound of specification
+/// section 21 can be exceeded silently after any restart.
+#[derive(Default)]
+struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
+
+impl StatelessBudgetStore for MemoryBudget {
+    type Error = core::convert::Infallible;
+
+    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+        self.0.get(key.as_bytes()).copied()
+    }
+
+    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+        self.0.insert(*key.as_bytes(), count);
+        Ok(())
+    }
 }

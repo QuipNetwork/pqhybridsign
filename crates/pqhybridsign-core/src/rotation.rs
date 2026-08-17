@@ -13,12 +13,18 @@
 //! other would let a byte that was never meant as a rotation vote get read
 //! as one (or vice versa). `RotationLabel` (`StatefulSuite::ROTATE_LABEL`)
 //! is the domain separator that keeps an ordinary signature from ever being
-//! read back as a rotation co-signature; see `crate::suite`.
+//! read back as a rotation co-signature; see `crate::suite`. It applies in
+//! two independent places: inside `M'_rotation`'s bytes, and as the label
+//! handed to the classical component, which is that component's own domain
+//! separator. Either place alone is enough to reject a splice, so neither
+//! has to be trusted to hold if the other is restructured.
 
 use crate::{message, Error, Result, StatefulSuite};
 
 // Only the AND-gated rotation verification uses the component traits, and
 // it needs an allocator.
+#[cfg(feature = "alloc")]
+use crate::budget::{sign_rotation_after_charge, StatelessBudgetStore};
 #[cfg(feature = "alloc")]
 use crate::{encoding_path, stateful_composite, ClassicalScheme, PqStatefulScheme};
 
@@ -264,6 +270,16 @@ pub fn sign_rotation_classical_half<S: StatefulSuite>(
 
 /// Shared by [`sign_rotation_classical_half`] and [`sign_rotation`], so the
 /// latter builds `m_prime_rotation` exactly once instead of once per half.
+///
+/// The label handed to the classical component is
+/// [`StatefulSuite::ROTATE_LABEL`], never [`StatefulSuite::LABEL`]. That
+/// argument is the component's own domain separator (sr25519 passes it
+/// straight to `schnorrkel::signing_context`), so passing the rotation label
+/// gives the rotation path a second separation layer that stands on its own,
+/// independent of `M'_rotation` carrying `ROTATE_LABEL` in its bytes. Either
+/// layer alone rejects an ordinary classical signature spliced in as a
+/// rotation co-signature; neither has to be trusted to hold if the other
+/// changes.
 #[cfg(feature = "alloc")]
 fn write_classical_half<S: StatefulSuite>(
     sk: &stateful_composite::SecretKey<S>,
@@ -281,7 +297,7 @@ fn write_classical_half<S: StatefulSuite>(
         sk.classical_bytes(),
         m_prime_rotation,
         ctx,
-        S::LABEL,
+        S::ROTATE_LABEL,
         &mut sig_out[..encoding_path::CLASSICAL_SIG_LEN],
     )?;
     Ok(encoding_path::CLASSICAL_SIG_LEN)
@@ -304,14 +320,40 @@ fn write_classical_half<S: StatefulSuite>(
 /// Writes [`rotation_signature_len::<S>`] bytes into `sig_out` and returns
 /// that count.
 ///
+/// # `budget` is required, and that is the point
+///
+/// The stateless half of a rotation authorization is a stateless signature,
+/// so it decrements the few-time budget exactly as an ordinary stateless
+/// signature does (specification section 21: "Every stateless signature --
+/// including each rotation authorization -- decrements the few-time
+/// budget"). A rotation that did not charge would let an integrator refill a
+/// hard security bound by rotating, which is the failure this parameter
+/// exists to make impossible: there is no signature to be had without a
+/// store to charge.
+///
+/// The charge lands on the **pre-rotation** material -- the stateless
+/// material `sk` holds right now, read out of its own cached verify key --
+/// as specification section 19.3 requires. This function derives that
+/// material itself, so no caller can aim the charge at the material a
+/// rotation is about to install. It follows that a rotation whose stateless
+/// material does not change (a stateful-only graft, and equally a full swap
+/// whose stateless half happens to be identical) continues the same count
+/// rather than starting a new one: the [`crate::budget::BudgetKey`] is a
+/// function of the material and of nothing else.
+///
 /// # Errors
 ///
-/// [`Error::OutputBufferTooSmall`] if `sig_out` is too small.
-/// [`Error::ContextTooLong`] if `ctx` exceeds 255 bytes. Any error either
-/// component reports while signing.
+/// [`Error::OutputBufferTooSmall`] if `sig_out` is too small, checked before
+/// anything is charged. [`Error::ContextTooLong`] if `ctx` exceeds 255
+/// bytes. [`Error::StatelessBudgetExhausted`] if the pre-rotation material's
+/// budget is spent; nothing is charged and neither half is signed.
+/// [`Error::BudgetStoreFailed`] if the charge could not be made durable;
+/// nothing is charged either. Any error either component reports while
+/// signing, in which case the unit is already spent.
 #[cfg(feature = "alloc")]
 pub fn sign_rotation<S: StatefulSuite>(
     sk: &stateful_composite::SecretKey<S>,
+    budget: &mut impl StatelessBudgetStore,
     ctx: &[u8],
     payload: &RotationPayload,
     sig_out: &mut [u8],
@@ -327,27 +369,42 @@ pub fn sign_rotation<S: StatefulSuite>(
 
     let m_prime_rotation = m_prime_rotation::<S>(payload, ctx)?;
 
-    write_classical_half::<S>(
-        sk,
-        ctx,
-        &m_prime_rotation,
-        &mut sig_out[..encoding_path::CLASSICAL_SIG_LEN],
-    )?;
+    // Everything that can fail without costing a unit of budget has now
+    // run. `sign_rotation_after_charge` will not call the closure below
+    // until the charge against the pre-rotation material is durable, and
+    // the `RotationBudgetCharged` token it hands over is the proof of
+    // that -- there is no path into the signing work without one.
+    let pre_rotation_material =
+        <S::Pq as PqStatefulScheme>::stateless_key_material(sk.pq_verify_key())?;
+    sign_rotation_after_charge(
+        budget,
+        pre_rotation_material,
+        <S::Pq as PqStatefulScheme>::STATELESS_BUDGET,
+        |_charged| {
+            write_classical_half::<S>(
+                sk,
+                ctx,
+                &m_prime_rotation,
+                &mut sig_out[..encoding_path::CLASSICAL_SIG_LEN],
+            )?;
 
-    let written = <S::Pq as PqStatefulScheme>::sign_stateless_rotation(
-        sk.pq_secret_key(),
-        payload,
-        &m_prime_rotation,
-        &mut sig_out[encoding_path::CLASSICAL_SIG_LEN..needed],
-    )?;
-    // The component contract is to fill exactly `STATELESS_SIG_LEN` bytes,
-    // same as `sign_stateless`; a short write here would leave stale
-    // `sig_out` bytes inside a signature this function reports as complete.
-    if written != stateless_len {
-        return Err(Error::ComponentFailure);
-    }
+            let written = <S::Pq as PqStatefulScheme>::sign_stateless_rotation(
+                sk.pq_secret_key(),
+                payload,
+                &m_prime_rotation,
+                &mut sig_out[encoding_path::CLASSICAL_SIG_LEN..needed],
+            )?;
+            // The component contract is to fill exactly `STATELESS_SIG_LEN`
+            // bytes, same as `sign_stateless`; a short write here would leave
+            // stale `sig_out` bytes inside a signature this function reports
+            // as complete.
+            if written != stateless_len {
+                return Err(Error::ComponentFailure);
+            }
 
-    Ok(needed)
+            Ok(needed)
+        },
+    )
 }
 
 /// Verify a rotation authorization and, on success, hand back the complete
@@ -379,10 +436,13 @@ pub fn verify_rotation<S: StatefulSuite>(
     let m_prime_rotation = m_prime_rotation::<S>(payload, ctx).ok()?;
     let (classical_sig, stateless_sig) = sig.split_at(encoding_path::CLASSICAL_SIG_LEN);
 
+    // `S::ROTATE_LABEL`, matching `write_classical_half`: the classical
+    // component's own domain separator is the second, independent separation
+    // layer between a rotation co-signature and an ordinary signature.
     let classical_ok = <S::Classical as ClassicalScheme>::verify(
         current_pk.classical(),
         &m_prime_rotation,
-        S::LABEL,
+        S::ROTATE_LABEL,
         classical_sig,
     );
     let stateless_ok = <S::Pq as PqStatefulScheme>::verify_stateless_rotation(
@@ -407,6 +467,9 @@ mod tests {
     use super::*;
     use subtle::Choice;
 
+    #[cfg(feature = "alloc")]
+    use crate::budget::test_store::MemoryStore;
+
     // Minimal stand-in components, local to this test module: rotation.rs
     // has no dependency on a real classical or SHRINCS component, and
     // `StatefulSuite` requires full trait implementations regardless of
@@ -423,10 +486,28 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     pub struct FakeClassical;
 
-    /// XOR-fold of `bytes`, used by both fakes below as a cheap stand-in for
-    /// "a hash of the whole signed message affects the signature."
-    fn fold(bytes: &[u8]) -> u8 {
-        bytes.iter().fold(0u8, |acc, &b| acc ^ b)
+    /// The byte pattern [`FakeClassical`] signs with: `SHA-256(key || len(label)
+    /// || label || msg)`, tiled across the signature.
+    ///
+    /// `label` takes part because a real classical component uses it as its
+    /// own domain separator -- sr25519 hands it straight to
+    /// `schnorrkel::signing_context` -- and the rotation path's second
+    /// separation layer is exactly that binding. A fake that ignored `label`
+    /// would report a passing test for a suite that had lost the layer.
+    /// `label` is length-prefixed so no label can be confused with a longer
+    /// one whose tail happens to start the message.
+    ///
+    /// SHA-256 rather than an XOR fold, and tiled over the whole signature
+    /// rather than one repeated byte, so distinguishing two labels does not
+    /// come down to a one-byte coincidence.
+    fn classical_pattern(key: u8, label: &[u8], msg: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update([key]);
+        hasher.update((label.len() as u64).to_be_bytes());
+        hasher.update(label);
+        hasher.update(msg);
+        hasher.finalize().into()
     }
 
     impl crate::ClassicalScheme for FakeClassical {
@@ -449,28 +530,34 @@ mod tests {
         ) -> Result<()> {
             Self::sign_deterministic(sk, msg, b"", label, sig_out)
         }
-        /// Every byte of `sig_out` is filled with `sk[0] ^ fold(msg)`, so a
-        /// single flipped byte anywhere in the signature is detectable by
+        /// `sig_out` is filled with [`classical_pattern`], tiled, so a single
+        /// flipped byte anywhere in the signature is detectable by
         /// [`Self::verify`] (needed by the "valid stateless, tampered
         /// classical half" test case).
         fn sign_deterministic(
             sk: &[u8],
             msg: &[u8],
             _nonce: &[u8],
-            _label: &'static [u8],
+            label: &'static [u8],
             sig_out: &mut [u8],
         ) -> Result<()> {
-            let byte = sk.first().copied().unwrap_or(0) ^ fold(msg);
-            sig_out.fill(byte);
+            let pattern = classical_pattern(sk.first().copied().unwrap_or(0), label, msg);
+            for (i, out) in sig_out.iter_mut().enumerate() {
+                *out = pattern[i % pattern.len()];
+            }
             Ok(())
         }
-        fn verify(pk: &[u8], msg: &[u8], _label: &'static [u8], sig: &[u8]) -> Choice {
+        fn verify(pk: &[u8], msg: &[u8], label: &'static [u8], sig: &[u8]) -> Choice {
             let Some(&pk0) = pk.first() else {
                 return Choice::from(0u8);
             };
-            let expected = pk0 ^ fold(msg);
+            let pattern = classical_pattern(pk0, label, msg);
             Choice::from(u8::from(
-                !sig.is_empty() && sig.iter().all(|&b| b == expected),
+                !sig.is_empty()
+                    && sig
+                        .iter()
+                        .enumerate()
+                        .all(|(i, &b)| b == pattern[i % pattern.len()]),
             ))
         }
     }
@@ -714,7 +801,8 @@ mod tests {
         let ctx = b"chain";
 
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        let written = sign_rotation::<FakeH>(&sk, ctx, &p, &mut sig).expect("sign_rotation");
+        let written = sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
         assert_eq!(written, sig.len());
 
         assert_eq!(
@@ -741,7 +829,14 @@ mod tests {
         payload_a.next_classical_pk = [0xAAu8; 32];
 
         let mut honest_sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        sign_rotation::<FakeH>(&sk, ctx, &payload_a, &mut honest_sig).expect("sign_rotation");
+        sign_rotation::<FakeH>(
+            &sk,
+            &mut MemoryStore::default(),
+            ctx,
+            &payload_a,
+            &mut honest_sig,
+        )
+        .expect("sign_rotation");
 
         // The attacker keeps the honest stateless half unchanged, and pairs
         // it with a fresh, valid classical co-signature over a payload
@@ -768,7 +863,8 @@ mod tests {
         let p = payload();
         let ctx = b"chain";
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        sign_rotation::<FakeH>(&sk, ctx, &p, &mut sig).expect("sign_rotation");
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
 
         let last = sig.len() - 1;
         sig[last] ^= 0x01;
@@ -782,7 +878,8 @@ mod tests {
         let p = payload();
         let ctx = b"chain";
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        sign_rotation::<FakeH>(&sk, ctx, &p, &mut sig).expect("sign_rotation");
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
 
         sig[0] ^= 0x01;
         assert!(verify_rotation::<FakeH>(&pk, ctx, &p, &sig).is_none());
@@ -795,7 +892,8 @@ mod tests {
         let p = payload();
         let ctx = b"chain";
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        sign_rotation::<FakeH>(&sk, ctx, &p, &mut sig).expect("sign_rotation");
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
 
         // An ordinary (non-rotation) M' over the payload's own bytes as an
         // application message, signed under the ordinary label.
@@ -824,6 +922,93 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // The second separation layer: the label handed to the classical
+    // component itself, not just the label inside `M'_rotation`'s bytes.
+    //
+    // The two tests below hold the signed bytes fixed and vary only the
+    // label argument, so they fail if the rotation path ever goes back to
+    // passing `S::LABEL` -- even though `M'_rotation` would still carry
+    // `ROTATE_LABEL` and the splice test above would still pass.
+    // ------------------------------------------------------------------
+
+    /// A rotation co-signature must not verify under the ordinary signing
+    /// context.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn a_rotation_co_signature_does_not_verify_under_the_ordinary_label() {
+        let (sk, pk) = stateful_composite::keygen::<FakeH>(&[8u8; 32], 1).expect("keygen");
+        let p = payload();
+        let ctx = b"chain";
+
+        let mut classical = alloc::vec![0u8; encoding_path::CLASSICAL_SIG_LEN];
+        sign_rotation_classical_half::<FakeH>(&sk, ctx, &p, &mut classical)
+            .expect("classical sign");
+
+        let m_prime_rotation = m_prime_rotation::<FakeH>(&p, ctx).expect("m_prime_rotation");
+
+        assert!(
+            bool::from(FakeClassical::verify(
+                pk.classical(),
+                &m_prime_rotation,
+                FakeH::ROTATE_LABEL,
+                &classical,
+            )),
+            "the rotation co-signature must verify under ROTATE_LABEL, the \
+             label the rotation path signs with"
+        );
+        assert!(
+            !bool::from(FakeClassical::verify(
+                pk.classical(),
+                &m_prime_rotation,
+                FakeH::LABEL,
+                &classical,
+            )),
+            "the rotation co-signature must not verify under LABEL: the \
+             classical component's own domain separator has to separate the \
+             rotation path from the ordinary one on its own, without relying \
+             on M'_rotation's bytes"
+        );
+    }
+
+    /// The converse: a classical signature over the exact `M'_rotation`
+    /// bytes, made under the *ordinary* label, must not pass the rotation
+    /// gate. Only the label differs from an accepted co-signature here, so
+    /// `M'_rotation`'s own framing cannot be what rejects it.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn an_ordinary_label_signature_over_m_prime_rotation_fails_the_rotation_gate() {
+        let (sk, pk) = stateful_composite::keygen::<FakeH>(&[9u8; 32], 1).expect("keygen");
+        let p = payload();
+        let ctx = b"chain";
+
+        let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
+        assert!(
+            verify_rotation::<FakeH>(&pk, ctx, &p, &sig).is_some(),
+            "baseline: the unmodified rotation must verify"
+        );
+
+        // Same key, same signed bytes, same stateless half -- only the
+        // classical component's label changes.
+        let m_prime_rotation = m_prime_rotation::<FakeH>(&p, ctx).expect("m_prime_rotation");
+        FakeClassical::sign_deterministic(
+            sk.classical_bytes(),
+            &m_prime_rotation,
+            ctx,
+            FakeH::LABEL,
+            &mut sig[..encoding_path::CLASSICAL_SIG_LEN],
+        )
+        .expect("classical sign");
+
+        assert!(
+            verify_rotation::<FakeH>(&pk, ctx, &p, &sig).is_none(),
+            "a classical signature made under LABEL must not pass the \
+             rotation gate, which verifies under ROTATE_LABEL"
+        );
+    }
+
     #[cfg(feature = "alloc")]
     #[test]
     fn changing_rotation_kind_alone_invalidates_the_stateless_half() {
@@ -833,7 +1018,8 @@ mod tests {
         original.kind = RotationKind::StatefulGraft;
 
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        sign_rotation::<FakeH>(&sk, ctx, &original, &mut sig).expect("sign_rotation");
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &original, &mut sig)
+            .expect("sign_rotation");
 
         let mut flipped = original;
         flipped.kind = RotationKind::FullSwap;
@@ -863,7 +1049,8 @@ mod tests {
         p.next_commitment = [0x99u8; 32];
 
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
-        sign_rotation::<FakeH>(&sk, ctx, &p, &mut sig).expect("sign_rotation");
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
 
         let next = verify_rotation::<FakeH>(&pk, ctx, &p, &sig).expect("valid rotation");
         assert_ne!(
@@ -875,5 +1062,149 @@ mod tests {
             next.next_commitment, p.current_commitment,
             "the commitment half must differ from the current stored key"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // The few-time stateless budget on the rotation path (specification
+    // sections 19.3 and 21). `FakePq::STATELESS_BUDGET` is 1, so a whole
+    // budget is one signature wide and every boundary is reachable.
+    // ------------------------------------------------------------------
+
+    /// A rotation authorization is itself a stateless signature, so it must
+    /// decrement the few-time budget. Signing one leaves the bound spent,
+    /// which is only observable because the fake component's budget is 1.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn the_rotation_authorization_itself_decrements_the_budget() {
+        let (sk, _pk) = stateful_composite::keygen::<FakeH>(&[10u8; 32], 1).expect("keygen");
+        let ctx = b"chain";
+        let mut budget = MemoryStore::default();
+        let material = sk_material(&sk);
+
+        assert_eq!(
+            budget.consumed_for(material),
+            None,
+            "a fresh key has spent nothing"
+        );
+
+        let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
+        sign_rotation::<FakeH>(&sk, &mut budget, ctx, &payload(), &mut sig).expect("sign_rotation");
+
+        assert_eq!(
+            budget.consumed_for(material),
+            Some(1),
+            "the rotation signature must be charged like any other stateless signature"
+        );
+    }
+
+    /// A `FullSwap`-labelled rotation whose stateless material does not
+    /// actually change must not refill the bound. This is the original
+    /// finding in its exact shape: the label says "full swap", the
+    /// commitment changes on install, and the budget must carry on
+    /// regardless, because `pkSeed || hypertreeRoot` is what it is keyed to.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn a_rotation_that_leaves_the_material_unchanged_does_not_reset_the_budget() {
+        let (sk, _pk) = stateful_composite::keygen::<FakeH>(&[11u8; 32], 1).expect("keygen");
+        let ctx = b"chain";
+        let mut budget = MemoryStore::default();
+        let material = sk_material(&sk);
+
+        // First rotation: a stateful-only graft, which by definition leaves
+        // the stateless material alone. It spends the whole budget of 1.
+        let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
+        sign_rotation::<FakeH>(&sk, &mut budget, ctx, &payload(), &mut sig)
+            .expect("first rotation");
+        assert_eq!(budget.consumed_for(material), Some(1));
+
+        // Second rotation, labelled FullSwap and naming a different next
+        // commitment and next classical key -- everything a rotation can
+        // change except the stateless material itself. It must be refused,
+        // because the bound did not refill.
+        let mut swap = payload();
+        swap.kind = RotationKind::FullSwap;
+        swap.next_commitment = [0x99u8; 32];
+        swap.next_classical_pk = [0x42u8; 32];
+        assert_eq!(
+            sign_rotation::<FakeH>(&sk, &mut budget, ctx, &swap, &mut sig),
+            Err(Error::StatelessBudgetExhausted),
+            "a FullSwap label must not refill a bound the material still owns"
+        );
+        assert_eq!(
+            budget.consumed_for(material),
+            Some(1),
+            "the refused rotation must record nothing"
+        );
+    }
+
+    /// The bound clears only when the stateless material genuinely changes.
+    /// A key derived from a different master seed has different material,
+    /// so it starts unspent -- while the old material's count stays exactly
+    /// where it was.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn the_budget_clears_only_when_the_material_actually_changes() {
+        let (old, _pk) = stateful_composite::keygen::<FakeH>(&[12u8; 32], 1).expect("keygen old");
+        let (new, _pk) = stateful_composite::keygen::<FakeH>(&[13u8; 32], 1).expect("keygen new");
+        let ctx = b"chain";
+        let mut budget = MemoryStore::default();
+        assert_ne!(
+            sk_material(&old),
+            sk_material(&new),
+            "two master seeds must give two stateless materials"
+        );
+
+        let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
+        sign_rotation::<FakeH>(&old, &mut budget, ctx, &payload(), &mut sig).expect("old signs");
+        sign_rotation::<FakeH>(&new, &mut budget, ctx, &payload(), &mut sig).expect("new signs");
+
+        assert_eq!(budget.consumed_for(sk_material(&old)), Some(1));
+        assert_eq!(
+            budget.consumed_for(sk_material(&new)),
+            Some(1),
+            "the newly installed material starts its own count"
+        );
+    }
+
+    /// A store that cannot record the charge must refuse the rotation
+    /// outright: neither half may be signed, because a rotation signature
+    /// whose charge a restart forgets is a rotation the budget never saw.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn a_budget_store_failure_refuses_the_rotation_and_signs_nothing() {
+        let (sk, _pk) = stateful_composite::keygen::<FakeH>(&[14u8; 32], 1).expect("keygen");
+        let ctx = b"chain";
+        let mut budget = MemoryStore::default();
+        budget.fail = true;
+
+        // Filled with a recognisable pattern first, so "nothing was
+        // written" is a real comparison rather than a check against the
+        // zeros a fresh buffer already holds.
+        let mut sig = alloc::vec![0xEEu8; rotation_signature_len::<FakeH>()];
+        let untouched = sig.clone();
+        assert_eq!(
+            sign_rotation::<FakeH>(&sk, &mut budget, ctx, &payload(), &mut sig),
+            Err(Error::BudgetStoreFailed)
+        );
+        assert_eq!(budget.consumed_for(sk_material(&sk)), None);
+        assert_eq!(
+            sig, untouched,
+            "no half may be written when the charge did not land"
+        );
+
+        // Once the store recovers, the same unit is still available.
+        budget.fail = false;
+        sign_rotation::<FakeH>(&sk, &mut budget, ctx, &payload(), &mut sig).expect("repaired");
+        assert_eq!(budget.consumed_for(sk_material(&sk)), Some(1));
+    }
+
+    /// The stateless material `sign_rotation` charges against, read the same
+    /// way it reads it: out of the key's own cached verify key.
+    #[cfg(feature = "alloc")]
+    fn sk_material(sk: &stateful_composite::SecretKey<FakeH>) -> &[u8] {
+        <<FakeH as StatefulSuite>::Pq as PqStatefulScheme>::stateless_key_material(
+            sk.pq_verify_key(),
+        )
+        .expect("the fake component parses its own verify key")
     }
 }

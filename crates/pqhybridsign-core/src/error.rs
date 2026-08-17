@@ -69,6 +69,20 @@ pub enum Error {
         /// 1-byte `DeltaLen` field can represent.
         min_len: usize,
     },
+    /// The few-time stateless budget for this key's stateless material is
+    /// spent (specification section 21). Permanent for this material:
+    /// every later stateless signature and every later rotation
+    /// authorization fails the same way until a rotation actually changes
+    /// `pkSeed || hypertreeRoot`. Nothing was spent on the refused attempt.
+    ///
+    /// This is not a quota to raise. The bound is a security assumption of
+    /// the underlying few-time scheme, and signing past it degrades it.
+    StatelessBudgetExhausted,
+    /// The caller's [`crate::budget::StatelessBudgetStore`] could not
+    /// durably record the spend, so no stateless signature was released.
+    /// Nothing was recorded, so the same unit of budget is still available
+    /// once the storage fault is repaired.
+    BudgetStoreFailed,
 }
 
 impl fmt::Display for Error {
@@ -118,6 +132,14 @@ impl fmt::Display for Error {
                 "post-quantum signature length {actual_len} outside {min_len}..={} \
                  for the 1-byte delta field",
                 min_len + 255
+            ),
+            Self::StatelessBudgetExhausted => write!(
+                f,
+                "few-time stateless budget exhausted for this key's stateless material"
+            ),
+            Self::BudgetStoreFailed => write!(
+                f,
+                "stateless budget store could not durably record; nothing consumed"
             ),
         }
     }

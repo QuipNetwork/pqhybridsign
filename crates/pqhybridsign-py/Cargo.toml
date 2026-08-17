@@ -19,11 +19,14 @@ crate-type = ["cdylib", "rlib"]
 # therefore either fails to link or drags in a libpython that defeats the
 # abi3 portability the wheel exists to provide. The behaviour here is
 # covered by the pytest suite under `tests/`, which exercises the real
-# extension through the interpreter that will actually load it.
+# extension through the interpreter that will actually load it. That
+# suite includes `test_suite_round_trips_every_value`, the running pin
+# that `suite::tests::suite_round_trips_every_value` cannot provide
+# while this target stays disabled.
 test = false
 
 [dependencies]
-pqhybridsign-abi = { path = "../pqhybridsign-abi" }
+pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc1" }
 pyo3 = { version = "0.29.2", default-features = false, features = ["macros", "abi3-py39", "extension-module"] }
 rand_core = { workspace = true, features = ["getrandom"] }
 zeroize = { workspace = true }

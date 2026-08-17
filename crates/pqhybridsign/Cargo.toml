@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-pqhybridsign-core = { path = "../pqhybridsign-core", default-features = false }
+pqhybridsign-core = { path = "../pqhybridsign-core", version = "0.0.0-rc1", default-features = false }
 subtle.workspace = true
 zeroize.workspace = true
 rand_core.workspace = true
@@ -23,9 +23,24 @@ sha2.workspace = true
 
 [dev-dependencies]
 hex.workspace = true
-rand_core = { version = "0.6.4", features = ["getrandom"] }
+rand_core = { workspace = true, features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Test-only. `ed25519-zebra` verifies under ZIP-215, so the strict RFC 8032
+# checks in tests/ed25519_strict.rs need curve arithmetic that
+# `ed25519-zebra` does not expose. The version range matches the one
+# `ed25519-zebra` 4.2 already resolves, so this adds a dev-dependency edge
+# and no new crate to the graph. It never enters a release build.
+# `alloc` is required for `EdwardsPoint::vartime_double_scalar_mul_basepoint`
+# (the two-scalar multiplication the strict verification equation needs) and
+# `digest` for `Scalar::from_hash`. Both are dev-only: `cargo build` never
+# pulls in dev-dependencies, so the `--no-default-features` wasm build stays
+# alloc-free regardless of what this line enables.
+curve25519-dalek = { version = "4.1", default-features = false, features = [
+    "precomputed-tables",
+    "alloc",
+    "digest",
+] }
 
 [features]
 default = ["std"]

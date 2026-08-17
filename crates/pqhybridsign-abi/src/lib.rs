@@ -71,15 +71,67 @@ mod suite;
 mod verify;
 
 pub use error::AbiError;
-pub use sizes::{public_key_len, secret_key_len, signature_len};
-pub use stateful_suites::{keygen_stateful_from_seed, sign_stateful, sign_stateless};
+pub use sizes::{public_key_len, secret_key_len, signature_len, stored_public_key_len};
+pub use stateful_suites::{
+    adopt_key, key_identity, key_identity_from_secret_key, keygen_stateful_from_seed,
+    require_bound_key, sign_stateful, sign_stateless, verify_with_stored_public_key,
+};
 pub use stateless_suites::{keygen_from_seed, sign, sign_deterministic};
 pub use suite::Suite;
 pub use verify::verify;
 
 /// Re-exported so a caller can implement [`LeafJournal`] for
 /// [`sign_stateful`] without depending on `pqhybridsign-core` directly.
+///
+/// An implementation must persist a [`KeyIdentity`] alongside its leaf
+/// counter, and both must survive a restart. See the trait's own
+/// documentation for why the counter alone is not enough.
 pub use pqhybridsign_core::stateful::LeafJournal;
+
+/// Re-exported so a caller can implement [`StatelessBudgetStore`] for
+/// [`sign_stateless`] without depending on `pqhybridsign-core` directly.
+///
+/// The stateless counterpart of [`LeafJournal`], and required on the same
+/// terms: [`sign_stateless`] cannot be called without one. An implementation
+/// must survive a restart. A store that forgets a count lets the few-time
+/// bound of specification section 21 be exceeded, silently.
+///
+/// Entries are keyed by [`BudgetKey`], derived from the key's stateless
+/// material, so one store serves every key an integrator holds and no
+/// separate adoption step is needed: a store that has never seen a given
+/// material reports `None` for that material alone.
+pub use pqhybridsign_core::budget::StatelessBudgetStore;
+
+/// The fixed-width identity a [`StatelessBudgetStore`] keys its entries by.
+///
+/// Re-exported alongside [`StatelessBudgetStore`], which cannot be
+/// implemented without it. Two keys sharing stateless material always
+/// resolve to the same value, and two keys with different stateless material
+/// never do -- which is what makes a rotation unable to refill the bound
+/// while the material itself survives.
+pub use pqhybridsign_core::budget::BudgetKey;
+
+/// The public name a [`LeafJournal`] records for the one key it belongs to.
+///
+/// Re-exported for the same reason as [`LeafJournal`]. Obtain one from
+/// [`key_identity`] or [`key_identity_from_secret_key`], write it to the
+/// journal once with [`adopt_key`], and store the
+/// [`KEY_IDENTITY_LEN`]-byte value
+/// ([`KeyIdentity::as_bytes`]) next to the counter.
+pub use pqhybridsign_core::stateful::{KeyIdentity, KEY_IDENTITY_LEN};
+
+/// Re-exported so a caller can check a SHRINCS commitment bundle on its own,
+/// without depending on `pqhybridsign-shrincs` directly.
+///
+/// [`verify_with_stored_public_key`] is the entry point most callers want:
+/// it runs this check and the signature verification together, and it takes
+/// and returns nothing but byte slices and a `bool`. Reach for
+/// [`verify_bundle`] only to check a bundle at the moment it is installed,
+/// or to look at the parsed key it returns -- a
+/// `hashsigs_rs::shrincs::PublicKey`, from a crate this one does not
+/// re-export, so a caller who cannot name that type can still use the
+/// `Result` as a yes or no.
+pub use pqhybridsign_shrincs::bundle::{verify_bundle, BundleError};
 
 /// The SHRINCS profile this build links against, for example
 /// `"shrincs-256s"`.

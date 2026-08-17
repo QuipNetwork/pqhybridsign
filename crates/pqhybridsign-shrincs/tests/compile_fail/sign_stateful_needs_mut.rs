@@ -2,7 +2,7 @@
 //! `sign_stateful` must not be callable through a shared reference: it
 //! advances the one-time leaf state, so it requires `&mut`.
 
-use pqhybridsign_core::stateful::{LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_core::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_shrincs::{keygen, H5};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,6 +10,7 @@ use std::rc::Rc;
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
+    bound: Rc<RefCell<Option<KeyIdentity>>>,
 }
 
 impl LeafJournal for MemoryJournal {
@@ -27,6 +28,15 @@ impl LeafJournal for MemoryJournal {
             .copied()
             .max()
             .map_or(0, |m| m + 1)
+    }
+
+    fn bound_key(&self) -> Option<KeyIdentity> {
+        *self.bound.borrow()
+    }
+
+    fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
+        *self.bound.borrow_mut() = Some(key);
+        Ok(())
     }
 }
 

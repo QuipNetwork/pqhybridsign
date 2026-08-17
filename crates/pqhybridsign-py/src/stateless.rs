@@ -8,6 +8,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use rand_core::OsRng;
+use zeroize::Zeroize;
 
 use crate::bytes_in::extract_bytes;
 use crate::errors::to_py_err;
@@ -16,6 +17,13 @@ use crate::suite::PySuite;
 /// Derive a keypair for `suite` from a 32-byte master seed.
 ///
 /// Returns `(secret_key, public_key)` as `bytes`.
+///
+/// The returned secret key is a Python `bytes` object. A `bytes` object
+/// cannot be zeroized, and this binding cannot reach into the interpreter
+/// heap to wipe it. The function zeroizes its own Rust copies of the
+/// seed and the secret key before they drop. Callers that need a secret
+/// key that is wiped on drop should use
+/// [`StatefulSecretKey`](crate::stateful::StatefulSecretKey) or the C ABI.
 ///
 /// # Errors
 ///
@@ -33,11 +41,15 @@ pub(crate) fn keygen_from_seed(
 
     let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(suite)];
     let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(suite)];
-    pqhybridsign_abi::keygen_from_seed(suite, &seed, &mut sk, &mut pk).map_err(to_py_err)?;
-    Ok((
-        PyBytes::new(py, &sk).unbind(),
-        PyBytes::new(py, &pk).unbind(),
-    ))
+    let result = pqhybridsign_abi::keygen_from_seed(suite, &seed, &mut sk, &mut pk);
+    let pair = result.map(|()| {
+        (
+            PyBytes::new(py, &sk).unbind(),
+            PyBytes::new(py, &pk).unbind(),
+        )
+    });
+    sk.zeroize();
+    pair.map_err(to_py_err)
 }
 
 /// Hedged (randomized) signing for `suite`. Returns the signature as

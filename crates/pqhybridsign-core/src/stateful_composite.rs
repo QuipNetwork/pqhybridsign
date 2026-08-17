@@ -25,11 +25,12 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::budget::{spend_stateless_budget, StatelessBudgetStore};
 use crate::encoding_path::{self, PathBody, PathProfile, PathSelectedSig, TrustedMaxSignatures};
 use crate::stateful::{
-    sign_after_commit, LeafJournal, StatefulHybridSignatureScheme, StatefulSignError,
+    sign_after_commit, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme, StatefulSignError,
 };
 use crate::{
     derive_component_seeds, m_prime, ClassicalScheme, Error, PqStatefulScheme, Result,
@@ -76,16 +77,28 @@ impl<S: StatefulSuite> PublicKey<S> {
     }
 
     /// Reconstruct a public key from its wire bytes (`ClassicalPK ||
-    /// PqVerifyKey`, [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes).
+    /// PqVerifyKey`, [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes),
+    /// **checking nothing but the length**.
     ///
-    /// This is the verify-key form [`keygen`] hands back and
-    /// [`StatefulHybridSignatureScheme::verify`] needs, so a caller that
-    /// only holds the serialized bytes -- the case for every binding that
-    /// crosses a language boundary -- can rebuild a value this crate's
-    /// `verify` accepts. No structural validation runs here, matching
+    /// This function performs no commitment validation. It cannot: the only
+    /// thing it is given is the key itself, and a key cannot vouch for
+    /// itself. Whatever `PqVerifyKey` the caller passes becomes the key the
+    /// signature is verified against, so a caller who takes those bytes from
+    /// the wire verifies against whichever key the sender chose. For a
+    /// component whose stored form is a commitment -- SHRINCS for H5 and H6
+    /// -- that is the whole of the post-quantum guarantee, and the composite
+    /// then reduces to its classical half alone.
+    ///
+    /// Use [`from_stored_commitment_and_bundle`](Self::from_stored_commitment_and_bundle)
+    /// instead wherever the verify key arrives from an untrusted source. It
+    /// is the documented constructor for verification. This one is correct
+    /// only for bytes the caller already trusts: the value [`keygen`] handed
+    /// back, or a verify key read from the caller's own storage.
+    ///
+    /// The length check is the only validation, matching
     /// [`crate::composite::verify`] and [`crate::composite_delta::verify`]:
-    /// a garbled public key produces a value that fails verification,
-    /// rather than an error that would need its own channel.
+    /// a garbled public key produces a value that fails verification, rather
+    /// than an error that would need its own channel.
     ///
     /// # Errors
     ///
@@ -100,6 +113,132 @@ impl<S: StatefulSuite> PublicKey<S> {
         }
         Ok(Self {
             bytes: bytes.to_vec(),
+            _suite: PhantomData,
+        })
+    }
+
+    /// The identity a [`crate::stateful::LeafJournal`] records for this key.
+    ///
+    /// The same value [`SecretKey::key_identity`] returns for the matching
+    /// secret key, derived from this key's own public material alone. A
+    /// verifier, an operator or a provisioning tool can compute it without
+    /// ever holding the secret key, which is what makes it usable as a name:
+    /// an identity only the signer could compute would be a secret, not an
+    /// identity.
+    #[must_use]
+    pub fn key_identity(&self) -> KeyIdentity {
+        KeyIdentity::derive(S::LABEL, self.pq_verify_key())
+    }
+}
+
+/// A post-quantum component whose small stored public key
+/// ([`PqStatefulScheme::PUBLIC_KEY_LEN`]) is a commitment to its larger
+/// verify key ([`PqStatefulScheme::VERIFY_KEY_LEN`]), and which can prove
+/// that one belongs to the other.
+///
+/// Separate from [`PqStatefulScheme`] because it describes the shape of a
+/// component's key material, not its signing: a component whose stored and
+/// verify forms are the same bytes has nothing to prove and does not
+/// implement this. Implementing it is what makes
+/// [`PublicKey::from_stored_commitment_and_bundle`] available for a suite.
+pub trait CommittedVerifyKey: PqStatefulScheme {
+    /// Prove that `verify_key` is the key `stored_public_key` commits to.
+    ///
+    /// `stored_public_key` is the trusted side of this comparison and the
+    /// only trusted side: it is what a verifier installed and holds, of
+    /// length [`PqStatefulScheme::PUBLIC_KEY_LEN`]. `verify_key` is
+    /// untrusted, of length [`PqStatefulScheme::VERIFY_KEY_LEN`].
+    ///
+    /// An implementation must recompute the commitment from `verify_key`'s
+    /// own key material and compare the result against `stored_public_key`.
+    /// A commitment that `verify_key` carries inside itself proves only that
+    /// the key is internally consistent, which every self-generated key is,
+    /// including one an attacker generated; it must never stand in for
+    /// `stored_public_key`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if either argument is not its component's
+    /// declared length. [`Error::ComponentFailure`] if `verify_key` is not
+    /// the key `stored_public_key` commits to, which includes an
+    /// uninstalled (for example all-zero) `stored_public_key` that no key
+    /// may ever match.
+    fn verify_committed_key(stored_public_key: &[u8], verify_key: &[u8]) -> Result<()>;
+}
+
+impl<S: StatefulSuite> PublicKey<S>
+where
+    S::Pq: CommittedVerifyKey,
+{
+    /// Build a verify-form public key from the stored key a verifier holds
+    /// and an untrusted post-quantum verify key, failing closed unless the
+    /// second is the key the first commits to.
+    ///
+    /// This is the constructor to use at verification time. It is the one
+    /// place the trust boundary is crossed, and it is crossed in one
+    /// direction only:
+    ///
+    /// * `stored_public_key` is trusted. It is the small on-storage form,
+    ///   `ClassicalPK || PqStoredKey` ([`StatefulSuite::STORED_PUBLIC_KEY_LEN`]
+    ///   bytes), read from the verifier's own storage -- an account record, a
+    ///   registry entry, a pinned configuration file.
+    /// * `pq_verify_key` is untrusted. It is the larger post-quantum verify
+    ///   key ([`PqStatefulScheme::VERIFY_KEY_LEN`] bytes) that the signer
+    ///   supplies alongside the signature, because it is too large to store.
+    ///
+    /// The commitment is recomputed from `pq_verify_key` and matched against
+    /// the stored one ([`CommittedVerifyKey::verify_committed_key`]) before
+    /// this returns. The classical half of the result is copied from
+    /// `stored_public_key`, never from anything the signer supplied, so a
+    /// caller cannot substitute a classical key either.
+    ///
+    /// Contrast [`from_bytes`](Self::from_bytes), which takes a whole
+    /// verify-form key and checks only its length. Given an attacker's own
+    /// freshly generated key, `from_bytes` produces a public key that
+    /// verifies the attacker's own signatures perfectly well, because
+    /// nothing in it refers to what the verifier installed. This constructor
+    /// is what ties the key on the wire to the key on the account.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `stored_public_key` is not
+    /// [`StatefulSuite::STORED_PUBLIC_KEY_LEN`] bytes or `pq_verify_key` is
+    /// not [`PqStatefulScheme::VERIFY_KEY_LEN`] bytes.
+    /// [`Error::ComponentFailure`] if `pq_verify_key` is not the key
+    /// `stored_public_key` commits to.
+    pub fn from_stored_commitment_and_bundle(
+        stored_public_key: &[u8],
+        pq_verify_key: &[u8],
+    ) -> Result<Self> {
+        if stored_public_key.len() != S::STORED_PUBLIC_KEY_LEN {
+            return Err(Error::BadLength {
+                expected: S::STORED_PUBLIC_KEY_LEN,
+                actual: stored_public_key.len(),
+            });
+        }
+        let verify_key_len = <S::Pq as PqStatefulScheme>::VERIFY_KEY_LEN;
+        if pq_verify_key.len() != verify_key_len {
+            return Err(Error::BadLength {
+                expected: verify_key_len,
+                actual: pq_verify_key.len(),
+            });
+        }
+
+        // Split rather than index: `PqStatefulScheme` is a public trait, so
+        // the two lengths this offset is composed from come from an
+        // implementation this module does not control.
+        let classical_len = <S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        let (classical_pk, stored_pq) = stored_public_key
+            .split_at_checked(classical_len)
+            .ok_or(Error::ComponentFailure)?;
+
+        <S::Pq as CommittedVerifyKey>::verify_committed_key(stored_pq, pq_verify_key)?;
+
+        let mut bytes = Vec::with_capacity(classical_len + verify_key_len);
+        bytes.extend_from_slice(classical_pk);
+        bytes.extend_from_slice(pq_verify_key);
+        Ok(Self {
+            bytes,
             _suite: PhantomData,
         })
     }
@@ -135,6 +274,28 @@ impl<S: StatefulSuite> Zeroize for SecretKey<S> {
     }
 }
 
+/// Wipe the key when it goes out of scope.
+///
+/// `zeroize::Zeroize` generates no destructor, so without this impl every
+/// drop left `classical` -- the 32-byte ed25519 seed for H5, the 64-byte
+/// sr25519 secret for H6 -- in freed heap verbatim. The post-quantum half
+/// survived only by accident, because the component's own key halves are
+/// `ZeroizeOnDrop` upstream.
+///
+/// Wiping on drop rather than asking callers to remember is the only form
+/// that holds: a `SecretKey` is dropped on every early return, every `?`,
+/// and every panic unwind, and none of those paths can be made to call
+/// `zeroize` by hand.
+impl<S: StatefulSuite> Drop for SecretKey<S> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+/// Asserts the guarantee [`Drop`] above provides, so a caller can rely on it
+/// through the bound rather than by reading this module.
+impl<S: StatefulSuite> ZeroizeOnDrop for SecretKey<S> {}
+
 /// Width of the leaf-counter field inside an exported [`SecretKey`].
 const COUNTER_FIELD_LEN: usize = 4;
 
@@ -169,6 +330,19 @@ impl<S: StatefulSuite> SecretKey<S> {
         &self.classical
     }
 
+    /// The cached post-quantum verify key.
+    ///
+    /// Public material, and the bytes
+    /// [`PqStatefulScheme::stateless_key_material`] reads the few-time
+    /// budget's key out of. `pub(crate)` on the same grounds as
+    /// [`Self::classical_bytes`]: `crate::rotation` needs it to charge a
+    /// rotation authorization against the pre-rotation material, and letting
+    /// a caller supply that material instead is precisely how the charge
+    /// would end up aimed at the wrong key.
+    pub(crate) fn pq_verify_key(&self) -> &[u8] {
+        &self.pq_verify_key
+    }
+
     /// The post-quantum component secret key. See [`Self::classical_bytes`]
     /// for why this is exposed and to whom.
     pub(crate) fn pq_secret_key(&self) -> &<S::Pq as PqStatefulScheme>::SecretKey {
@@ -187,6 +361,22 @@ impl<S: StatefulSuite> SecretKey<S> {
     /// still an operator watching.
     pub fn next_leaf(&self) -> u32 {
         <S::Pq as PqStatefulScheme>::next_leaf(&self.pq)
+    }
+
+    /// The identity of the journal that belongs to this key.
+    ///
+    /// Derived from the cached post-quantum verify key and the suite label --
+    /// public material only, so this discloses nothing about the secret half
+    /// and is the same value [`PublicKey::key_identity`] returns for the
+    /// matching public key.
+    ///
+    /// Pass it to [`crate::stateful::adopt_key`] once, when the key's durable
+    /// journal is first created. Every later signature checks it, and a
+    /// journal that does not carry it is refused with
+    /// [`StatefulSignError::JournalKeyMismatch`].
+    #[must_use]
+    pub fn key_identity(&self) -> KeyIdentity {
+        KeyIdentity::derive(S::LABEL, &self.pq_verify_key)
     }
 
     /// Serialize this key, its post-quantum half, and the leaf counter as one
@@ -436,15 +626,39 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
         // loss. `precheck` therefore belongs on the stateless path and in
         // `verify`, never in front of this commit.
 
+        // Identity before counters. The lockstep check below compares two
+        // numbers, and two numbers can only be compared once it is settled
+        // that they count the same thing: a journal bound to another key -- or
+        // to none -- reports a counter for some other budget, and `0 == 0`
+        // between a fresh journal and an unspent key is precisely the
+        // agreement that used to let one key's leaves be spent twice.
+        //
+        // `sign_after_commit` runs the same check again, and deliberately: it
+        // is the reference flow an out-of-tree scheme drives, and the
+        // guarantee has to hold there without this driver's cooperation. The
+        // repeated `bound_key` read is the price of checking it here too,
+        // where the error can still be reported as the mismatch it is rather
+        // than as the counter divergence the next few lines would call it.
+        let identity = sk.key_identity();
+        crate::stateful::require_bound_key(journal, identity)?;
+
         let leaf_capacity = <S::Pq as PqStatefulScheme>::leaf_capacity(&sk.pq);
         let pq_next = <S::Pq as PqStatefulScheme>::next_leaf(&sk.pq);
         // The component's own leaf counter and the caller's durable
         // `LeafJournal` are two independent counters that must stay in
         // lockstep: both only ever advance together, through this
         // function. Any drift means the journal and the in-memory key came
-        // from different sessions, and signing must not proceed.
+        // from different sessions, or that a component failure landed after
+        // the journal had already committed the leaf below -- in which case
+        // the journal is one ahead and stays there. Either way signing must
+        // not proceed.
+        //
+        // Named rather than folded into `SigningFailed`: the divergence is
+        // permanent and the only remedy is rotating the key, so an operator
+        // who sees the generic "signing failed" would keep retrying a key
+        // that can never sign again.
         if pq_next != journal.next_leaf() {
-            return Err(StatefulSignError::SigningFailed);
+            return Err(StatefulSignError::CountersDiverged);
         }
 
         let classical_sig = classical_sign(sk, &m_prime, ctx)?;
@@ -452,7 +666,7 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
         let pq_verify_key = sk.pq_verify_key.clone();
         let max_sig_len = <S::Pq as PqStatefulScheme>::max_stateful_sig_len(leaf_capacity);
         let pq = &mut sk.pq;
-        let flat = sign_after_commit(journal, u64::from(leaf_capacity), move |_leaf| {
+        let flat = sign_after_commit(journal, identity, u64::from(leaf_capacity), move |_leaf| {
             let mut sig_out = alloc::vec![0u8; max_sig_len];
             let written = <S::Pq as PqStatefulScheme>::sign_stateful(
                 pq,
@@ -470,8 +684,22 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
             Ok(sig_out)
         })?;
 
+        // `PqStatefulScheme` is a public trait, so the component is an
+        // extension point an out-of-tree implementation can occupy. Neither
+        // arithmetic below may assume it reported a well-formed length: a
+        // bare subtraction panics in debug and wraps in release when the
+        // component returns fewer bytes than its own fixed prefix, and a
+        // remainder that is not a whole number of nodes would silently round
+        // the leaf count down to a signature nobody can verify.
         let fixed = <S::Pq as PqStatefulScheme>::FIXED_STATEFUL_SIG_LEN;
-        let leaf_count = u32::try_from((flat.len() - fixed) / encoding_path::AUTH_PATH_NODE_LEN)
+        let path_bytes = flat
+            .len()
+            .checked_sub(fixed)
+            .ok_or(StatefulSignError::SigningFailed)?;
+        if path_bytes % encoding_path::AUTH_PATH_NODE_LEN != 0 {
+            return Err(StatefulSignError::SigningFailed);
+        }
+        let leaf_count = u32::try_from(path_bytes / encoding_path::AUTH_PATH_NODE_LEN)
             .map_err(|_| StatefulSignError::SigningFailed)?;
         encode_signature::<S>(
             &classical_sig,
@@ -484,6 +712,7 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
 
     fn sign_stateless(
         sk: &Self::SecretKey,
+        budget: &mut impl StatelessBudgetStore,
         msg: &[u8],
         ctx: &[u8],
     ) -> core::result::Result<Self::Signature, StatefulSignError> {
@@ -491,6 +720,21 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
         if !<S::Pq as PqStatefulScheme>::precheck(&m_prime) {
             return Err(StatefulSignError::SigningFailed);
         }
+
+        // The spend goes here, after validation and before the component
+        // signer runs. Validation first, because a unit of this budget never
+        // comes back while the stateless material survives, so an input the
+        // component was always going to reject must not cost one. The
+        // component signer second, because a stateless signature released
+        // before its spend is durable is a signature a restart can reissue --
+        // the same reason `sign_stateful` commits its leaf before it builds.
+        let material = <S::Pq as PqStatefulScheme>::stateless_key_material(&sk.pq_verify_key)
+            .map_err(|_| StatefulSignError::SigningFailed)?;
+        spend_stateless_budget(
+            budget,
+            material,
+            <S::Pq as PqStatefulScheme>::STATELESS_BUDGET,
+        )?;
 
         let mut sig_out = alloc::vec![0u8; <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN];
         let written = <S::Pq as PqStatefulScheme>::sign_stateless(&sk.pq, &m_prime, &mut sig_out)
@@ -565,6 +809,8 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::test_store::MemoryStore;
+    use crate::budget::BudgetKey;
     use crate::stateful::LeafJournal;
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::cell::RefCell;
@@ -578,6 +824,13 @@ mod tests {
     /// so assertions against this counter only ever check for an increase
     /// across a call, never an exact value.
     static VERIFY_STATEFUL_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Counts calls into `FakeSecretKey::zeroize`. Dropping a `SecretKey`
+    /// is the only way a test can observe that the wipe ran, because reading
+    /// the freed buffer afterwards is undefined behaviour. Global for the
+    /// same reason as `VERIFY_STATEFUL_CALLS`, and read the same way: as a
+    /// delta across one drop, never as an exact value.
+    static COMPONENT_WIPES: AtomicUsize = AtomicUsize::new(0);
 
     // A minimal fake `PqStatefulScheme` + `StatefulSuite`, to prove the
     // generic driver's ordering (commit the leaf, then attempt the
@@ -597,6 +850,7 @@ mod tests {
 
     impl zeroize::Zeroize for FakeSecretKey {
         fn zeroize(&mut self) {
+            COMPONENT_WIPES.fetch_add(1, Ordering::SeqCst);
             if let Some(leaf) = self.leaf.as_mut() {
                 leaf.zeroize();
             }
@@ -620,11 +874,16 @@ mod tests {
         type SecretKey = FakeSecretKey;
 
         fn keygen_from_seed(
-            _seed: &[u8],
+            seed: &[u8],
             _max_signatures: u32,
             vk_out: &mut [u8],
         ) -> Result<Self::SecretKey> {
-            vk_out.fill(0);
+            // Seed-dependent, as a real component's verify key is: two master
+            // seeds must not produce the same verify key, or every key would
+            // share one `KeyIdentity` and the identity tests would pass
+            // vacuously. One byte is all `VERIFY_KEY_LEN` allows, so the
+            // seeds the tests use are chosen not to collide in it.
+            vk_out.fill(seed.first().copied().unwrap_or(0));
             Ok(FakeSecretKey { leaf: Some(0) })
         }
         fn leaf_capacity(sk: &Self::SecretKey) -> u32 {
@@ -674,13 +933,15 @@ mod tests {
             msg: &[u8],
             sig_out: &mut [u8],
         ) -> Result<usize> {
-            // The counter advances before the message is judged, mirroring
-            // upstream: a component spends the leaf on the attempt itself,
-            // not on the attempt succeeding.
-            sk.leaf = Some(sk.leaf.ok_or(Error::ComponentFailure)? + 1);
+            let leaf = sk.leaf.ok_or(Error::ComponentFailure)?;
             if !Self::precheck(msg) {
                 return Err(Error::ComponentFailure);
             }
+            // The counter advances only on success, mirroring upstream's
+            // `sign_stateful_raw`. A fake that advanced unconditionally
+            // would hide the counter divergence a post-commit component
+            // failure actually causes.
+            sk.leaf = Some(leaf + 1);
             // `FIXED_STATEFUL_SIG_LEN` is 0, so a signature carrying exactly
             // one authentication-path node (32 bytes, `leaf_count = 1`) is
             // the smallest one `encoding_path` accepts (leaf count >= 1).
@@ -720,6 +981,33 @@ mod tests {
         }
         fn stateless_key_material(vk: &[u8]) -> Result<&[u8]> {
             Ok(vk)
+        }
+    }
+
+    /// A stand-in commitment: one byte, and deliberately not the identity,
+    /// so a test cannot pass by handing the verify key back as its own
+    /// commitment -- the exact confusion the real defect was.
+    fn fake_commitment(verify_key: &[u8]) -> Result<u8> {
+        match verify_key {
+            [byte] => Ok(byte.wrapping_add(1)),
+            _ => Err(Error::BadLength {
+                expected: <FakePq as crate::PqStatefulScheme>::VERIFY_KEY_LEN,
+                actual: verify_key.len(),
+            }),
+        }
+    }
+
+    impl CommittedVerifyKey for FakePq {
+        fn verify_committed_key(stored_public_key: &[u8], verify_key: &[u8]) -> Result<()> {
+            let recomputed = fake_commitment(verify_key)?;
+            match stored_public_key {
+                [stored] if *stored == recomputed => Ok(()),
+                [_] => Err(Error::ComponentFailure),
+                _ => Err(Error::BadLength {
+                    expected: Self::PUBLIC_KEY_LEN,
+                    actual: stored_public_key.len(),
+                }),
+            }
         }
     }
 
@@ -780,9 +1068,119 @@ mod tests {
         rotate_label_len = 27,
     }
 
+    /// How many bytes `RaggedPq::sign_stateful` claims to have written.
+    ///
+    /// `PqStatefulScheme` is public, so an out-of-tree component can report
+    /// any length at all -- including one shorter than its own declared
+    /// fixed prefix, or one whose remainder is not a whole number of
+    /// authentication-path nodes. The driver has to survive both, and this
+    /// is the only way to produce them: no honest component does.
+    static RAGGED_REPORTED_LEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// A `PqStatefulScheme` that misreports its own signature length. Every
+    /// method other than `sign_stateful` is a stub; only the reported length
+    /// matters here.
+    pub struct RaggedPq;
+
+    impl crate::PqStatefulScheme for RaggedPq {
+        const NAME: &'static str = "ragged";
+        const SEED_LEN: usize = 1;
+        const PUBLIC_KEY_LEN: usize = 1;
+        const VERIFY_KEY_LEN: usize = 1;
+        const SECRET_KEY_LEN: usize = 4;
+        const LEAF_CAPACITY_LIMIT: u32 = 8;
+        /// Non-zero, unlike `FakePq`'s, so a reported length below it
+        /// underflows the driver's `len - fixed` unless the driver checks.
+        const FIXED_STATEFUL_SIG_LEN: usize = 64;
+        const STATELESS_SIG_LEN: usize = 1;
+        const STATELESS_BUDGET: u64 = 4;
+
+        type SecretKey = FakeSecretKey;
+
+        fn keygen_from_seed(
+            _seed: &[u8],
+            _max_signatures: u32,
+            vk_out: &mut [u8],
+        ) -> Result<Self::SecretKey> {
+            vk_out.fill(0);
+            Ok(FakeSecretKey { leaf: Some(0) })
+        }
+        fn leaf_capacity(sk: &Self::SecretKey) -> u32 {
+            sk.leaf.map_or(0, |_| 4)
+        }
+        fn next_leaf(sk: &Self::SecretKey) -> u32 {
+            sk.leaf.unwrap_or(0)
+        }
+        fn export_secret_key(_sk: &Self::SecretKey, _out: &mut [u8]) -> Result<()> {
+            Err(Error::ComponentFailure)
+        }
+        fn import_secret_key(_bytes: &[u8]) -> Result<Self::SecretKey> {
+            Err(Error::ComponentFailure)
+        }
+        fn precheck(_msg: &[u8]) -> bool {
+            true
+        }
+        fn max_stateful_sig_len(max_signatures: u32) -> usize {
+            Self::FIXED_STATEFUL_SIG_LEN
+                + max_signatures as usize * encoding_path::AUTH_PATH_NODE_LEN
+        }
+        fn sign_stateful(
+            sk: &mut Self::SecretKey,
+            _vk: &[u8],
+            _msg: &[u8],
+            sig_out: &mut [u8],
+        ) -> Result<usize> {
+            sk.leaf = Some(sk.leaf.ok_or(Error::ComponentFailure)? + 1);
+            let written = RAGGED_REPORTED_LEN.load(Ordering::SeqCst);
+            sig_out.fill(0);
+            Ok(written)
+        }
+        fn sign_stateless(_sk: &Self::SecretKey, _msg: &[u8], sig_out: &mut [u8]) -> Result<usize> {
+            sig_out.fill(0);
+            Ok(1)
+        }
+        fn verify_stateful(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
+            Choice::from(1u8)
+        }
+        fn verify_stateless(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
+            Choice::from(1u8)
+        }
+        fn sign_stateless_rotation(
+            _sk: &Self::SecretKey,
+            _payload: &crate::rotation::RotationPayload,
+            _m_prime_rotation: &[u8],
+            sig_out: &mut [u8],
+        ) -> Result<usize> {
+            sig_out.fill(0);
+            Ok(1)
+        }
+        fn verify_stateless_rotation(
+            _vk: &[u8],
+            _payload: &crate::rotation::RotationPayload,
+            _m_prime_rotation: &[u8],
+            _sig: &[u8],
+        ) -> Choice {
+            Choice::from(1u8)
+        }
+        fn stateless_key_material(vk: &[u8]) -> Result<&[u8]> {
+            Ok(vk)
+        }
+    }
+
+    crate::hybrid_stateful_suite! {
+        RaggedH,
+        classical = FakeClassical as "stub",
+        pq = RaggedPq as "ragged",
+        label = "hybrid-stub-ragged-v1",
+        label_len = 22,
+        rotate_label = "hybrid-stub-ragged-rotate-v1",
+        rotate_label_len = 29,
+    }
+
     #[derive(Default)]
     struct JournalState {
         committed: Vec<u32>,
+        bound: Option<KeyIdentity>,
     }
     struct MemoryJournal(Rc<RefCell<JournalState>>);
     impl LeafJournal for MemoryJournal {
@@ -800,13 +1198,33 @@ mod tests {
                 .max()
                 .map_or(0, |m| m + 1)
         }
+        fn bound_key(&self) -> Option<KeyIdentity> {
+            self.0.borrow().bound
+        }
+        fn bind_key(&mut self, key: KeyIdentity) -> core::result::Result<(), Self::Error> {
+            self.0.borrow_mut().bound = Some(key);
+            Ok(())
+        }
+    }
+
+    /// A fresh journal, already adopted by `sk`: what an integrator does once,
+    /// when the key's durable journal is created. Every test below that is
+    /// not about identity starts here, so the identity check is satisfied and
+    /// the behaviour under test is the only thing that can fail.
+    fn adopted_journal<S: StatefulSuite>(
+        state: &Rc<RefCell<JournalState>>,
+        sk: &SecretKey<S>,
+    ) -> MemoryJournal {
+        let mut journal = MemoryJournal(Rc::clone(state));
+        crate::stateful::adopt_key(&mut journal, sk.key_identity()).expect("adopt");
+        journal
     }
 
     #[test]
     fn a_refused_message_still_burns_its_leaf() {
         let (mut sk, _pk) = keygen::<FakeH>(&[1u8; 32], 4).expect("keygen");
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MemoryJournal(Rc::clone(&state));
+        let mut journal = adopted_journal(&state, &sk);
 
         // `0xFF` anywhere in the message is rigged, in `FakePq`, to be
         // refused by the component after it has already spent the leaf. A
@@ -822,11 +1240,167 @@ mod tests {
             "the leaf was committed before the attempt, so it is spent"
         );
         assert_eq!(journal.next_leaf(), 1, "the journal advanced");
+
+        // The component, like the real one, advances only on success, so a
+        // failure after the commit leaves the journal one ahead. That is
+        // fail-closed but permanent, and the operator has to be told which
+        // of the two it is: every later call names the divergence rather
+        // than reporting an opaque `SigningFailed` forever.
         assert_eq!(
             <FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq),
-            1,
-            "the component counter advanced in lockstep, so the two agree \
-             and the next signature uses a fresh leaf"
+            0,
+            "the component did not spend the leaf the journal committed"
+        );
+        assert_eq!(
+            FakeH::sign_stateful(&mut sk, &mut journal, b"next", b""),
+            Err(StatefulSignError::CountersDiverged),
+            "the key is finished, and says so by name"
+        );
+    }
+
+    /// A component that misreports its own signature length must produce an
+    /// error, never a debug panic and never a release wraparound.
+    ///
+    /// Both cases run through the same key, one after the other, because
+    /// each attempt spends a leaf and the point is only what the driver
+    /// returns.
+    #[test]
+    fn a_component_that_misreports_its_signature_length_is_refused() {
+        let fixed = <RaggedPq as crate::PqStatefulScheme>::FIXED_STATEFUL_SIG_LEN;
+        let node = encoding_path::AUTH_PATH_NODE_LEN;
+
+        let (mut sk, _pk) = keygen::<RaggedH>(&[12u8; 32], 4).expect("keygen");
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
+
+        // Shorter than the component's own fixed prefix: the subtraction
+        // that derives the leaf count would underflow.
+        RAGGED_REPORTED_LEN.store(fixed - 1, Ordering::SeqCst);
+        assert_eq!(
+            RaggedH::sign_stateful(&mut sk, &mut journal, b"short", b""),
+            Err(StatefulSignError::SigningFailed)
+        );
+
+        // Long enough, but the authentication path is a ragged number of
+        // nodes: rounding it down would encode a leaf count that describes
+        // fewer bytes than the signature actually carries.
+        RAGGED_REPORTED_LEN.store(fixed + node + 1, Ordering::SeqCst);
+        assert_eq!(
+            RaggedH::sign_stateful(&mut sk, &mut journal, b"ragged", b""),
+            Err(StatefulSignError::SigningFailed)
+        );
+
+        // The same driver accepts a whole number of nodes, so the two
+        // refusals above are the length checks firing and not the path
+        // being unusable for some other reason.
+        RAGGED_REPORTED_LEN.store(fixed + node, Ordering::SeqCst);
+        assert!(RaggedH::sign_stateful(&mut sk, &mut journal, b"whole", b"").is_ok());
+    }
+
+    /// The pqhs-aww reproduction at the generic layer: one key, two journals
+    /// that have each recorded nothing, two different messages. Both journals
+    /// truthfully report that leaf `0` is next, so no counter comparison can
+    /// separate them -- only the binding can.
+    ///
+    /// Every leaf index here is signer-side and zero-based
+    /// (`LeafJournal::next_leaf`), not the one-based wire `LeafCount`.
+    #[test]
+    fn a_journal_that_never_adopted_this_key_cannot_spend_its_leaves() {
+        let (mut sk, _pk) = keygen::<FakeH>(&[21u8; 32], 4).expect("keygen");
+
+        // The key's own journal, adopted once when it was provisioned.
+        let owned_state = Rc::new(RefCell::new(JournalState::default()));
+        let mut owned = adopted_journal(&owned_state, &sk);
+        FakeH::sign_stateful(&mut sk, &mut owned, b"message one", b"").expect("sign");
+        assert_eq!(owned_state.borrow().committed, alloc::vec![0]);
+
+        // A second, independent journal. It has committed nothing, so its
+        // counter says leaf 0 -- and so did the key's, one signature ago.
+        let fresh_state = Rc::new(RefCell::new(JournalState::default()));
+        let mut fresh = MemoryJournal(Rc::clone(&fresh_state));
+        assert_eq!(
+            fresh.next_leaf(),
+            0,
+            "the fresh journal agrees with a fresh key"
+        );
+        assert_eq!(fresh.bound_key(), None, "and it belongs to no key");
+
+        let restored = SecretKey::<FakeH>::import(&sk.export().expect("export")).expect("import");
+        let mut restored = restored;
+        assert_eq!(
+            FakeH::sign_stateful(&mut restored, &mut fresh, b"message two", b""),
+            Err(StatefulSignError::JournalKeyMismatch)
+        );
+        assert!(
+            fresh_state.borrow().committed.is_empty(),
+            "the refusal lands before any leaf is committed"
+        );
+    }
+
+    /// A journal adopted by one key must refuse the other, both ways round.
+    #[test]
+    fn a_journal_bound_to_one_key_refuses_the_other() {
+        let (mut a_key, _a_pk) = keygen::<FakeH>(&[22u8; 32], 4).expect("keygen");
+        let (mut b_key, _b_pk) = keygen::<FakeH>(&[23u8; 32], 4).expect("keygen");
+        assert_ne!(a_key.key_identity(), b_key.key_identity());
+
+        let a_state = Rc::new(RefCell::new(JournalState::default()));
+        let b_state = Rc::new(RefCell::new(JournalState::default()));
+        let mut a_journal = adopted_journal(&a_state, &a_key);
+        let mut b_journal = adopted_journal(&b_state, &b_key);
+
+        assert_eq!(
+            FakeH::sign_stateful(&mut a_key, &mut b_journal, b"msg", b""),
+            Err(StatefulSignError::JournalKeyMismatch)
+        );
+        assert_eq!(
+            FakeH::sign_stateful(&mut b_key, &mut a_journal, b"msg", b""),
+            Err(StatefulSignError::JournalKeyMismatch)
+        );
+        assert!(a_state.borrow().committed.is_empty());
+        assert!(b_state.borrow().committed.is_empty());
+
+        // Each key signs through its own journal, so the two refusals above
+        // are the binding and not something else refusing every call.
+        assert!(FakeH::sign_stateful(&mut a_key, &mut a_journal, b"msg", b"").is_ok());
+        assert!(FakeH::sign_stateful(&mut b_key, &mut b_journal, b"msg", b"").is_ok());
+    }
+
+    /// The identity is derived from public material, so the public key alone
+    /// yields it. An integrator provisioning a journal record therefore never
+    /// has to handle the secret key to do it.
+    #[test]
+    fn the_public_key_names_the_same_identity_as_the_secret_key() {
+        let (sk, pk) = keygen::<FakeH>(&[24u8; 32], 4).expect("keygen");
+        assert_eq!(sk.key_identity(), pk.key_identity());
+
+        // And it survives export/import, so a restarted signer names the same
+        // journal it named before.
+        let restored = SecretKey::<FakeH>::import(&sk.export().expect("export")).expect("import");
+        assert_eq!(restored.key_identity(), sk.key_identity());
+    }
+
+    /// Identity binding is layered on top of the counter check, not in place
+    /// of it: an adopted journal whose counter has drifted still reports the
+    /// divergence.
+    #[test]
+    fn the_lockstep_counter_check_still_fires_on_an_adopted_journal() {
+        let (mut sk, _pk) = keygen::<FakeH>(&[25u8; 32], 4).expect("keygen");
+        let state = Rc::new(RefCell::new(JournalState::default()));
+        let mut journal = adopted_journal(&state, &sk);
+
+        // `0xFF` is rigged in `FakePq` to fail after the leaf is committed,
+        // which leaves the journal one ahead of the key.
+        assert_eq!(
+            FakeH::sign_stateful(&mut sk, &mut journal, &[0xFFu8], b""),
+            Err(StatefulSignError::GrindAbort)
+        );
+        assert_eq!(journal.next_leaf(), 1);
+        assert_eq!(<FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq), 0);
+
+        assert_eq!(
+            FakeH::sign_stateful(&mut sk, &mut journal, b"next", b""),
+            Err(StatefulSignError::CountersDiverged),
+            "the right journal with the wrong counter is still a divergence"
         );
     }
 
@@ -834,7 +1408,7 @@ mod tests {
     fn successful_signing_advances_both_counters_together() {
         let (mut sk, _pk) = keygen::<FakeH>(&[2u8; 32], 4).expect("keygen");
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MemoryJournal(Rc::clone(&state));
+        let mut journal = adopted_journal(&state, &sk);
 
         FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("sign");
         assert_eq!(state.borrow().committed, alloc::vec![0]);
@@ -850,7 +1424,7 @@ mod tests {
     #[test]
     fn export_import_round_trip_carries_every_part_of_the_key() {
         let (mut sk, pk) = keygen::<FakeH>(&[3u8; 32], 4).expect("keygen");
-        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
         FakeH::sign_stateful(&mut sk, &mut journal, b"one", b"").expect("sign");
         FakeH::sign_stateful(&mut sk, &mut journal, b"two", b"").expect("sign");
 
@@ -882,7 +1456,7 @@ mod tests {
     #[test]
     fn export_import_preserves_the_exhausted_counter() {
         let (mut sk, _pk) = keygen::<FakeH>(&[4u8; 32], 4).expect("keygen");
-        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
         for msg in [b"a".as_slice(), b"b", b"c", b"d"] {
             FakeH::sign_stateful(&mut sk, &mut journal, msg, b"").expect("sign");
         }
@@ -913,7 +1487,7 @@ mod tests {
         assert_eq!(sk.next_leaf(), 0, "a fresh key has spent nothing");
 
         let state = Rc::new(RefCell::new(JournalState::default()));
-        let mut journal = MemoryJournal(Rc::clone(&state));
+        let mut journal = adopted_journal(&state, &sk);
         FakeH::sign_stateful(&mut sk, &mut journal, b"one", b"").expect("sign");
         FakeH::sign_stateful(&mut sk, &mut journal, b"two", b"").expect("sign");
         assert_eq!(sk.next_leaf(), 2);
@@ -936,7 +1510,7 @@ mod tests {
     #[test]
     fn import_rejects_a_counter_field_that_disagrees_with_the_component_key() {
         let (mut sk, _pk) = keygen::<FakeH>(&[5u8; 32], 4).expect("keygen");
-        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
         FakeH::sign_stateful(&mut sk, &mut journal, b"one", b"").expect("sign");
         let blob = sk.export().expect("export");
 
@@ -1023,6 +1597,116 @@ mod tests {
         );
     }
 
+    /// The stored-commitment constructor must refuse a verify key that the
+    /// stored key does not name, and `from_bytes` must be shown taking the
+    /// same key without complaint -- the difference between the two is the
+    /// whole of the guarantee.
+    #[test]
+    fn from_stored_commitment_and_bundle_refuses_a_key_the_stored_key_does_not_name() {
+        let classical_len = <FakeClassical as crate::ClassicalScheme>::PUBLIC_KEY_LEN;
+        let (_sk, pk) = keygen::<FakeH>(&[13u8; 32], 4).expect("keygen");
+        let verify_key = &pk.as_ref()[classical_len..];
+
+        // What a verifier installs: the classical public key and a
+        // commitment to the post-quantum verify key, never the verify key
+        // itself.
+        let mut stored = alloc::vec![0u8; <FakeH as crate::StatefulSuite>::STORED_PUBLIC_KEY_LEN];
+        stored[..classical_len].copy_from_slice(&pk.as_ref()[..classical_len]);
+        stored[classical_len] = fake_commitment(verify_key).expect("commitment");
+
+        let rebuilt = PublicKey::<FakeH>::from_stored_commitment_and_bundle(&stored, verify_key)
+            .expect("the installed key's own verify key must be accepted");
+        assert_eq!(rebuilt.as_ref(), pk.as_ref());
+        assert_eq!(
+            rebuilt.classical(),
+            &stored[..classical_len],
+            "the classical half comes from the stored key"
+        );
+
+        // A key an attacker generated: internally consistent, and accepted
+        // against its own stored key, because there is nothing wrong with it
+        // except whose it is.
+        let attacker_verify_key = [0xAAu8];
+        let attacker_stored = alloc::vec![
+            stored[0],
+            fake_commitment(&attacker_verify_key).expect("commitment"),
+        ];
+        assert!(PublicKey::<FakeH>::from_stored_commitment_and_bundle(
+            &attacker_stored,
+            &attacker_verify_key
+        )
+        .is_ok());
+
+        // Against the victim's stored key it fails closed.
+        assert_eq!(
+            PublicKey::<FakeH>::from_stored_commitment_and_bundle(&stored, &attacker_verify_key)
+                .err(),
+            Some(Error::ComponentFailure),
+        );
+
+        // `from_bytes` accepts the attacker's key as a whole verify-form
+        // public key, because a key cannot vouch for itself and `from_bytes`
+        // has nothing else to compare it against.
+        let mut attacker_bytes =
+            alloc::vec![0u8; <FakeH as crate::StatefulSuite>::VERIFY_PUBLIC_KEY_LEN];
+        attacker_bytes[..classical_len].copy_from_slice(&pk.as_ref()[..classical_len]);
+        attacker_bytes[classical_len..].copy_from_slice(&attacker_verify_key);
+        assert!(PublicKey::<FakeH>::from_bytes(&attacker_bytes).is_ok());
+    }
+
+    #[test]
+    fn from_stored_commitment_and_bundle_rejects_either_wrong_length() {
+        let stored_len = <FakeH as crate::StatefulSuite>::STORED_PUBLIC_KEY_LEN;
+        let verify_key_len = <FakePq as crate::PqStatefulScheme>::VERIFY_KEY_LEN;
+        let stored = alloc::vec![0u8; stored_len];
+        let verify_key = alloc::vec![0u8; verify_key_len];
+
+        assert_eq!(
+            PublicKey::<FakeH>::from_stored_commitment_and_bundle(
+                &stored[..stored_len - 1],
+                &verify_key
+            )
+            .err(),
+            Some(Error::BadLength {
+                expected: stored_len,
+                actual: stored_len - 1
+            })
+        );
+        assert_eq!(
+            PublicKey::<FakeH>::from_stored_commitment_and_bundle(&stored, &[]).err(),
+            Some(Error::BadLength {
+                expected: verify_key_len,
+                actual: 0
+            })
+        );
+    }
+
+    /// Dropping a key wipes it, without anybody remembering to ask.
+    ///
+    /// The classical half rides the same `self.zeroize()` call as the
+    /// component half, so the component's wipe counter stands in for both:
+    /// reading the freed `Vec<u8>` back to check it directly would be
+    /// undefined behaviour.
+    #[test]
+    fn dropping_a_key_wipes_it() {
+        let before = COMPONENT_WIPES.load(Ordering::SeqCst);
+        {
+            let (_sk, _pk) = keygen::<FakeH>(&[11u8; 32], 4).expect("keygen");
+        }
+        assert!(
+            COMPONENT_WIPES.load(Ordering::SeqCst) > before,
+            "the composite key's Drop must wipe the component half"
+        );
+    }
+
+    /// The guarantee is visible in the type system, so a caller can rely on
+    /// the bound instead of reading this module.
+    #[test]
+    fn the_secret_key_advertises_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<SecretKey<FakeH>>();
+    }
+
     /// A wiped key must fail to export rather than export a well-formed blob
     /// of zeros, which would import as a key with a counter no signer reached.
     #[test]
@@ -1040,7 +1724,7 @@ mod tests {
     #[test]
     fn verify_evaluates_the_post_quantum_half_even_when_the_classical_half_fails() {
         let (mut sk, pk) = keygen::<FakeH>(&[9u8; 32], 4).expect("keygen");
-        let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
         let sig = FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("sign");
 
         let mut tampered = sig.clone();
@@ -1055,5 +1739,129 @@ mod tests {
             after > before,
             "verify_stateful must run even though the classical half already failed"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // The few-time stateless budget (specification section 21).
+    //
+    // `FakePq::STATELESS_BUDGET` is 4 and `stateless_key_material` hands
+    // back the whole (one-byte) verify key, so a whole budget is walkable
+    // here in a way it never is against a real 2^20 component.
+    // ------------------------------------------------------------------
+
+    /// The budget key a given composite key's stateless material resolves
+    /// to, so a test can read a store without repeating the derivation.
+    fn budget_key_of(pk: &PublicKey<FakeH>) -> BudgetKey {
+        BudgetKey::from_material(pk.pq_verify_key())
+    }
+
+    /// Every stateless signature must decrement the budget, and the count
+    /// must be durable before the signature exists -- the stateless
+    /// counterpart of committing the leaf before building.
+    #[test]
+    fn every_stateless_signature_decrements_the_budget() {
+        let (sk, pk) = keygen::<FakeH>(&[20u8; 32], 4).expect("keygen");
+        let mut budget = MemoryStore::default();
+        let key = budget_key_of(&pk);
+
+        assert_eq!(budget.consumed(&key), None, "a fresh key has spent nothing");
+
+        for expected in 1..=3u64 {
+            FakeH::sign_stateless(&sk, &mut budget, b"m", b"").expect("below the bound");
+            assert_eq!(budget.consumed(&key), Some(expected));
+        }
+    }
+
+    /// Ordinary application signing must never draw on this budget: the two
+    /// bounds are separate, and a stateful signature that quietly charged
+    /// the stateless one would exhaust a security assumption through the
+    /// fast path it is meant to leave alone.
+    #[test]
+    fn stateful_signing_does_not_draw_on_the_stateless_budget() {
+        let (mut sk, pk) = keygen::<FakeH>(&[21u8; 32], 4).expect("keygen");
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
+        // Never handed to anything: `sign_stateful` takes no budget store at
+        // all, which is the strongest form the guarantee can take. This
+        // store exists only to be read afterwards.
+        let budget = MemoryStore::default();
+
+        for _ in 0..3 {
+            FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("stateful sign");
+        }
+
+        assert_eq!(
+            budget.consumed(&budget_key_of(&pk)),
+            None,
+            "stateful signing must leave the stateless budget untouched"
+        );
+    }
+
+    /// At the bound the signature is refused with the typed error, and the
+    /// refused attempt records nothing: a bound that charged for the calls
+    /// it rejected would be a bound that shrinks under retries.
+    #[test]
+    fn exceeding_the_budget_is_refused_and_the_refused_attempt_spends_nothing() {
+        let (sk, pk) = keygen::<FakeH>(&[22u8; 32], 4).expect("keygen");
+        let mut budget = MemoryStore::default();
+        let key = budget_key_of(&pk);
+
+        for _ in 0..4 {
+            FakeH::sign_stateless(&sk, &mut budget, b"m", b"").expect("within the bound");
+        }
+        assert_eq!(budget.consumed(&key), Some(4));
+
+        for _ in 0..3 {
+            assert_eq!(
+                FakeH::sign_stateless(&sk, &mut budget, b"m", b""),
+                Err(StatefulSignError::StatelessBudgetExhausted)
+            );
+            assert_eq!(
+                budget.consumed(&key),
+                Some(4),
+                "a refused attempt must record nothing"
+            );
+        }
+    }
+
+    /// A store that cannot make the spend durable must refuse the signature
+    /// rather than release one whose spend a restart would forget, and the
+    /// same unit must still be there once the fault is repaired.
+    #[test]
+    fn a_budget_store_failure_refuses_the_signature_and_records_nothing() {
+        let (sk, pk) = keygen::<FakeH>(&[23u8; 32], 4).expect("keygen");
+        let mut budget = MemoryStore::default();
+        budget.fail = true;
+        let key = budget_key_of(&pk);
+
+        assert_eq!(
+            FakeH::sign_stateless(&sk, &mut budget, b"m", b""),
+            Err(StatefulSignError::BudgetStoreFailed)
+        );
+        assert_eq!(budget.consumed(&key), None);
+
+        budget.fail = false;
+        assert!(FakeH::sign_stateless(&sk, &mut budget, b"m", b"").is_ok());
+        assert_eq!(budget.consumed(&key), Some(1));
+    }
+
+    /// Two keys with different stateless material must hold independent
+    /// counts: one key's spending must never be charged to another's bound.
+    #[test]
+    fn two_keys_hold_independent_budgets() {
+        let (sk_a, pk_a) = keygen::<FakeH>(&[24u8; 32], 4).expect("keygen a");
+        let (sk_b, pk_b) = keygen::<FakeH>(&[25u8; 32], 4).expect("keygen b");
+        assert_ne!(
+            pk_a.pq_verify_key(),
+            pk_b.pq_verify_key(),
+            "the fake component must derive seed-dependent verify keys"
+        );
+
+        let mut budget = MemoryStore::default();
+        FakeH::sign_stateless(&sk_a, &mut budget, b"m", b"").expect("a signs");
+        FakeH::sign_stateless(&sk_a, &mut budget, b"m", b"").expect("a signs again");
+        FakeH::sign_stateless(&sk_b, &mut budget, b"m", b"").expect("b signs");
+
+        assert_eq!(budget.consumed(&budget_key_of(&pk_a)), Some(2));
+        assert_eq!(budget.consumed(&budget_key_of(&pk_b)), Some(1));
     }
 }

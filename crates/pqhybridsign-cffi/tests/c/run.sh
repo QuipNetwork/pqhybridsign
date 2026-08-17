@@ -16,14 +16,17 @@ target_dir="$workspace_dir/target/release"
 out_dir="$(mktemp -d)"
 trap 'rm -rf "$out_dir"' EXIT
 
+# The archive is named on the command line rather than found through -L/-l.
+# The crate builds both a cdylib and a staticlib into the same directory,
+# and -lpqhybridsign_cffi prefers the shared object, which then has to be
+# found again at run time. Naming the .a links it statically, which is what
+# this test is for, and leaves the resulting binary with nothing to resolve
+# at startup.
 cc -std=c11 -Wall -Wextra -Werror \
     -I "$crate_dir/include" \
     "$crate_dir/tests/c/main.c" \
     -o "$out_dir/pqhybridsign_c_test" \
-    -L "$target_dir" -lpqhybridsign_cffi \
+    "$target_dir/libpqhybridsign_cffi.a" \
     -lpthread -ldl -lm
 
-# The staticlib is self-contained but still needs its runtime search path
-# set for the odd platform that resolves symbols lazily; harmless where it
-# isn't needed.
-LD_LIBRARY_PATH="$target_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$out_dir/pqhybridsign_c_test"
+"$out_dir/pqhybridsign_c_test"

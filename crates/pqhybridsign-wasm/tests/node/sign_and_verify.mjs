@@ -97,6 +97,23 @@ check("an unknown suite name is refused", () => {
     assert.throws(() => pqhs.keygenFromSeed("H7", seed(1)));
 });
 
+const MALFORMED = [
+    new Uint8Array(0),
+    new Uint8Array(1),
+    new Uint8Array(4096),
+];
+
+for (const suite of SUITES) {
+    check(`${suite}: verify returns false and does not throw for malformed lengths`, () => {
+        const { secretKey, publicKey } = pqhs.keygenFromSeed(suite, seed(1));
+        const sig = pqhs.sign(suite, secretKey, MSG, CTX);
+        for (const bad of MALFORMED) {
+            assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, bad), false);
+            assert.equal(pqhs.verify(suite, bad, MSG, CTX, sig), false);
+        }
+    });
+}
+
 if (failures > 0) {
     console.error(`${failures} check(s) failed`);
     process.exit(1);
