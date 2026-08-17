@@ -497,6 +497,15 @@ fn write_identity(
 /// Copy `sk` into `sk_out`'s buffer afterwards if that is the shape the
 /// integration wants.
 ///
+/// # Performance
+///
+/// This function calls `SecretKey::import`, which re-derives the hypertree
+/// root. At `profile-128s-q18` and `profile-128s-q20` that is the same walk
+/// as keygen: about 47 seconds, paid on every call. The in-process Rust API
+/// keeps a `SecretKey` in memory and signs in under 0.01 seconds. A caller
+/// on a 128s profile that signs more than occasionally wants the Rust API
+/// or an opaque key handle, not this entry point.
+///
 /// # Errors
 ///
 /// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: use
