@@ -688,8 +688,14 @@ classical_seed = HKDF-Expand(prk, info = "classical/" || Label, L = 32)
 pq_seed        = HKDF-Expand(prk, info = "pq/"        || Label, L = P::SEED_LEN)
 ```
 
-The `info` string binds the suite label, as section 9 requires. Zeroize every
-intermediate seed after use.
+The `info` string binds the suite label, as section 9 requires.
+
+The derivation zeroizes the PRK and every intermediate seed after use, with
+one residual that the code cannot remove. `Hkdf` holds the same key as an
+`hmac` 0.12 `HmacCore`, whose primed ipad and opad states expand exactly what
+the PRK expands. That type implements neither `Drop` nor `Zeroize` and exposes
+no field to reach, so neither `derive_component_seeds` nor any caller can wipe
+it. The fix in `derive.rs` removes one of the two copies, not both.
 
 Junction derivation is hard only and applies to the whole suite. A junction
 derives a new master seed, and both components derive again from it. Soft
