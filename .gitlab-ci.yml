@@ -155,6 +155,39 @@ smoke-128s-q18:
       cargo test -p pqhybridsign-shrincs --release --no-default-features \
         --features profile-128s-q18 --test smoke_128s -- --ignored
 
+# regenerate-fixtures is gated on a pipeline schedule. If no schedule
+# exists the job never runs, and the repository silently claims fixture
+# coverage for the signing paths that it does not have. This job makes
+# that state loud instead of invisible.
+#
+# CI_JOB_TOKEN cannot read the pipeline_schedules API: that endpoint is not
+# in the GitLab job-token allowlist, so a real schedule reads back as
+# indistinguishable from a 401. Until a masked project access token is
+# added (see the report for the required scope), this job cannot block the
+# pipeline on a false negative, so it is allow_failure and its output must
+# be read rather than trusted to gate merges.
+schedule-exists:
+  stage: test
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: always
+  script:
+    - |
+      set -euo pipefail
+      count=$(curl -sf --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipeline_schedules" \
+        | jq 'length')
+      if [ "${count}" = "0" ]; then
+        echo "No pipeline schedule is configured."
+        echo "regenerate-fixtures is gated on a schedule and therefore never runs."
+        echo "The stateless signing paths have no automated coverage."
+        echo "Create a schedule in Settings > CI/CD > Pipeline schedules."
+        exit 1
+      fi
+      echo "${count} pipeline schedule(s) configured."
+
 # Only detector of fixture staleness for the signing paths, and the only
 # place the 175-second stateless signing cost still runs. Regenerates every
 # profile fixture and fails if any committed file drifted.
