@@ -1779,10 +1779,11 @@ mod tests {
     /// `TrustedMaxSignatures`' stated guarantee unbacked at its only real
     /// call site.
     ///
-    /// Every leaf value here is the wire `LeafCount`: one-based, a count of
-    /// authentication-path nodes, and the same space
-    /// `max_signatures_from_vk` returns. It is not the zero-based
-    /// `LeafJournal` index.
+    /// Every leaf value here is the wire `LeafCount`: one-based, and the same
+    /// space `max_signatures_from_vk` returns. The authentication path holds
+    /// one node per leaf, so the node count and the leaf index are the same
+    /// number. It is not the zero-based `LeafJournal` index, which is one
+    /// less.
     ///
     /// The in-bound control matters as much as the rejection: without it,
     /// this test would still pass if the encoding were malformed for some

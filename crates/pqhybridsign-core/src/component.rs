@@ -248,9 +248,12 @@ pub trait PqStatefulScheme {
     /// [`TrustedMaxSignatures`] exists so that no caller can name a bound
     /// without saying where it came from.
     ///
-    /// The returned bound is in the wire [`LeafCount`] space, which is
-    /// one-based: `1..=bound` is the accepted range. It is not the
-    /// zero-based index a [`LeafJournal`] records.
+    /// The returned bound is in the wire `LeafCount` space that
+    /// [`encoding_path`] defines, which is one-based: `1..=bound` is the
+    /// accepted range. It is not the zero-based index a [`LeafJournal`]
+    /// records. The authentication path holds one node per leaf, so this is
+    /// equally the largest number of path nodes a signature under this key
+    /// can carry.
     ///
     /// # Errors
     ///
@@ -259,7 +262,7 @@ pub trait PqStatefulScheme {
     /// key declares a bound this component cannot represent.
     ///
     /// [`TrustedMaxSignatures`]: crate::encoding_path::TrustedMaxSignatures
-    /// [`LeafCount`]: crate::encoding_path
+    /// [`encoding_path`]: crate::encoding_path
     /// [`LeafJournal`]: crate::stateful::LeafJournal
     /// [`Error::BadLength`]: crate::Error::BadLength
     /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure

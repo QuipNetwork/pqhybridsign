@@ -237,12 +237,17 @@ impl PqStatefulScheme for ShrincsScheme {
     /// budgets.
     ///
     /// The returned bound is in the wire `LeafCount` space: one-based, so
-    /// `1..=max_signatures` is what the decoder accepts. It is neither
-    /// upstream's one-based `next_leaf_index` nor the zero-based index a
-    /// `LeafJournal` records, and no conversion happens here. This library
-    /// reconciles those two conventions in exactly one place,
-    /// [`Self::next_leaf`], and this method deliberately does not become a
-    /// second one.
+    /// `1..=max_signatures` is what the decoder accepts. It is the same
+    /// one-based space as upstream's `next_leaf_index`, not the zero-based
+    /// index a `LeafJournal` records. The UXMSS authentication path grows by
+    /// one node per leaf, so upstream derives the leaf index from the path
+    /// length rather than reading it off the wire (`hashsigs-rs`
+    /// `src/shrincs/uxmss.rs:91`), and applies this same bound to it.
+    ///
+    /// No conversion happens here: the bundle field is returned unchanged.
+    /// This library reconciles the one-based and zero-based conventions in
+    /// exactly one place, [`Self::next_leaf`], and this method deliberately
+    /// does not become a second one.
     fn max_signatures_from_vk(verify_key: &[u8]) -> Result<u32> {
         // `InvalidLength` is the only error this can return.
         bundle::max_signatures(verify_key).map_err(|_| Error::BadLength {
