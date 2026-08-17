@@ -417,8 +417,9 @@ pub fn sign_rotation<S: StatefulSuite>(
 /// Mirrors `stateful_composite::verify`.
 ///
 /// Returns `None` on any rejection: a bad signature length, a `ctx` over 255
-/// bytes, or a failed gate. Returns `Some(next)` only when both halves
-/// verify, with `next` built directly from `payload`'s already-checked
+/// bytes, a `current_commitment` that is not this key's, or a failed gate.
+/// Returns `Some(next)` only when both halves verify, with `next` built
+/// directly from `payload`'s already-checked
 /// fields -- there is no path that returns a partially built
 /// `NextStoredPublicKey`, and no separate "then install" step that a caller
 /// could invoke without having verified anything.
@@ -428,11 +429,36 @@ pub fn verify_rotation<S: StatefulSuite>(
     ctx: &[u8],
     payload: &RotationPayload,
     sig: &[u8],
-) -> Option<NextStoredPublicKey> {
+) -> Option<NextStoredPublicKey>
+where
+    S::Pq: stateful_composite::CommittedVerifyKey,
+{
     let needed = rotation_signature_len::<S>();
     if sig.len() != needed {
         return None;
     }
+
+    // The commitment is what binds this authorization to one specific
+    // current key. Without it the field is decorative: an authorization
+    // issued under key A verifies under key B, and within one epoch two
+    // authorizations issued under the same key are unordered, so whoever
+    // presents one first wins.
+    //
+    // Recomputed from the verify key and compared against the payload's
+    // trusted side. An early return here leaks nothing: the commitment is
+    // public, the caller already holds it, and the length check above
+    // returns early on the same terms. The constant-time discipline that
+    // matters is between the two signature halves below, which stay
+    // unconditional and stay combined with a bitwise `&`.
+    if <S::Pq as stateful_composite::CommittedVerifyKey>::verify_committed_key(
+        &payload.current_commitment,
+        current_pk.pq_verify_key(),
+    )
+    .is_err()
+    {
+        return None;
+    }
+
     let m_prime_rotation = m_prime_rotation::<S>(payload, ctx).ok()?;
     let (classical_sig, stateless_sig) = sig.split_at(encoding_path::CLASSICAL_SIG_LEN);
 
@@ -598,7 +624,11 @@ mod tests {
     impl crate::PqStatefulScheme for FakePq {
         const NAME: &'static str = "fake";
         const SEED_LEN: usize = 1;
-        const PUBLIC_KEY_LEN: usize = 1;
+        // 32, matching `RotationPayload`'s fixed 32-byte commitment fields.
+        // A component whose stored form is a different width could never
+        // appear in a `RotationPayload` at all, so a 1-byte stand-in here
+        // would be testing a suite that cannot exist.
+        const PUBLIC_KEY_LEN: usize = FIELD_LEN;
         const VERIFY_KEY_LEN: usize = 1;
         const SECRET_KEY_LEN: usize = 1;
         const LEAF_CAPACITY_LIMIT: u32 = 1;
@@ -683,6 +713,47 @@ mod tests {
         }
     }
 
+    /// Stand-in commitment: a hash of the verify key, so two verify keys
+    /// give two commitments and no test can pass by handing a verify key
+    /// back as its own commitment. Deliberately not the identity function
+    /// and not a constant.
+    #[cfg(feature = "alloc")]
+    fn fake_commitment(verify_key: &[u8]) -> [u8; FIELD_LEN] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"fake-commitment");
+        hasher.update(verify_key);
+        hasher.finalize().into()
+    }
+
+    #[cfg(feature = "alloc")]
+    impl crate::stateful_composite::CommittedVerifyKey for FakePq {
+        fn verify_committed_key(stored_public_key: &[u8], verify_key: &[u8]) -> Result<()> {
+            if stored_public_key.len() != <Self as crate::PqStatefulScheme>::PUBLIC_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: <Self as crate::PqStatefulScheme>::PUBLIC_KEY_LEN,
+                    actual: stored_public_key.len(),
+                });
+            }
+            if verify_key.len() != <Self as crate::PqStatefulScheme>::VERIFY_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: <Self as crate::PqStatefulScheme>::VERIFY_KEY_LEN,
+                    actual: verify_key.len(),
+                });
+            }
+            // Recomputed from the verify key's own material, never read out
+            // of it: a commitment a key carries inside itself proves only
+            // that the key is internally consistent, which an attacker's
+            // freshly generated key also is.
+            let recomputed = fake_commitment(verify_key);
+            if stored_public_key == recomputed.as_slice() {
+                Ok(())
+            } else {
+                Err(Error::ComponentFailure)
+            }
+        }
+    }
+
     crate::hybrid_stateful_suite! {
         FakeH,
         classical = FakeClassical as "stub",
@@ -693,12 +764,28 @@ mod tests {
         rotate_label_len = 27,
     }
 
+    /// A payload whose `current_commitment` names no particular key. Enough
+    /// for the encoding tests, which never reach the rotation gate; anything
+    /// that calls [`verify_rotation`] wants [`payload_for`] instead.
     fn payload() -> RotationPayload {
         RotationPayload {
             kind: RotationKind::StatefulGraft,
             current_commitment: [1u8; 32],
             next_commitment: [2u8; 32],
             next_classical_pk: [3u8; 32],
+        }
+    }
+
+    /// The same payload, with `current_commitment` set to the commitment
+    /// `pk` actually carries -- what an owner authorizing a rotation against
+    /// `pk` would write. `verify_rotation` refuses anything else, so a
+    /// negative test built on [`payload`] alone would pass on the commitment
+    /// check rather than on the property it means to prove.
+    #[cfg(feature = "alloc")]
+    fn payload_for(pk: &stateful_composite::PublicKey<FakeH>) -> RotationPayload {
+        RotationPayload {
+            current_commitment: fake_commitment(pk.pq_verify_key()),
+            ..payload()
         }
     }
 
@@ -797,7 +884,7 @@ mod tests {
     #[test]
     fn a_valid_rotation_verifies() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[1u8; 32], 1).expect("keygen");
-        let p = payload();
+        let p = payload_for(&pk);
         let ctx = b"chain";
 
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
@@ -825,7 +912,7 @@ mod tests {
         // An honest rotation authorizing NextClassicalPK = A.
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[2u8; 32], 1).expect("keygen");
         let ctx = b"chain";
-        let mut payload_a = payload();
+        let mut payload_a = payload_for(&pk);
         payload_a.next_classical_pk = [0xAAu8; 32];
 
         let mut honest_sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
@@ -860,7 +947,7 @@ mod tests {
     #[test]
     fn an_invalid_stateless_half_is_rejected_even_with_a_valid_classical_half() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[3u8; 32], 1).expect("keygen");
-        let p = payload();
+        let p = payload_for(&pk);
         let ctx = b"chain";
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
         sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
@@ -875,7 +962,7 @@ mod tests {
     #[test]
     fn an_invalid_classical_half_is_rejected_even_with_a_valid_stateless_half() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[4u8; 32], 1).expect("keygen");
-        let p = payload();
+        let p = payload_for(&pk);
         let ctx = b"chain";
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
         sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
@@ -889,7 +976,7 @@ mod tests {
     #[test]
     fn an_ordinary_classical_signature_cannot_be_spliced_in_as_the_rotation_co_signature() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[5u8; 32], 1).expect("keygen");
-        let p = payload();
+        let p = payload_for(&pk);
         let ctx = b"chain";
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
         sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
@@ -979,7 +1066,7 @@ mod tests {
     #[test]
     fn an_ordinary_label_signature_over_m_prime_rotation_fails_the_rotation_gate() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[9u8; 32], 1).expect("keygen");
-        let p = payload();
+        let p = payload_for(&pk);
         let ctx = b"chain";
 
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
@@ -1014,7 +1101,7 @@ mod tests {
     fn changing_rotation_kind_alone_invalidates_the_stateless_half() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[6u8; 32], 1).expect("keygen");
         let ctx = b"chain";
-        let mut original = payload();
+        let mut original = payload_for(&pk);
         original.kind = RotationKind::StatefulGraft;
 
         let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
@@ -1043,7 +1130,7 @@ mod tests {
     fn install_returns_the_next_stored_key_differing_from_current_in_both_halves() {
         let (sk, pk) = stateful_composite::keygen::<FakeH>(&[7u8; 32], 1).expect("keygen");
         let ctx = b"chain";
-        let mut p = payload();
+        let mut p = payload_for(&pk);
         p.kind = RotationKind::FullSwap;
         p.next_classical_pk = [0x42u8; 32];
         p.next_commitment = [0x99u8; 32];
@@ -1061,6 +1148,50 @@ mod tests {
         assert_ne!(
             next.next_commitment, p.current_commitment,
             "the commitment half must differ from the current stored key"
+        );
+    }
+
+    /// The commitment is what ties an authorization to one current key.
+    /// A payload naming a different key must be refused even when both
+    /// signatures over it are perfectly valid, because the signatures only
+    /// prove who authorized it, never which key it was authorized against.
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn verify_rotation_refuses_a_payload_naming_a_different_current_key() {
+        let (sk, pk) = stateful_composite::keygen::<FakeH>(&[15u8; 32], 1).expect("keygen");
+        let ctx = b"chain";
+        let p = payload_for(&pk);
+
+        let mut sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
+        sign_rotation::<FakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+            .expect("sign_rotation");
+
+        // Control: the honest payload verifies.
+        assert!(
+            verify_rotation::<FakeH>(&pk, ctx, &p, &sig).is_some(),
+            "the honest rotation must still verify"
+        );
+
+        // A payload whose current_commitment names some other key, re-signed
+        // so both halves are genuinely valid: the point is that valid
+        // signatures are not enough. A fresh store, because
+        // `FakePq::STATELESS_BUDGET` is 1 and the honest signature above
+        // already spent this key's whole budget.
+        let mut forged = p;
+        forged.current_commitment = [0x5au8; 32];
+        let mut forged_sig = alloc::vec![0u8; rotation_signature_len::<FakeH>()];
+        sign_rotation::<FakeH>(
+            &sk,
+            &mut MemoryStore::default(),
+            ctx,
+            &forged,
+            &mut forged_sig,
+        )
+        .expect("sign_rotation");
+
+        assert!(
+            verify_rotation::<FakeH>(&pk, ctx, &forged, &forged_sig).is_none(),
+            "a payload whose current_commitment is not this key's must be refused"
         );
     }
 

@@ -28,10 +28,24 @@ use std::sync::OnceLock;
 const CTX: &[u8] = b"pqhs-qy5.2-rotation";
 const MAX_SIGNATURES: u32 = 1;
 
-fn base_payload() -> RotationPayload {
+/// The 32-byte SHRINCS commitment `pk` carries: bytes 68..100 of its
+/// bundle, the same window the golden-vector tests read to build a stored
+/// public key. This is the value an owner installed and therefore the value
+/// a rotation authorization against `pk` must name.
+fn stored_commitment(pk: &PublicKey<H5>) -> [u8; 32] {
+    pk.pq_verify_key()[68..100]
+        .try_into()
+        .expect("a 32-byte window is 32 bytes")
+}
+
+/// `current_commitment` names the key the rotation is authorized against,
+/// so it is derived from `pk` rather than written as a literal:
+/// `verify_rotation` refuses any other value, and every negative test below
+/// would otherwise pass on that refusal instead of on its own property.
+fn base_payload(pk: &PublicKey<H5>) -> RotationPayload {
     RotationPayload {
         kind: RotationKind::FullSwap,
-        current_commitment: [0x11u8; 32],
+        current_commitment: stored_commitment(pk),
         next_commitment: [0x22u8; 32],
         next_classical_pk: [0x33u8; 32],
     }
@@ -98,7 +112,7 @@ fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         let (mut sk, pk) = keygen::<H5>(&[0x42u8; 32], MAX_SIGNATURES).expect("keygen");
-        let payload_a = base_payload();
+        let payload_a = base_payload(&pk);
 
         let mut honest_sig = vec![0u8; rotation::rotation_signature_len::<H5>()];
         rotation::sign_rotation::<H5>(
