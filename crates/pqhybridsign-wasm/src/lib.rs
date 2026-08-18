@@ -29,14 +29,15 @@
 //! semantics can be made to reject cloning outright, or from Rust
 //! directly.
 //!
-//! [`verify_with_stored_public_key`] is the one exception: it verifies
-//! H5/H6 signatures against public data alone and never receives, holds or
-//! returns a stateful secret key, so the structured-clone hazard above does
-//! not apply to it. Every other function that signs, keygens, or otherwise
-//! touches secret key material throws a JavaScript `Error` for `"H5"` or
-//! `"H6"`. [`stored_public_key_len`] is a plain length accessor over public
-//! data and is defined for all six suites, the same as its C and Python
-//! counterparts.
+//! [`verify_with_stored_public_key`] and [`stored_public_key_len`] are the
+//! two exceptions. Neither receives, holds or returns a stateful secret
+//! key, so the structured-clone hazard above does not apply to either.
+//! `verify_with_stored_public_key` checks an H5 or H6 signature against
+//! public data alone. `stored_public_key_len` is a plain length accessor
+//! over public data, defined for all six suites, the same as its C and
+//! Python counterparts. Every other export throws a JavaScript `Error` for
+//! `"H5"` or `"H6"` -- not only the ones that sign or hold key material,
+//! but the length accessors and `verify` as well.
 //!
 //! # Errors
 //!

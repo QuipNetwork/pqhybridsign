@@ -115,7 +115,7 @@ export function signatureLen(suite: string): number;
  * verify key itself is supplied per signature rather than stored. For H1
  * through H4 the stored and verify forms are the same bytes, so this
  * equals [`publicKeyLen`](public_key_len). Deliberately routed through
- * [`any_suite`] rather than [`stateful_suite`]: this is a pure length
+ * `any_suite` rather than `stateful_suite`: this is a pure length
  * accessor over public data, not a signing or verification call, so it has
  * no reason to throw for the four suites every other function in this
  * crate supports.
