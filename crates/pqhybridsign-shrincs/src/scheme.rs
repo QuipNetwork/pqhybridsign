@@ -230,6 +230,32 @@ impl PqStatefulScheme for ShrincsScheme {
         FIXED_STATEFUL_LEN + max_signatures as usize * 32
     }
 
+    /// Reads the bundle's own `maxSignatures` field: the leaf budget
+    /// [`Self::keygen_from_seed`] gave this key, and therefore the size of
+    /// the UXMSS tree it built. Read rather than recomputed from the profile
+    /// constants, because two keys under one profile can carry different
+    /// budgets.
+    ///
+    /// The returned bound is in the wire `LeafCount` space: one-based, so
+    /// `1..=max_signatures` is what the decoder accepts. It is the same
+    /// one-based space as upstream's `next_leaf_index`, not the zero-based
+    /// index a `LeafJournal` records. The UXMSS authentication path grows by
+    /// one node per leaf, so upstream derives the leaf index from the path
+    /// length rather than reading it off the wire (`hashsigs-rs`
+    /// `src/shrincs/uxmss.rs:91`), and applies this same bound to it.
+    ///
+    /// No conversion happens here: the bundle field is returned unchanged.
+    /// This library reconciles the one-based and zero-based conventions in
+    /// exactly one place, [`Self::next_leaf`], and this method deliberately
+    /// does not become a second one.
+    fn max_signatures_from_vk(verify_key: &[u8]) -> Result<u32> {
+        // `InvalidLength` is the only error this can return.
+        bundle::max_signatures(verify_key).map_err(|_| Error::BadLength {
+            expected: bundle::BUNDLE_LEN,
+            actual: verify_key.len(),
+        })
+    }
+
     fn sign_stateful(
         sk: &mut Self::SecretKey,
         vk: &[u8],

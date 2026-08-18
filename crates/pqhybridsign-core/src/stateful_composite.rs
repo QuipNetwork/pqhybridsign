@@ -763,16 +763,27 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
             return false;
         }
 
-        // The verify key does not carry `maxSignatures` generically (only
-        // the SHRINCS component knows where it lives inside `vk`), so the
-        // decode-time leaf-count bound comes from the leaf-dependent
-        // signature length arithmetic alone: any `LeafCount` whose implied
-        // length does not fit the remaining bytes is rejected regardless.
-        // `TrustedMaxSignatures` is set to `u32::MAX`, the widest bound any
-        // key can have; the component's own `verify_stateful` still
-        // enforces the real per-key bound when it recomputes state from
-        // `vk`.
-        let trusted_max = TrustedMaxSignatures::from_verified_bundle(u32::MAX);
+        // Step 2 of `encoding_path`'s decode order. The bound is read out of
+        // the verify key the *verifier* holds, which is the only
+        // `maxSignatures` in reach that the signature under test cannot
+        // choose. The component knows where the field lives inside `vk`; the
+        // generic layer only names which key to ask.
+        //
+        // `pk` is what a caller installed. When that caller built it with
+        // `PublicKey::from_stored_commitment_and_bundle`, the stored
+        // commitment binds every byte of the bundle, this field included.
+        // When they built it with `from_bytes`, the whole key is theirs to
+        // choose and the signature verifies against it either way, so
+        // reading the bound from it concedes nothing new.
+        //
+        // The value is the wire `LeafCount` bound: one-based, so `1..=max`
+        // is the accepted range.
+        let Ok(max_signatures) =
+            <S::Pq as PqStatefulScheme>::max_signatures_from_vk(pk.pq_verify_key())
+        else {
+            return false;
+        };
+        let trusted_max = TrustedMaxSignatures::from_verified_bundle(max_signatures);
         let Ok(decoded) =
             encoding_path::decode_path_selected(sig, trusted_max, &path_profile::<S>())
         else {
@@ -926,6 +937,22 @@ mod tests {
         }
         fn max_stateful_sig_len(max_signatures: u32) -> usize {
             max_signatures as usize * encoding_path::AUTH_PATH_NODE_LEN
+        }
+        fn max_signatures_from_vk(verify_key: &[u8]) -> Result<u32> {
+            if verify_key.len() != Self::VERIFY_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: Self::VERIFY_KEY_LEN,
+                    actual: verify_key.len(),
+                });
+            }
+            // The fake's leaf budget is a fixed 4 (see `leaf_capacity`), and
+            // its one-byte verify key carries no `maxSignatures` field to
+            // read it out of. A real bound, deliberately not `u32::MAX`: a
+            // fake that returned the widest value would reproduce the very
+            // defect this method removes, inside the test suite, and make
+            // `verify_rejects_a_leaf_count_beyond_the_key_declared_bound`
+            // vacuous.
+            Ok(4)
         }
         fn sign_stateful(
             sk: &mut Self::SecretKey,
@@ -1123,6 +1150,12 @@ mod tests {
         fn max_stateful_sig_len(max_signatures: u32) -> usize {
             Self::FIXED_STATEFUL_SIG_LEN
                 + max_signatures as usize * encoding_path::AUTH_PATH_NODE_LEN
+        }
+        fn max_signatures_from_vk(_verify_key: &[u8]) -> Result<u32> {
+            // A real bound, for the same reason `FakePq`'s is one: never
+            // `u32::MAX`. This fake's tests only reach the signing path, so
+            // the exact value does not matter beyond that.
+            Ok(4)
         }
         fn sign_stateful(
             sk: &mut Self::SecretKey,
@@ -1738,6 +1771,59 @@ mod tests {
         assert!(
             after > before,
             "verify_stateful must run even though the classical half already failed"
+        );
+    }
+
+    /// The decoder's range check must use the bound the verify key actually
+    /// declares. Passing `u32::MAX` makes step 4 a no-op and leaves
+    /// `TrustedMaxSignatures`' stated guarantee unbacked at its only real
+    /// call site.
+    ///
+    /// Every leaf value here is the wire `LeafCount`: one-based, and the same
+    /// space `max_signatures_from_vk` returns. The authentication path holds
+    /// one node per leaf, so the node count and the leaf index are the same
+    /// number. It is not the zero-based `LeafJournal` index, which is one
+    /// less.
+    ///
+    /// The in-bound control matters as much as the rejection: without it,
+    /// this test would still pass if the encoding were malformed for some
+    /// reason having nothing to do with the bound.
+    #[test]
+    fn verify_rejects_a_leaf_count_beyond_the_key_declared_bound() {
+        /// A well-formed stateful encoding declaring `leaf_count` path
+        /// nodes, with a classical half `FakeClassical::verify` accepts. Only
+        /// `LeafCount` varies between the two calls below.
+        fn signature_declaring(leaf_count: u32) -> Vec<u8> {
+            let classical = [3u8; encoding_path::CLASSICAL_SIG_LEN];
+            let path = alloc::vec![0u8; leaf_count as usize * encoding_path::AUTH_PATH_NODE_LEN];
+            encoding_path::encode_path_selected(
+                &PathSelectedSig {
+                    classical: &classical,
+                    body: PathBody::Stateful {
+                        leaf_count,
+                        signature: &path,
+                    },
+                },
+                &path_profile::<FakeH>(),
+            )
+            .expect("the encoder accepts any leaf count whose length fits")
+        }
+
+        let (_sk, pk) = keygen::<FakeH>(&[26u8; 32], 4).expect("keygen");
+        let bound = <FakePq as crate::PqStatefulScheme>::max_signatures_from_vk(pk.pq_verify_key())
+            .expect("the fake declares a bound");
+        assert!(
+            bound < u32::MAX,
+            "the fake must declare a real bound, otherwise this test proves nothing"
+        );
+
+        assert!(
+            FakeH::verify(&pk, b"ok", b"", &signature_declaring(bound)),
+            "a LeafCount at the key's declared bound must still be accepted"
+        );
+        assert!(
+            !FakeH::verify(&pk, b"ok", b"", &signature_declaring(bound + 1)),
+            "a LeafCount above the key's declared bound must be refused"
         );
     }
 
