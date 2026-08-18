@@ -1,7 +1,7 @@
 stages: [check, test]
 
 default:
-  image: rust:1.83
+  image: rust:1.89
   before_script:
     - rustup component add clippy rustfmt
     - rustup target add wasm32-unknown-unknown
@@ -154,6 +154,49 @@ smoke-128s-q18:
     - |
       cargo test -p pqhybridsign-shrincs --release --no-default-features \
         --features profile-128s-q18 --test smoke_128s -- --ignored
+
+# regenerate-fixtures is gated on a pipeline schedule. If no schedule
+# exists the job never runs, and the repository silently claims fixture
+# coverage for the signing paths that it does not have. This job makes
+# that state loud instead of invisible.
+#
+# CI_JOB_TOKEN cannot read the pipeline_schedules API: that endpoint is not
+# in the GitLab job-token allowlist, so a real schedule reads back the same
+# as a permission failure. Until a masked (and NOT protected — see the
+# report) project access token is added, this job cannot tell "no
+# schedule" apart from "no permission" and so cannot block the pipeline on
+# a false negative. It is allow_failure and its output must be read rather
+# than trusted to gate merges. No jq in the rust:1.89 image, so the
+# response is parsed with the python3 already present.
+schedule-exists:
+  stage: test
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: always
+  script:
+    - |
+      set -euo pipefail
+      tmp=$(mktemp)
+      code=$(curl -sS -o "$tmp" -w '%{http_code}' \
+        --header "PRIVATE-TOKEN: ${CI_JOB_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipeline_schedules")
+      if [ "${code}" != "200" ]; then
+        echo "pipeline_schedules API returned HTTP ${code}."
+        echo "CI_JOB_TOKEN cannot read this endpoint (expected until a"
+        echo "read_api project access token replaces it; see the report)."
+        exit 1
+      fi
+      count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$tmp")
+      if [ "${count}" = "0" ]; then
+        echo "No pipeline schedule is configured (HTTP 200, empty list)."
+        echo "regenerate-fixtures is gated on a schedule and therefore never runs."
+        echo "The stateless signing paths have no automated coverage."
+        echo "Create a schedule in Settings > CI/CD > Pipeline schedules."
+        exit 1
+      fi
+      echo "${count} pipeline schedule(s) configured."
 
 # Only detector of fixture staleness for the signing paths, and the only
 # place the 175-second stateless signing cost still runs. Regenerates every
