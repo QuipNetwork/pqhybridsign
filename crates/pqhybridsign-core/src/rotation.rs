@@ -635,6 +635,21 @@ mod tests {
         fn max_stateful_sig_len(_max_signatures: u32) -> usize {
             0
         }
+        fn max_signatures_from_vk(verify_key: &[u8]) -> Result<u32> {
+            if verify_key.len() != Self::VERIFY_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: Self::VERIFY_KEY_LEN,
+                    actual: verify_key.len(),
+                });
+            }
+            // This fake's one-byte verify key carries no `maxSignatures`
+            // field to read a bound out of, so the bound is its declared
+            // ceiling. Written as the constant rather than a literal so the
+            // two cannot drift apart. Deliberately not `u32::MAX`: a fake
+            // that returned the widest value would reproduce, inside the
+            // test suite, the very defect this method removes.
+            Ok(Self::LEAF_CAPACITY_LIMIT)
+        }
         fn sign_stateful(
             _sk: &mut Self::SecretKey,
             _vk: &[u8],
