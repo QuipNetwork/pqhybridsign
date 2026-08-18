@@ -5,7 +5,7 @@
 //! independent classical and post-quantum component seeds via HKDF, keeping
 //! the two components' key material from ever overlapping.
 
-use crate::{Error, Result};
+use crate::error::{Error, Result};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroize;

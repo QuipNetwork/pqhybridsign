@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Profile-dependent conformance checks that must run under every active
 //! `profile-*` feature.
 //!
@@ -11,7 +25,7 @@ mod fixture;
 
 use hashsigs_rs::shrincs::PROFILE_NAME;
 use pqhybridsign_core::stateful_composite::{PublicKey, SecretKey};
-use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
+use pqhybridsign_core::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_shrincs::{ShrincsScheme, H5, H6};
 use sha3::{Digest, Keccak256};
 

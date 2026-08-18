@@ -1,3 +1,17 @@
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 // Specification section 17.
 //
 // Present here, for both H1 and H3:
@@ -19,7 +33,7 @@
 // of the numbered tests.
 use pqhybridsign::{H1, H3};
 use pqhybridsign_core::composite::{keypair_from_seed, sign, sign_deterministic, verify};
-use pqhybridsign_core::Suite;
+use pqhybridsign_core::suite::Suite;
 use rand_core::OsRng;
 
 macro_rules! keys {

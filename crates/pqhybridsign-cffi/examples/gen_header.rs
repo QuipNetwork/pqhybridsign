@@ -11,6 +11,10 @@ fn main() {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out = crate_dir.join("include").join("pqhybridsign.h");
 
+    #[expect(
+        clippy::expect_used,
+        reason = "a developer-run generator, not library code; a cbindgen failure should abort loudly here"
+    )]
     cbindgen::Builder::new()
         .with_crate(&crate_dir)
         .with_config(cbindgen::Config::from_root_or_default(&crate_dir))

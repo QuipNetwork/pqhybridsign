@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Generator for the checked-in stateful golden vectors
 //! (`tests/vectors/h5.json`, `tests/vectors/h6.json`). Ignored by default:
 //! run explicitly and capture the output only when a format change is
@@ -16,7 +30,7 @@ use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign_core::stateful::{
     adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
 };
-use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
+use pqhybridsign_core::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_shrincs::{keygen, ShrincsScheme, H5, H6};
 use std::cell::RefCell;
 use std::rc::Rc;

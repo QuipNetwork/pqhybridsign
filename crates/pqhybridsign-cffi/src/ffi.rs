@@ -232,7 +232,7 @@ mod tests {
     /// behaviour.
     #[test]
     fn write_out_handles_a_pointer_that_is_not_aligned_for_its_type() {
-        let mut bytes = [0u8; std::mem::size_of::<usize>() * 2];
+        let mut bytes = [0u8; size_of::<usize>() * 2];
         // SAFETY: `bytes` is one allocation with room for a whole `usize`
         // starting at offset 1, and nothing else borrows it here.
         let unaligned = unsafe { bytes.as_mut_ptr().add(1) }.cast::<usize>();

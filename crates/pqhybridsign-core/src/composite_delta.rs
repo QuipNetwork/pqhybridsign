@@ -4,12 +4,12 @@
 //!
 //! [`crate::composite::sign`], [`crate::composite::sign_deterministic`] and
 //! [`crate::composite::verify`] assume a suite's wire signature is
-//! [`Suite::SIGNATURE_LEN`](crate::Suite::SIGNATURE_LEN) bytes split at the
-//! fixed offset [`Suite::SPLIT`](crate::Suite::SPLIT). Neither holds for
+//! [`Suite::SIGNATURE_LEN`](crate::suite::Suite::SIGNATURE_LEN) bytes split at the
+//! fixed offset [`Suite::SPLIT`](crate::suite::Suite::SPLIT). Neither holds for
 //! FN-DSA-512: its wire form carries a 1-byte length field between the
 //! classical and post-quantum halves (`crate::encoding_delta`), so this
 //! module -- parallel to `composite`, the way `stateful_composite` is
-//! parallel to it for [`StatefulSuite`](crate::StatefulSuite) -- supplies
+//! parallel to it for [`StatefulSuite`](crate::suite::StatefulSuite) -- supplies
 //! the delta-length-aware sign/verify/keygen triple over any `S:
 //! DeltaSuite`, without perturbing `composite` or the fixed-offset
 //! functions H1 and H3 already use.
@@ -26,7 +26,12 @@
 
 use crate::composite::{at_least, exact, with_m_prime};
 use crate::encoding_delta::{self, CLASSICAL_SIG_LEN, DELTA_LEN};
-use crate::{derive_component_seeds, ClassicalScheme, DeltaSuite, Error, PqScheme, Result};
+use crate::{
+    component::{ClassicalScheme, PqScheme},
+    derive::derive_component_seeds,
+    error::{Error, Result},
+    suite::DeltaSuite,
+};
 use subtle::Choice;
 use zeroize::Zeroize;
 
@@ -43,7 +48,7 @@ const MAX_PQ_SEED: usize = 64;
 /// Mirrors [`crate::composite::keypair_from_seed`], duplicated rather than
 /// shared because it is generic over [`DeltaSuite`] rather than [`Suite`].
 ///
-/// [`Suite`]: crate::Suite
+/// [`Suite`]: crate::suite::Suite
 pub fn keypair_from_seed<S: DeltaSuite>(
     master: &[u8; 32],
     sk_out: &mut [u8],
@@ -211,7 +216,6 @@ fn split_sk<S: DeltaSuite>(sk: &[u8]) -> Result<(&[u8], &[u8])> {
 // remove it. The alternative that does remove it -- returning the offsets
 // and re-slicing in the caller -- gives up the compiler's proof that the
 // three slots do not overlap, which is the one property worth having here.
-#[allow(clippy::type_complexity)]
 fn split_sig_out<S: DeltaSuite>(sig_out: &mut [u8]) -> Result<(&mut [u8], &mut [u8], &mut [u8])> {
     let pq_len = <S::Pq as PqScheme>::SIGNATURE_LEN;
     let needed = CLASSICAL_SIG_LEN + DELTA_LEN + pq_len;

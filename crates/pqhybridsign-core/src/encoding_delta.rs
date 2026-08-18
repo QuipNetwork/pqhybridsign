@@ -31,7 +31,7 @@
 //! says, so there is no allocation-based denial of service here the way
 //! [`encoding_path`](crate::encoding_path) guards against for `LeafCount`.
 
-use crate::{Error, Result};
+use crate::error::{Error, Result};
 
 /// Length of the classical signature that opens every delta-length
 /// encoding.
@@ -115,7 +115,7 @@ pub fn write_delta(out: &mut [u8], sig: &DeltaSig<'_>, min_len: usize) -> Result
 /// The same as [`write_delta`], except that the buffer is always large
 /// enough.
 #[cfg(feature = "alloc")]
-pub fn encode_delta(sig: &DeltaSig<'_>, min_len: usize) -> Result<alloc::vec::Vec<u8>> {
+pub fn encode_delta(sig: &DeltaSig<'_>, min_len: usize) -> Result<Vec<u8>> {
     let delta = encode_delta_byte(sig.pq.len(), min_len)?;
     let needed = delta_encoded_len(sig.pq.len());
     let mut out = alloc::vec![0u8; needed];

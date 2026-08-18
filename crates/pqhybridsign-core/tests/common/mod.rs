@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Stub component implementations shared across integration tests.
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "shared across integration tests; each test binary uses a subset"
+)]
+// These stubs exist only to be named from the test binary that includes
+// this module with `mod common;`; `pub` is required for that, not for use
+// outside this crate, but this module has no enclosing `pub mod` boundary
+// to make that visible to the `unreachable_pub` lint.
+#![cfg_attr(test, allow(unreachable_pub))]
 
-use pqhybridsign_core::{ClassicalScheme, PqScheme, Result};
+use pqhybridsign_core::{
+    component::{ClassicalScheme, PqScheme},
+    error::Result,
+};
 use sha2::{Digest, Sha256};
 use subtle::{Choice, ConstantTimeEq};
 

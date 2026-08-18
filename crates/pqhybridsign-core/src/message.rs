@@ -2,7 +2,7 @@
 //! `M'` framing, specification section 7: the domain-separated message every
 //! component signature is actually computed over.
 
-use crate::{Error, Result};
+use crate::error::{Error, Result};
 
 /// Hybrid construction version prefix, specification section 7.
 pub const PREFIX: u8 = 0x01;
@@ -47,7 +47,7 @@ pub fn write_m_prime(out: &mut [u8], label: &[u8], ctx: &[u8], msg: &[u8]) -> Re
 
 /// Allocating convenience wrapper around [`write_m_prime`].
 #[cfg(feature = "alloc")]
-pub fn m_prime(label: &[u8], ctx: &[u8], msg: &[u8]) -> Result<alloc::vec::Vec<u8>> {
+pub fn m_prime(label: &[u8], ctx: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
     let needed = m_prime_len(label, ctx, msg)?;
     let mut out = alloc::vec![0u8; needed];
     write_m_prime(&mut out, label, ctx, msg)?;

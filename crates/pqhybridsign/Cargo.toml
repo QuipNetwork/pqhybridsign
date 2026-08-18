@@ -24,8 +24,8 @@ sha2.workspace = true
 [dev-dependencies]
 hex.workspace = true
 rand_core = { workspace = true, features = ["getrandom"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 # Test-only. `ed25519-zebra` verifies under ZIP-215, so the strict RFC 8032
 # checks in tests/ed25519_strict.rs need curve arithmetic that
 # `ed25519-zebra` does not expose. The version range matches the one
@@ -45,3 +45,6 @@ curve25519-dalek = { version = "4.1", default-features = false, features = [
 [features]
 default = ["std"]
 std = ["pqhybridsign-core/std", "schnorrkel/std", "ed25519-zebra/std"]
+
+[lints]
+workspace = true

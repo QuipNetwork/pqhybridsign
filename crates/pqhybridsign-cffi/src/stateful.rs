@@ -1229,7 +1229,7 @@ mod tests {
         let seed = [24u8; 32];
         // SAFETY: as above.
         let rc = unsafe {
-            crate::keygen::pqhs_keygen_stateful_from_seed(
+            pqhs_keygen_stateful_from_seed(
                 5,
                 seed.as_ptr(),
                 32,
@@ -1271,11 +1271,11 @@ mod tests {
             );
             assert_eq!(
                 pqhs_key_identity(5, pk.as_ptr(), pk.len() - 1, out.as_mut_ptr(), out.len()),
-                crate::error::PQHS_ERR_BAD_LENGTH
+                PQHS_ERR_BAD_LENGTH
             );
             assert_eq!(
                 pqhs_key_identity(5, pk.as_ptr(), pk.len(), out.as_mut_ptr(), out.len() - 1),
-                crate::error::PQHS_ERR_BAD_LENGTH
+                PQHS_ERR_BAD_LENGTH
             );
             assert_eq!(
                 pqhs_key_identity(5, std::ptr::null(), pk.len(), out.as_mut_ptr(), out.len()),
@@ -1289,7 +1289,7 @@ mod tests {
                     out.as_mut_ptr(),
                     out.len()
                 ),
-                crate::error::PQHS_ERR_BAD_LENGTH
+                PQHS_ERR_BAD_LENGTH
             );
             assert_eq!(
                 pqhs_adopt_key(std::ptr::null(), identity.as_ptr(), identity.len()),
@@ -1323,7 +1323,7 @@ mod tests {
             );
             assert_eq!(
                 pqhs_adopt_key(&test_journal(), identity.as_ptr(), identity.len() - 1),
-                crate::error::PQHS_ERR_BAD_LENGTH
+                PQHS_ERR_BAD_LENGTH
             );
             assert_eq!(
                 pqhs_sign_stateful(
@@ -1408,7 +1408,7 @@ mod tests {
                 &mut n,
             )
         };
-        assert_eq!(rc, crate::error::PQHS_ERR_NULL_POINTER);
+        assert_eq!(rc, PQHS_ERR_NULL_POINTER);
 
         let half_journal = PqhsLeafJournal {
             next_leaf: None,
@@ -1432,7 +1432,7 @@ mod tests {
                 &mut n,
             )
         };
-        assert_eq!(rc, crate::error::PQHS_ERR_NULL_POINTER);
+        assert_eq!(rc, PQHS_ERR_NULL_POINTER);
     }
 
     /// The in-place idiom -- one buffer passed as both `sk` and `sk_out` --
@@ -1469,7 +1469,7 @@ mod tests {
                 &mut n,
             )
         };
-        assert_eq!(rc, crate::error::PQHS_ERR_ALIASED_BUFFERS);
+        assert_eq!(rc, PQHS_ERR_ALIASED_BUFFERS);
 
         // Partially overlapping ranges inside one allocation.
         let mut wide = vec![0u8; sk.len() * 2];
@@ -1492,7 +1492,7 @@ mod tests {
                 &mut n,
             )
         };
-        assert_eq!(rc, crate::error::PQHS_ERR_ALIASED_BUFFERS);
+        assert_eq!(rc, PQHS_ERR_ALIASED_BUFFERS);
 
         assert!(
             COMMITTED.with(|c| c.borrow().is_empty()),
@@ -1593,7 +1593,7 @@ mod tests {
                 &mut n,
             )
         };
-        assert_eq!(rc, crate::error::PQHS_ERR_BAD_LENGTH);
+        assert_eq!(rc, PQHS_ERR_BAD_LENGTH);
         assert!(
             COMMITTED.with(|c| c.borrow().is_empty()),
             "a wrong-length sk_out must be refused before any leaf is spent"

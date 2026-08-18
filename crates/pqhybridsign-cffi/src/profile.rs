@@ -29,6 +29,10 @@ pub extern "C" fn pqhs_profile_name() -> *const c_char {
     crate::ffi::guard_infallible(|| {
         PROFILE_NAME
             .get_or_init(|| {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "see the doc comment above: the profile name is a fixed ASCII literal cached on first call, so this cannot fail"
+                )]
                 CString::new(pqhybridsign_abi::profile_name())
                     .expect("the profile name is a fixed ASCII literal with no interior NUL")
             })

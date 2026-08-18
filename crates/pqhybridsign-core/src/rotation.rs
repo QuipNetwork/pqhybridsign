@@ -19,14 +19,21 @@
 //! separator. Either place alone is enough to reject a splice, so neither
 //! has to be trusted to hold if the other is restructured.
 
-use crate::{message, Error, Result, StatefulSuite};
+use crate::{
+    error::{Error, Result},
+    message,
+    suite::StatefulSuite,
+};
 
 // Only the AND-gated rotation verification uses the component traits, and
 // it needs an allocator.
 #[cfg(feature = "alloc")]
 use crate::budget::{sign_rotation_after_charge, StatelessBudgetStore};
 #[cfg(feature = "alloc")]
-use crate::{encoding_path, stateful_composite, ClassicalScheme, PqStatefulScheme};
+use crate::{
+    component::{ClassicalScheme, PqStatefulScheme},
+    encoding_path, stateful_composite,
+};
 
 /// Width of one commitment or public-key field inside [`RotationPayload`].
 const FIELD_LEN: usize = 32;
@@ -193,7 +200,7 @@ pub fn write_m_prime_rotation<S: StatefulSuite>(
 pub fn m_prime_rotation<S: StatefulSuite>(
     payload: &RotationPayload,
     ctx: &[u8],
-) -> Result<alloc::vec::Vec<u8>> {
+) -> Result<Vec<u8>> {
     let needed = m_prime_rotation_len::<S>(ctx)?;
     let mut out = alloc::vec![0u8; needed];
     write_m_prime_rotation::<S>(&mut out, payload, ctx)?;
@@ -547,7 +554,7 @@ mod tests {
         hasher.finalize().into()
     }
 
-    impl crate::ClassicalScheme for FakeClassical {
+    impl ClassicalScheme for FakeClassical {
         const NAME: &'static str = "stub";
         const PUBLIC_KEY_LEN: usize = 1;
         const SECRET_KEY_LEN: usize = 1;
@@ -632,7 +639,7 @@ mod tests {
 
     pub struct FakePq;
 
-    impl crate::PqStatefulScheme for FakePq {
+    impl PqStatefulScheme for FakePq {
         const NAME: &'static str = "fake";
         const SEED_LEN: usize = 1;
         // 32, matching `RotationPayload`'s fixed 32-byte commitment fields.
@@ -753,17 +760,17 @@ mod tests {
     }
 
     #[cfg(feature = "alloc")]
-    impl crate::stateful_composite::CommittedVerifyKey for FakePq {
+    impl stateful_composite::CommittedVerifyKey for FakePq {
         fn verify_committed_key(stored_public_key: &[u8], verify_key: &[u8]) -> Result<()> {
-            if stored_public_key.len() != <Self as crate::PqStatefulScheme>::PUBLIC_KEY_LEN {
+            if stored_public_key.len() != <Self as PqStatefulScheme>::PUBLIC_KEY_LEN {
                 return Err(Error::BadLength {
-                    expected: <Self as crate::PqStatefulScheme>::PUBLIC_KEY_LEN,
+                    expected: <Self as PqStatefulScheme>::PUBLIC_KEY_LEN,
                     actual: stored_public_key.len(),
                 });
             }
-            if verify_key.len() != <Self as crate::PqStatefulScheme>::VERIFY_KEY_LEN {
+            if verify_key.len() != <Self as PqStatefulScheme>::VERIFY_KEY_LEN {
                 return Err(Error::BadLength {
-                    expected: <Self as crate::PqStatefulScheme>::VERIFY_KEY_LEN,
+                    expected: <Self as PqStatefulScheme>::VERIFY_KEY_LEN,
                     actual: verify_key.len(),
                 });
             }

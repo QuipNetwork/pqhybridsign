@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![deny(missing_docs)]
+// This crate genuinely forbids `unsafe`; `forbid` is stricter than the
+// workspace `[lints.rust] unsafe-code = "deny"` and cannot be locally
+// relaxed, which a worker relied on in pqhs-0a3 to rule out a hand-rolled
+// `write_volatile`.
 #![forbid(unsafe_code)]
+// Test-only fixtures use `unwrap`/`expect` freely; test failure is the
+// desired outcome of a bad input.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 #![doc = "Type-erased, runtime-dispatched API over the pqhybridsign suites.
 
 Every suite this workspace ships -- H1, H2, H3, H4, H5, H6 -- is a
@@ -146,7 +152,7 @@ pub use pqhybridsign_shrincs::bundle::{verify_bundle, BundleError};
 /// wire.
 #[must_use]
 pub fn profile_name() -> &'static str {
-    <<pqhybridsign_shrincs::H5 as pqhybridsign_core::StatefulSuite>::Pq as pqhybridsign_core::PqStatefulScheme>::NAME
+    <<pqhybridsign_shrincs::H5 as pqhybridsign_core::suite::StatefulSuite>::Pq as pqhybridsign_core::component::PqStatefulScheme>::NAME
 }
 
 #[cfg(test)]

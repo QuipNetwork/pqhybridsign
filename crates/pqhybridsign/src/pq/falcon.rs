@@ -4,7 +4,10 @@ use fn_dsa::{
     KeyPairGenerator512, SigningKey, SigningKey512, VerifyingKey, VerifyingKey512, DOMAIN_NONE,
     FN_DSA_LOGN_512, HASH_ID_RAW,
 };
-use pqhybridsign_core::{Error, PqScheme, Result};
+use pqhybridsign_core::{
+    component::PqScheme,
+    error::{Error, Result},
+};
 use rand_core::{CryptoRng, RngCore};
 use sha2::{Digest, Sha512};
 use subtle::Choice;
@@ -210,7 +213,7 @@ impl Drop for SeededRng {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::PqScheme;
+    use pqhybridsign_core::component::PqScheme;
 
     fn keypair(
         seed: u8,

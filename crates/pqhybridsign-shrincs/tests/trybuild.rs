@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Compile-fail guarantees for the H5/H6 stateful secret key.
 //!
 //! Each case in `tests/compile_fail/` locks in one negative property that

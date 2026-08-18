@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![forbid(unsafe_code)]
-#![deny(missing_docs)]
+// Test-only fixtures use `unwrap` freely; test failure is the desired
+// outcome of a bad input.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 //! WebAssembly and npm binding over `pqhybridsign-abi`.
 //!
 //! # Only the stateless suites are exposed

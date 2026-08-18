@@ -9,6 +9,11 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# crates.io refuses a crate with a git dependency, and hashsigs-rs is
+# pinned to a GitLab revision. Recorded decision on pqhs-eig: this crate
+# is not a publication candidate until hashsigs-rs reaches crates.io.
+# Remove this line when it does.
+publish = false
 
 [lib]
 name = "pqhybridsign_cffi"
@@ -20,3 +25,28 @@ rand_core = { workspace = true, features = ["getrandom"] }
 
 [dev-dependencies]
 cbindgen = "0.29.4"
+
+# Cargo forbids combining `[lints] workspace = true` with any per-lint
+# override in the same manifest ("cannot override `workspace.lints` in
+# `lints`"), so this crate cannot use the `workspace = true` shortcut the
+# other crates use. It restates the workspace tables from the root
+# `Cargo.toml` here and overrides only `unsafe-code`: this crate is the
+# FFI boundary, every entry point takes raw pointers from a caller the
+# compiler cannot see, and the unsafe is confined to the pointer-to-slice
+# conversions at the boundary, each carrying a `// Safety:` comment naming
+# its invariant.
+[lints.rust]
+missing-docs           = "deny"
+unsafe-code            = "allow"
+unused-must-use        = "deny"
+unreachable-pub        = "warn"
+unused-qualifications  = "warn"
+
+[lints.clippy]
+unwrap-used      = "deny"
+panic            = "deny"
+todo             = "deny"
+unimplemented    = "deny"
+expect-used      = "deny"
+indexing-slicing = "allow"
+allow-attributes = "deny"
