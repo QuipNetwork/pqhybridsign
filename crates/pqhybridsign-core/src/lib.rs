@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// This crate genuinely forbids `unsafe`. `forbid` is stricter than the
+// workspace `[lints.rust] unsafe-code = "deny"` and, unlike `deny`,
+// cannot be relaxed by a downstream `#![allow(unsafe_code)]` -- which
+// `clippy::allow_attributes` would not flag, because it does not fire on
+// crate-scope inner attributes.
+#![forbid(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![doc = "Composite layer for hybrid post-quantum signature constructions.
 

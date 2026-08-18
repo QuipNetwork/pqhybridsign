@@ -42,8 +42,8 @@ use sha2::{Digest, Sha512};
 /// visibility; it does not change what gets asserted, since these warnings
 /// never gate test pass/fail either way.
 ///
-/// `#[allow(dead_code)]`: `#[path = "support/mod.rs"]` compiles a separate
-/// copy of this module into each test binary that includes it.
+/// `#[path = "support/mod.rs"]` compiles a separate copy of this module
+/// into each test binary that includes it.
 /// `tests/generate_vectors.rs` includes it for `strict`/`weak_classical_forgery`
 /// but never emits a warning itself, so its copy never calls this function;
 /// `tests/ed25519_strict.rs`'s copy does. `-D warnings` sees each copy in

@@ -49,7 +49,12 @@ those schemes again. Those components come from `ed25519-zebra` and
 `schnorrkel` through `pqhybridsign`. A license or dependency audit that
 reads only this table misses those crates.
 
-Every library crate sets `#![forbid(unsafe_code)]`. The core and lattice
+The workspace denies `unsafe_code` for every crate through
+`[workspace.lints.rust]`. The five pure-Rust crates also set
+`#![forbid(unsafe_code)]`, which no downstream attribute can relax. The two
+binding crates cannot: `pqhybridsign-cffi` is the raw-pointer boundary, and
+`pqhybridsign-py` links the `unsafe` that pyo3's macros generate. Each of the
+two carries a crate-root allow naming its reason. The core and lattice
 crates build for `wasm32-unknown-unknown` without an allocator. The SHRINCS
 crate needs `std`, because the reference signer needs `std` today.
 

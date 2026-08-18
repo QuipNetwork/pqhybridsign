@@ -50,7 +50,8 @@ reads only this table misses those crates.
 ```rust
 use pqhybridsign::H1;
 use pqhybridsign_core::composite::{keypair_from_seed, sign, verify};
-use pqhybridsign_core::{Error, Suite};
+use pqhybridsign_core::error::Error;
+use pqhybridsign_core::suite::Suite;
 
 fn demo() -> Result<(), Error> {
     let mut sk = [0u8; <H1 as Suite>::SECRET_KEY_LEN];

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// This crate genuinely forbids `unsafe`. `forbid` is stricter than the
+// workspace `[lints.rust] unsafe-code = "deny"` and, unlike `deny`,
+// cannot be relaxed by a downstream `#![allow(unsafe_code)]` -- which
+// `clippy::allow_attributes` would not flag, because it does not fire on
+// crate-scope inner attributes. The `# No panics` section below names
+// this attribute, so removing it silently falsifies published rustdoc.
+#![forbid(unsafe_code)]
 // Test-only fixtures use `unwrap` freely; test failure is the desired
 // outcome of a bad input.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]

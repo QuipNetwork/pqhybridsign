@@ -54,13 +54,17 @@ unwrap-used    = "deny"
 panic          = "deny"
 todo           = "deny"
 unimplemented  = "deny"
-# One violation, at pqhybridsign-cffi/src/profile.rs:37, carrying a
-# targeted allow with the justification that already exists in prose.
+# One violation, at pqhybridsign-cffi/src/profile.rs:32, carrying an
+# `#[expect]` -- not an allow -- so it fails the build if the lint ever
+# stops firing there. Its justification is in the doc comment above it.
 expect-used    = "deny"
-# 108 violations, every one a slice an upstream length check already
-# guards. Denying it would need 108 targeted allows, which trains a
-# reader to skip the annotation rather than read it. Recorded decision
-# 2026-08-17: leave it off and revisit only if a genuinely unguarded
-# slice ever appears.
+# 109 violations in the library targets, 444 counting tests, every one a
+# slice an upstream length check already guards. Denying it would need a
+# targeted suppression at each, which trains a reader to skip the
+# annotation rather than read it. Counts measured 2026-08-18 by setting
+# this lint to `warn` and reading the JSON diagnostics; state the scope
+# when you re-measure, because the two numbers differ fourfold. Recorded
+# decision: leave it off and revisit only if a genuinely unguarded slice
+# ever appears.
 indexing-slicing = "allow"
 allow-attributes = "deny"
