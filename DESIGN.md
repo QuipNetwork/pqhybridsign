@@ -41,7 +41,7 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` pinned by revision |
 | `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter | core, `pqhybridsign`, `pqhybridsign-shrincs` |
 | `pqhybridsign-cffi` | C ABI, with a checked-in header | abi |
-| `pqhybridsign-wasm` | WebAssembly and npm package, H1 through H4 only | abi |
+| `pqhybridsign-wasm` | WebAssembly and npm package. Signing is H1 through H4 only. H5 and H6 are verify-side only | abi |
 | `pqhybridsign-py` | Python wheel on the `abi3-py39` stable ABI | abi |
 
 H5 and H6 reuse the lattice crate classical components. They do not write
@@ -909,10 +909,20 @@ The pinned `hashsigs-rs` revision later raised that floor to 1.89.
 Cycle 5: the language bindings, all on `pqhybridsign-abi`. The C ABI with a
 checked-in header, the WebAssembly and npm package, and the Python wheel.
 
-The WebAssembly binding exposes H1 through H4 only. A JavaScript object
+The WebAssembly binding signs under H1 through H4 only. A JavaScript object
 holding a stateful secret key can be structured-cloned, and a clone forks the
-leaf counter. H5 and H6 reach JavaScript by no path at all. The C ABI and the
-Python binding carry them instead.
+leaf counter. No H5 or H6 key generation or signing operation reaches
+JavaScript. Verification does. `storedPublicKeyLen` reports the on-storage
+public key size for any suite, and `verifyWithStoredPublicKey` checks an H5 or
+H6 signature against that stored form. Neither function touches a secret key.
+To sign under H5 or H6, use the C ABI or the Python binding.
+
+`verify_with_stored_public_key` closes a real gap in the C ABI and the Python
+binding. `pqhs_verify` and `phs.verify` take an H5 or H6 verify key with no
+commitment to check it against, so the caller must establish that key's
+provenance itself. The WebAssembly binding never had that gap, because its
+`verify` already refused H5 and H6. There the function adds a capability
+rather than closing a gap.
 
 Rotation and the policy machine stay out of the binding surface for the first
 release candidate. Both need registry state that lives in the integrator's

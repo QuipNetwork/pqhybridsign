@@ -232,9 +232,11 @@ delivers.
 - **The H2/H4 length field is wider than it needs to be.** `fn-dsa` 0.4.0
   emits a fixed 666-byte signature, so the one-byte `FalconLen` delta always
   carries the same value. The field stays because the format specifies it.
-- **The WebAssembly binding exposes H1 through H4 only.** A JavaScript object
-  holding a stateful secret key can be structured-cloned, which forks the leaf
-  counter. Use the C ABI or the Python binding for H5 and H6.
+- **The WebAssembly binding signs under H1 through H4 only.** A JavaScript
+  object holding a stateful secret key can be structured-cloned, which forks
+  the leaf counter. H5 and H6 verification is available through
+  `verifyWithStoredPublicKey`. To sign under H5 or H6, use the C ABI or the
+  Python binding.
 - **The Python binding accepts `bytes` and `bytearray`, not arbitrary buffer
   objects.** The `abi3-py39` stable ABI cannot reach the buffer-protocol C API
   below CPython 3.11.
