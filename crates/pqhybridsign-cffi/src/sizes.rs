@@ -91,12 +91,17 @@ pub unsafe extern "C" fn pqhs_signature_len(suite: u8, out: *mut usize) -> c_int
     })
 }
 
-/// Write the stored public key length for `suite`, in bytes, into `*out`.
+/// Write the stored public key length for `suite`, in bytes, into `*out`:
+/// the form a verifier keeps, which is what
+/// [`pqhs_verify_with_stored_public_key`](crate::pqhs_verify_with_stored_public_key)
+/// takes as `stored_public_key`.
 ///
-/// H5 and H6 only: the small on-storage form (`ClassicalPK || commitment`)
-/// a verifier installs and hands to
-/// [`pqhs_verify_with_stored_public_key`](crate::pqhs_verify_with_stored_public_key),
-/// not the verify-form length [`pqhs_public_key_len`] reports.
+/// Total over `1..=6`. For H5 and H6 this is the classical public key and a
+/// 32-byte commitment to the post-quantum verify key, smaller than
+/// [`pqhs_public_key_len`] reports for the same suite because the verify
+/// key itself is supplied per signature rather than stored. For H1 through
+/// H4 the stored and verify forms are the same bytes, so this equals
+/// [`pqhs_public_key_len`].
 ///
 /// # Errors
 ///
