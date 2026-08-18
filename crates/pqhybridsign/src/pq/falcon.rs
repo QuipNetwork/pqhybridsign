@@ -70,7 +70,7 @@ impl PqScheme for Falcon512 {
         result
     }
 
-    /// See [`nonce_seed`] for the seed construction: the same length-prefixed
+    /// See `nonce_seed` for the seed construction: the same length-prefixed
     /// layout `Sr25519` uses, with a domain constant distinct to this
     /// component.
     fn sign_deterministic(sk: &[u8], msg: &[u8], nonce: &[u8], sig_out: &mut [u8]) -> Result<()> {
