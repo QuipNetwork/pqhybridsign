@@ -11,6 +11,14 @@ use zeroize::Zeroize;
 #[derive(Clone, Copy, Debug)]
 pub struct Sr25519;
 
+/// Domain separator for the deterministic nonce seed. Distinct from the
+/// FN-DSA one so a seed derived for one component can never be mistaken
+/// for the other's. Trailing NUL follows the suite-label convention
+/// (`hybrid-<classical>-<pq>-v1\0`), not `KeyIdentity::derive`'s domain,
+/// which omits it; harmless either way since a fixed-length domain is
+/// always followed by an explicit 8-byte length.
+const NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/sr25519/v1\0";
+
 /// Holds a schnorrkel key so that its wipe happens on drop.
 ///
 /// schnorrkel 0.11.5 implements `Drop` only for `Keypair` (`src/keys.rs`);
@@ -33,7 +41,7 @@ impl<T: Zeroize> Drop for Wiped<T> {
     }
 }
 
-/// A deterministic RNG seeded from `H(sk || nonce || msg)`.
+/// A deterministic RNG seeded from [`nonce_seed`].
 ///
 /// schnorrkel draws its Schnorr nonce from this RNG. Seeding it from the
 /// secret key keeps the nonce secret, which specification section 14
@@ -141,17 +149,7 @@ impl ClassicalScheme for Sr25519 {
         sig_out: &mut [u8],
     ) -> Result<()> {
         check_len(sk, Self::SECRET_KEY_LEN)?;
-        // k = H(sk || nonce || msg). The secret key always takes part.
-        let mut hasher = Sha512::new();
-        hasher.update(sk);
-        hasher.update(nonce);
-        hasher.update(msg);
-        let mut digest = hasher.finalize();
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&digest[..32]);
-        // The digest is secret: its first half is the nonce seed and it is
-        // derived from the secret key.
-        digest.zeroize();
+        let mut seed = nonce_seed(sk, nonce, msg);
         let result = sign_with_rng(sk, msg, label, &mut SeededRng::new(seed), sig_out);
         seed.zeroize();
         result
@@ -180,6 +178,35 @@ fn check_len(buf: &[u8], want: usize) -> Result<()> {
     }
 }
 
+/// The deterministic nonce seed:
+/// `SHA-512(NONCE_SEED_DOMAIN || u64_be(len(sk)) || sk || u64_be(len(nonce))
+/// || nonce || u64_be(len(msg)) || msg)`, truncated to 32 bytes.
+///
+/// Each variable-length field is length-prefixed so that no pair of
+/// (nonce, msg) values can be re-cut into another pair with the same
+/// concatenation; the same discipline `KeyIdentity::derive` and `M'`
+/// already use. Lengths are `u64` big-endian, not `usize`: `usize` is
+/// 4 bytes on a 32-bit target and 8 on a 64-bit one, and a nonce seed
+/// that depended on the pointer width of the machine that computed it
+/// would not survive being written down.
+fn nonce_seed(sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha512::new();
+    hasher.update(NONCE_SEED_DOMAIN);
+    hasher.update((sk.len() as u64).to_be_bytes());
+    hasher.update(sk);
+    hasher.update((nonce.len() as u64).to_be_bytes());
+    hasher.update(nonce);
+    hasher.update((msg.len() as u64).to_be_bytes());
+    hasher.update(msg);
+    let mut digest = hasher.finalize();
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&digest[..32]);
+    // The digest is secret: its first half is the nonce seed and it is
+    // derived from the secret key.
+    digest.zeroize();
+    seed
+}
+
 fn sign_with_rng(
     sk: &[u8],
     msg: &[u8],
@@ -196,7 +223,7 @@ fn sign_with_rng(
     // supplied RNG is attached via `schnorrkel::context::attach_rng`, which
     // wraps the transcript so `witness_bytes_rng` draws from it instead of
     // the OS RNG (`getrandom_or_panic`). The nonce derived here is seeded
-    // from `H(sk || nonce || msg)`, so it never depends on public data alone.
+    // from `nonce_seed`, so it never depends on public data alone.
     let sig = secret.0.sign(attach_rng(ctx.bytes(msg), rng), &public);
     sig_out.copy_from_slice(&sig.to_bytes());
     Ok(())
@@ -246,5 +273,54 @@ mod tests {
     #[test]
     fn derivation_is_deterministic() {
         assert_eq!(keypair(4), keypair(4));
+    }
+
+    /// `(nonce, msg)` pairs that concatenate to the same bytes must not
+    /// derive the same nonce seed. Without a length prefix
+    /// ("ab", "c") and ("a", "bc") both hash sk || "abc".
+    #[test]
+    fn split_ambiguous_nonce_and_message_produce_different_signatures() {
+        let sk = [7u8; Sr25519::SECRET_KEY_LEN];
+        let mut left = [0u8; Sr25519::SIGNATURE_LEN];
+        let mut right = [0u8; Sr25519::SIGNATURE_LEN];
+
+        Sr25519::sign_deterministic(&sk, b"c", b"ab", H3, &mut left).expect("sign left");
+        Sr25519::sign_deterministic(&sk, b"bc", b"a", H3, &mut right).expect("sign right");
+
+        assert_ne!(
+            left.as_slice(),
+            right.as_slice(),
+            "a re-cut of the same concatenation must not reach the same nonce seed"
+        );
+    }
+
+    /// The defect this construction fixes is only observable in the seed:
+    /// both signature paths bind the message independently, so a signature
+    /// comparison cannot see it. Without the length prefixes, ("ab", "c")
+    /// and ("a", "bc") both hash sk || "abc" and reach one seed.
+    #[test]
+    fn a_re_cut_of_the_same_concatenation_gives_a_different_nonce_seed() {
+        let sk = [7u8; Sr25519::SECRET_KEY_LEN];
+        assert_ne!(
+            nonce_seed(&sk, b"ab", b"c"),
+            nonce_seed(&sk, b"a", b"bc"),
+            "the length prefixes must separate the nonce from the message"
+        );
+    }
+
+    /// Known answers computed independently of this code. They pin the
+    /// domain string, the field order and the 8-byte big-endian widths, so
+    /// a 32-bit target that silently used `usize` would fail here too.
+    #[test]
+    fn the_nonce_seed_layout_is_pinned() {
+        let sk = [7u8; Sr25519::SECRET_KEY_LEN];
+        assert_eq!(
+            hex::encode(nonce_seed(&sk, b"ab", b"c")),
+            "f22b809490ccc6639029676bbd806543ce6cf4d429aa2116aacf584c5de2fa93"
+        );
+        assert_eq!(
+            hex::encode(nonce_seed(&sk, b"a", b"bc")),
+            "01d700df27aa70c24c7837b74eceeed5eae156b6c26a1444ff6ecc0b969ac999"
+        );
     }
 }
