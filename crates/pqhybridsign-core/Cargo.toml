@@ -20,6 +20,10 @@ rand_core.workspace = true
 [dev-dependencies]
 subtle.workspace = true
 rand_core.workspace = true
+# Named as a requirement by DESIGN.md: property tests over encode and
+# decode round trips, and over negative decoding. Dev-only, so it reaches
+# no published artifact.
+proptest = "1.11.0"
 
 [features]
 default = ["std", "alloc"]
