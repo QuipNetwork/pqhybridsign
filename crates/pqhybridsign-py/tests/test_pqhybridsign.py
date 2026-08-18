@@ -212,6 +212,94 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
         sk.sign_stateless(b"message", b"context")
 
 
+# Offset of the 32-byte commitment inside a SHRINCS bundle
+# (statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot),
+# mirroring the private BUNDLE_COMMITMENT_OFFSET constant at
+# crates/pqhybridsign-shrincs/src/scheme.rs:45 and
+# pqhybridsign_abi::stateful_suites::tests::COMMITMENT_AT. This is
+# spec-fixed layout shared by every SHRINCS instance (H5 and H6 alike), not
+# a per-profile detail.
+#
+# No binding exposes an accessor that derives the small stored form from a
+# verify-form public key -- see the task-4 report for why -- so this test
+# reconstructs it the same way the ABI crate's own unit test does. A real
+# deployment installs the stored form once, at provisioning time, from
+# whatever produced the key; it does not slice it out of the verify form
+# the way this helper does for test setup.
+_COMMITMENT_AT = 68
+
+
+def _stored_form(suite, verify_public_key):
+    """The small form a verifier installs: the classical public key and
+    the commitment, lifted out of a verify-form public key its own keygen
+    produced."""
+    classical_len = phs.stored_public_key_len(suite) - 32
+    commitment_at = classical_len + _COMMITMENT_AT
+    return verify_public_key[:classical_len] + verify_public_key[commitment_at : commitment_at + 32]
+
+
+def _bundle(suite, verify_public_key):
+    """The signer-supplied half: everything after the classical public
+    key."""
+    classical_len = phs.stored_public_key_len(suite) - 32
+    return verify_public_key[classical_len:]
+
+
+@pytest.mark.parametrize("suite", STATEFUL_SUITES)
+def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
+    """The stored form binds a bundle to the key the verifier installed.
+
+    An attacker's own freshly generated key verifies its own signatures
+    perfectly well through the unchecked whole-key path (`phs.verify`).
+    This entry point is what ties the key on the wire to the key on the
+    account.
+    """
+    seed = bytes(range(32))
+    journal, budget = MemoryJournal(), MemoryBudget()
+    sk, pk = phs.keygen_stateful_from_seed(suite, seed, 4, journal, budget)
+    sig = sk.sign_stateless(b"message", b"ctx")
+    stored = _stored_form(suite, pk)
+    assert len(stored) == phs.stored_public_key_len(suite)
+
+    # Whole-key verification accepts the honest signature: the key and the
+    # signature agree with each other, and nothing else is consulted.
+    assert phs.verify(suite, pk, b"message", b"ctx", sig)
+
+    assert phs.verify_with_stored_public_key(
+        suite, stored, _bundle(suite, pk), b"message", b"ctx", sig
+    )
+
+    # The path selector this entry point sees differs by which of the two
+    # SHRINCS paths signed: 0x02 (stateless) above, 0x01 (stateful, one
+    # leaf spent) here. The commitment check does not branch on it, but
+    # nothing else in this test suite exercises the stateful selector
+    # through verify_with_stored_public_key.
+    stateful_sig = sk.sign_stateful(b"stateful message", b"ctx")
+    assert phs.verify_with_stored_public_key(
+        suite, stored, _bundle(suite, pk), b"stateful message", b"ctx", stateful_sig
+    )
+
+    other_journal, other_budget = MemoryJournal(), MemoryBudget()
+    _, attacker_pk = phs.keygen_stateful_from_seed(
+        suite, bytes(range(1, 33)), 4, other_journal, other_budget
+    )
+    assert phs.verify(suite, attacker_pk, b"message", b"ctx", sig) is False
+
+    # Against the victim's installed commitment, the attacker's own bundle
+    # is refused even though it is a perfectly well-formed key of its own.
+    assert not phs.verify_with_stored_public_key(
+        suite, stored, _bundle(suite, attacker_pk), b"message", b"ctx", sig
+    )
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_verify_with_stored_public_key_rejects_stateless_suites(suite):
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.verify_with_stored_public_key(
+            suite, b"\x00" * 64, b"\x00" * 164, b"m", b"", b"\x00"
+        )
+
+
 def test_sign_stateless_cannot_be_reached_without_a_budget_store():
     """The store is bound at construction and is required there, so there
     is no way to reach the stateless path with the bound unenforced."""

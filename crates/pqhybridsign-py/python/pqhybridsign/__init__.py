@@ -25,7 +25,6 @@ from pqhybridsign._pqhybridsign import (
     OutputBufferTooSmallError,
     PqHybridSignError,
     SigningFailedError,
-    SoftJunctionRejectedError,
     StatefulKeyNotCloneableError,
     StatefulSecretKey,
     StatelessBudgetExhaustedError,
@@ -41,7 +40,9 @@ from pqhybridsign._pqhybridsign import (
     profile_name,
     sign,
     sign_deterministic,
+    stored_public_key_len,
     verify,
+    verify_with_stored_public_key,
 )
 
 __all__ = [
@@ -62,7 +63,6 @@ __all__ = [
     "OutputBufferTooSmallError",
     "PqHybridSignError",
     "SigningFailedError",
-    "SoftJunctionRejectedError",
     "StatefulKeyNotCloneableError",
     "StatefulSecretKey",
     "StatelessBudgetExhaustedError",
@@ -78,5 +78,7 @@ __all__ = [
     "profile_name",
     "sign",
     "sign_deterministic",
+    "stored_public_key_len",
     "verify",
+    "verify_with_stored_public_key",
 ]

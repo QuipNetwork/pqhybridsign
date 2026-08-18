@@ -91,6 +91,40 @@ pub unsafe extern "C" fn pqhs_signature_len(suite: u8, out: *mut usize) -> c_int
     })
 }
 
+/// Write the stored public key length for `suite`, in bytes, into `*out`:
+/// the form a verifier keeps, which is what
+/// [`pqhs_verify_with_stored_public_key`](crate::pqhs_verify_with_stored_public_key)
+/// takes as `stored_public_key`.
+///
+/// Total over `1..=6`. For H5 and H6 this is the classical public key and a
+/// 32-byte commitment to the post-quantum verify key, smaller than
+/// [`pqhs_public_key_len`] reports for the same suite because the verify
+/// key itself is supplied per signature rather than stored. For H1 through
+/// H4 the stored and verify forms are the same bytes, so this equals
+/// [`pqhs_public_key_len`].
+///
+/// # Errors
+///
+/// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+/// `PQHS_ERR_NULL_POINTER` if `out` is null.
+///
+/// # Safety
+///
+/// `out`, if non-null, must be a valid, writable `usize` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stored_public_key_len(suite: u8, out: *mut usize) -> c_int {
+    guard(move || {
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        match unsafe { write_out(out, pqhybridsign_abi::stored_public_key_len(suite)) } {
+            Ok(()) => PQHS_OK,
+            Err(e) => e,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +156,19 @@ mod tests {
                 pqhs_public_key_len(1, std::ptr::null_mut()),
                 crate::error::PQHS_ERR_NULL_POINTER
             );
+        }
+    }
+
+    #[test]
+    fn stored_public_key_len_is_smaller_than_the_verify_form_for_stateful_suites() {
+        for code in [5u8, 6u8] {
+            let mut stored = 0usize;
+            let mut verify = 0usize;
+            unsafe {
+                assert_eq!(pqhs_stored_public_key_len(code, &mut stored), PQHS_OK);
+                assert_eq!(pqhs_public_key_len(code, &mut verify), PQHS_OK);
+            }
+            assert!(stored > 0 && stored < verify, "suite {code}");
         }
     }
 }

@@ -700,6 +700,76 @@ fn load_stateful_secret_key(
     })
 }
 
+/// The stored public key length for `suite`, in bytes: the form a verifier
+/// keeps, which is what `verify_with_stored_public_key` takes as
+/// `stored_public_key`.
+///
+/// For H5 and H6 this is the classical public key and a 32-byte commitment
+/// to the post-quantum verify key, smaller than the verify-form length
+/// `keygen_stateful_from_seed`'s public key uses, because the verify key
+/// itself is supplied per signature rather than stored. For H1 through H4
+/// the stored and verify forms are the same bytes, so this equals the
+/// public key length for `suite`; there is no error case for any suite.
+#[pyfunction]
+fn stored_public_key_len(suite: PySuite) -> usize {
+    pqhybridsign_abi::stored_public_key_len(suite.into())
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
+/// signer-supplied verify key that must be the one `stored_public_key`
+/// commits to.
+///
+/// This is the entry point the H5/H6 deployment is built for: the verifier
+/// stores the small form (`ClassicalPK || commitment`,
+/// `stored_public_key_len(suite)` bytes -- 64 for both suites) and the
+/// signer supplies the full 164-byte commitment bundle alongside every
+/// signature, because the bundle is too large to keep on an account.
+///
+/// `stored_public_key` is trusted and `pq_verify_key` is not. The
+/// commitment is recomputed from `pq_verify_key` and matched against the
+/// stored one before anything is verified, and the classical public key is
+/// taken from `stored_public_key`, so nothing the signer supplied can
+/// substitute a key of their own.
+///
+/// `verify` is the other shape: it takes one whole verify-form public key
+/// and checks no commitment, because it has nothing to check one against.
+/// Use it only where the verify key itself came from a trusted place.
+///
+/// Returns `False`, never raises, for a commitment that does not match, a
+/// malformed key or a malformed signature -- the same design `verify`
+/// uses, so a caller cannot learn which check rejected.
+///
+/// # Errors
+///
+/// `WrongEntryPointForSuiteError` for H1 through H4: their public key is a
+/// single form with no commitment in it, so there is nothing for this
+/// entry point to bind; use `verify`.
+#[pyfunction]
+fn verify_with_stored_public_key(
+    py: Python<'_>,
+    suite: PySuite,
+    stored_public_key: &Bound<'_, PyAny>,
+    pq_verify_key: &Bound<'_, PyAny>,
+    msg: &Bound<'_, PyAny>,
+    ctx: &Bound<'_, PyAny>,
+    sig: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let stored_public_key = extract_bytes(py, stored_public_key)?;
+    let pq_verify_key = extract_bytes(py, pq_verify_key)?;
+    let msg = extract_bytes(py, msg)?;
+    let ctx = extract_bytes(py, ctx)?;
+    let sig = extract_bytes(py, sig)?;
+    pqhybridsign_abi::verify_with_stored_public_key(
+        suite.into(),
+        &stored_public_key,
+        &pq_verify_key,
+        &msg,
+        &ctx,
+        &sig,
+    )
+    .map_err(to_py_err)
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<StatefulSecretKey>()?;
     m.add_function(wrap_pyfunction!(keygen_stateful_from_seed, m)?)?;
@@ -707,5 +777,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(key_identity, m)?)?;
     m.add_function(wrap_pyfunction!(key_identity_from_secret_key, m)?)?;
     m.add_function(wrap_pyfunction!(adopt_key, m)?)?;
+    m.add_function(wrap_pyfunction!(stored_public_key_len, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_with_stored_public_key, m)?)?;
     Ok(())
 }

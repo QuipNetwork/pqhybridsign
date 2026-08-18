@@ -23,12 +23,20 @@
 //!
 //! Rather than ship a stateful signing call whose safety depends on every
 //! caller manually promising not to do any of that, this binding exposes
-//! **only H1, H2, H3 and H4**. Passing `"H5"` or `"H6"` to any function
-//! here throws a JavaScript `Error` explaining the omission. An
-//! integrator who needs the stateful suites should drive them from the
-//! C ABI or Python binding, where the secret key type's language-native
-//! copy semantics can be made to reject cloning outright, or from Rust
+//! **no stateful signing entry point**. An integrator who needs the
+//! stateful suites' signing path should drive them from the C ABI or
+//! Python binding, where the secret key type's language-native copy
+//! semantics can be made to reject cloning outright, or from Rust
 //! directly.
+//!
+//! [`verify_with_stored_public_key`] is the one exception: it verifies
+//! H5/H6 signatures against public data alone and never receives, holds or
+//! returns a stateful secret key, so the structured-clone hazard above does
+//! not apply to it. Every other function that signs, keygens, or otherwise
+//! touches secret key material throws a JavaScript `Error` for `"H5"` or
+//! `"H6"`. [`stored_public_key_len`] is a plain length accessor over public
+//! data and is defined for all six suites, the same as its C and Python
+//! counterparts.
 //!
 //! # Errors
 //!
@@ -98,6 +106,58 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
         )),
         other => Err(format!(
             "unknown suite \"{other}\"; expected one of H1, H2, H3, H4"
+        )),
+    }
+}
+
+/// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`],
+/// restricted to the two stateful suites [`verify_with_stored_public_key`]
+/// and [`stored_public_key_len`] serve.
+///
+/// Deliberately separate from [`stateless_suite`]: that function's H5/H6
+/// refusal is about the structured-clone hazard a stateful *secret key*
+/// carries, which these two functions never touch (see the crate
+/// documentation).
+///
+/// # Errors
+///
+/// An error listing the valid names for anything other than `"H5"` or
+/// `"H6"`, including H1 through H4.
+fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
+    match name {
+        "H5" => Ok(pqhybridsign_abi::Suite::H5),
+        "H6" => Ok(pqhybridsign_abi::Suite::H6),
+        other => Err(format!(
+            "unknown or unsupported suite \"{other}\"; expected \"H5\" or \"H6\""
+        )),
+    }
+}
+
+/// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], accepting
+/// all six suites this crate knows.
+///
+/// The only parser of the three that is total over every suite name this
+/// crate recognises. [`stored_public_key_len`] is the one export that needs
+/// it: it is a pure length accessor over public data, defined for every
+/// suite (`pqhybridsign_abi::stored_public_key_len` is total), so it must
+/// not throw for the four suites this binding's other functions actually
+/// sign and verify with. Compare [`stateless_suite`], which excludes H5/H6
+/// for a reason specific to *signing*, and [`stateful_suite`], which exists
+/// only because [`verify_with_stored_public_key`] is specific to H5/H6.
+///
+/// # Errors
+///
+/// An error naming the six valid suites, for anything else unrecognised.
+fn any_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
+    match name {
+        "H1" => Ok(pqhybridsign_abi::Suite::H1),
+        "H2" => Ok(pqhybridsign_abi::Suite::H2),
+        "H3" => Ok(pqhybridsign_abi::Suite::H3),
+        "H4" => Ok(pqhybridsign_abi::Suite::H4),
+        "H5" => Ok(pqhybridsign_abi::Suite::H5),
+        "H6" => Ok(pqhybridsign_abi::Suite::H6),
+        other => Err(format!(
+            "unknown suite \"{other}\"; expected one of H1, H2, H3, H4, H5, H6"
         )),
     }
 }
@@ -274,6 +334,81 @@ pub fn verify(
     Ok(pqhybridsign_abi::verify(suite, public_key, msg, ctx, sig))
 }
 
+/// Stored public key length, in bytes, for `suite`: the form a verifier
+/// keeps, which is what [`verify_with_stored_public_key`] takes as
+/// `stored_public_key`.
+///
+/// Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
+/// the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
+/// for H5 and H6 this is the classical public key and a 32-byte commitment
+/// to the post-quantum verify key, smaller than
+/// [`publicKeyLen`](public_key_len) reports for the same suite because the
+/// verify key itself is supplied per signature rather than stored. For H1
+/// through H4 the stored and verify forms are the same bytes, so this
+/// equals [`publicKeyLen`](public_key_len). Deliberately routed through
+/// `any_suite` rather than `stateful_suite`: this is a pure length
+/// accessor over public data, not a signing or verification call, so it has
+/// no reason to throw for the four suites every other function in this
+/// crate supports.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+#[wasm_bindgen(js_name = storedPublicKeyLen)]
+pub fn stored_public_key_len(suite: &str) -> Result<u32, JsValue> {
+    Ok(pqhybridsign_abi::stored_public_key_len(any_suite(suite).map_err(js_error)?) as u32)
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+/// `"H6"`), against a signer-supplied verify key that must be the one
+/// `stored_public_key` commits to.
+///
+/// This is the entry point the H5/H6 deployment is built for: the
+/// verifier stores the small form (`ClassicalPK || commitment`,
+/// [`storedPublicKeyLen`](stored_public_key_len) bytes -- 64 for both
+/// suites) and the signer supplies the full 164-byte commitment bundle
+/// alongside every signature, because the bundle is too large to keep on
+/// an account.
+///
+/// `stored_public_key` is trusted and `pq_verify_key` is not. The
+/// commitment is recomputed from `pq_verify_key` and matched against the
+/// stored one before anything is verified, and the classical public key is
+/// taken from `stored_public_key`, so nothing the signer supplied can
+/// substitute a key of their own.
+///
+/// [`verify`] is the other shape: it takes one whole verify-form public
+/// key and checks no commitment, because it has nothing to check one
+/// against. Use it only where the verify key itself came from a trusted
+/// place.
+///
+/// Returns `false`, never throws, for a commitment that does not match, a
+/// malformed key or a malformed signature -- the same design [`verify`]
+/// uses, so a caller cannot learn which check rejected.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+#[wasm_bindgen(js_name = verifyWithStoredPublicKey)]
+pub fn verify_with_stored_public_key(
+    suite: &str,
+    stored_public_key: &[u8],
+    pq_verify_key: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, JsValue> {
+    let suite = stateful_suite(suite).map_err(js_error)?;
+    pqhybridsign_abi::verify_with_stored_public_key(
+        suite,
+        stored_public_key,
+        pq_verify_key,
+        msg,
+        ctx,
+        sig,
+    )
+    .map_err(js_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +427,37 @@ mod tests {
         assert!(stateless_suite("H6").is_err());
         assert!(stateless_suite("H7").is_err());
         assert!(stateless_suite("").is_err());
+    }
+
+    #[test]
+    fn stateful_suite_accepts_h5_and_h6() {
+        assert_eq!(stateful_suite("H5").unwrap(), pqhybridsign_abi::Suite::H5);
+        assert_eq!(stateful_suite("H6").unwrap(), pqhybridsign_abi::Suite::H6);
+    }
+
+    #[test]
+    fn stateful_suite_rejects_h1_through_h4_and_unknown_names() {
+        assert!(stateful_suite("H1").is_err());
+        assert!(stateful_suite("H2").is_err());
+        assert!(stateful_suite("H3").is_err());
+        assert!(stateful_suite("H4").is_err());
+        assert!(stateful_suite("H7").is_err());
+        assert!(stateful_suite("").is_err());
+    }
+
+    #[test]
+    fn any_suite_accepts_all_six() {
+        assert_eq!(any_suite("H1").unwrap(), pqhybridsign_abi::Suite::H1);
+        assert_eq!(any_suite("H2").unwrap(), pqhybridsign_abi::Suite::H2);
+        assert_eq!(any_suite("H3").unwrap(), pqhybridsign_abi::Suite::H3);
+        assert_eq!(any_suite("H4").unwrap(), pqhybridsign_abi::Suite::H4);
+        assert_eq!(any_suite("H5").unwrap(), pqhybridsign_abi::Suite::H5);
+        assert_eq!(any_suite("H6").unwrap(), pqhybridsign_abi::Suite::H6);
+    }
+
+    #[test]
+    fn any_suite_rejects_unknown_names() {
+        assert!(any_suite("H7").is_err());
+        assert!(any_suite("").is_err());
     }
 }

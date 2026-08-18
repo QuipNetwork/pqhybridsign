@@ -15,9 +15,6 @@ class ContextTooLongError(PqHybridSignError):
 class OutputBufferTooSmallError(PqHybridSignError):
     """An internal output buffer was too small for this signature."""
 
-class SoftJunctionRejectedError(PqHybridSignError):
-    """A soft derivation junction was supplied."""
-
 class BadPathSelectorError(PqHybridSignError):
     """A path-selected signature (H5/H6) carried an unknown selector."""
 
@@ -313,3 +310,42 @@ def profile_name() -> str:
     `"shrincs-256s"`. A key, signature or verify key produced by a build
     against one profile is not interchangeable with one from a build
     against another."""
+
+def stored_public_key_len(suite: Suite) -> int:
+    """The stored public key length for `suite`, in bytes: the form a
+    verifier keeps, which is what `verify_with_stored_public_key` takes as
+    `stored_public_key`.
+
+    For H5 and H6 this is the classical public key and a 32-byte commitment
+    to the post-quantum verify key, smaller than the verify-form length
+    `keygen_stateful_from_seed`'s public key uses, because the verify key
+    itself is supplied per signature rather than stored. For H1 through H4
+    the stored and verify forms are the same bytes, so this equals the
+    public key length for `suite`; there is no error case for any suite."""
+
+def verify_with_stored_public_key(
+    suite: Suite,
+    stored_public_key: ReadableBuffer,
+    pq_verify_key: ReadableBuffer,
+    msg: ReadableBuffer,
+    ctx: ReadableBuffer,
+    sig: ReadableBuffer,
+) -> bool:
+    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (H5 or
+    H6), against a signer-supplied verify key that must be the one
+    `stored_public_key` commits to.
+
+    `stored_public_key` is trusted (`stored_public_key_len(suite)` bytes,
+    the small on-storage form a verifier installs); `pq_verify_key` is not
+    (the larger commitment bundle the signer supplies alongside every
+    signature). The commitment is recomputed from `pq_verify_key` and
+    matched against the stored one before anything is verified, and the
+    classical public key is taken from `stored_public_key`, so nothing the
+    signer supplied can substitute a key of their own.
+
+    `verify` is the other shape: it takes one whole verify-form public key
+    and checks no commitment. Use it only where the verify key itself came
+    from a trusted place.
+
+    Returns `False`, never raises, for a commitment that does not match, a
+    malformed key or a malformed signature."""

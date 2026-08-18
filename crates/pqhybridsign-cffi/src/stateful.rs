@@ -497,6 +497,15 @@ fn write_identity(
 /// Copy `sk` into `sk_out`'s buffer afterwards if that is the shape the
 /// integration wants.
 ///
+/// # Performance
+///
+/// This function calls `SecretKey::import`, which re-derives the hypertree
+/// root. At `profile-128s-q18` and `profile-128s-q20` that is the same walk
+/// as keygen: about 47 seconds, paid on every call. The in-process Rust API
+/// keeps a `SecretKey` in memory and signs in under 0.01 seconds. A caller
+/// on a 128s profile that signs more than occasionally wants the Rust API
+/// or an opaque key handle, not this entry point.
+///
 /// # Errors
 ///
 /// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: use
@@ -722,6 +731,116 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
         let mut ffi_budget = FfiBudget(budget_ref);
         match pqhybridsign_abi::sign_stateless(suite, sk, &mut ffi_budget, msg, ctx, sig_out) {
             Ok(n) => match unsafe { write_out(sig_written, n) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
+/// signer-supplied verify key that must be the one `stored_public_key`
+/// commits to.
+///
+/// This is the entry point for the deployment H5 and H6 are built for: the
+/// verifier stores the small form (`ClassicalPK || commitment`,
+/// [`pqhs_stored_public_key_len`](crate::pqhs_stored_public_key_len) bytes
+/// -- 64 for both suites) and the signer supplies the full 164-byte
+/// commitment bundle alongside every signature, because the bundle is too
+/// large to keep on an account. `stored_public_key` is trusted;
+/// `pq_verify_key` is not: the commitment is recomputed from
+/// `pq_verify_key` and matched against the stored one before anything is
+/// verified, and the classical public key is taken from `stored_public_key`,
+/// so nothing the signer supplied can substitute a key of their own.
+///
+/// [`pqhs_verify`](crate::pqhs_verify) is the other shape: it takes one
+/// whole verify-form public key and checks no commitment, because it has
+/// nothing to check one against. Use it only where the verify key itself
+/// came from a trusted place.
+///
+/// Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
+/// cases: a commitment that does not match, a malformed key or a malformed
+/// signature all fail to verify rather than error, on the same grounds as
+/// [`pqhs_verify`](crate::pqhs_verify). `*valid_out` is set to `false`
+/// before anything else happens, so it is `false` on every path that
+/// returns a code other than `PQHS_OK` too.
+///
+/// # Errors
+///
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: their public key is a
+/// single form with no commitment in it, so there is nothing for this
+/// entry point to bind; use [`pqhs_verify`](crate::pqhs_verify).
+/// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+/// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+/// null, or if `valid_out` is null.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for reads for
+/// exactly its paired length in bytes (a write, for `valid_out`), and must
+/// not be aliased by another live pointer for the duration of this call. A
+/// null pointer is only valid when its paired length is `0`; `valid_out`
+/// has no paired length and must be a valid, non-null, writable `bool`
+/// pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_verify_with_stored_public_key(
+    suite: u8,
+    stored_public_key: *const u8,
+    stored_public_key_len: usize,
+    pq_verify_key: *const u8,
+    pq_verify_key_len: usize,
+    msg: *const u8,
+    msg_len: usize,
+    ctx: *const u8,
+    ctx_len: usize,
+    sig: *const u8,
+    sig_len: usize,
+    valid_out: *mut bool,
+) -> c_int {
+    guard(move || {
+        // See `pqhs_verify` for why `valid_out` is checked and set to
+        // `false` ahead of every other check, including the suite code.
+        if valid_out.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if let Err(e) = unsafe { write_out(valid_out, false) } {
+            return e;
+        }
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let stored_public_key =
+            match unsafe { borrow_slice(stored_public_key, stored_public_key_len) } {
+                Ok(s) => s,
+                Err(e) => return e,
+            };
+        let pq_verify_key = match unsafe { borrow_slice(pq_verify_key, pq_verify_key_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let msg = match unsafe { borrow_slice(msg, msg_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let ctx = match unsafe { borrow_slice(ctx, ctx_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sig = match unsafe { borrow_slice(sig, sig_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        match pqhybridsign_abi::verify_with_stored_public_key(
+            suite,
+            stored_public_key,
+            pq_verify_key,
+            msg,
+            ctx,
+            sig,
+        ) {
+            Ok(valid) => match unsafe { write_out(valid_out, valid) } {
                 Ok(()) => PQHS_OK,
                 Err(e) => e,
             },
@@ -2060,5 +2179,252 @@ mod tests {
             SPENT.with(|spent| spent.borrow().first().map(|(_, count)| *count)),
             Some(1)
         );
+    }
+
+    /// Offset of the 32-byte commitment inside a SHRINCS bundle
+    /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`),
+    /// mirroring `pqhybridsign_abi::stateful_suites::tests::COMMITMENT_AT`.
+    const COMMITMENT_AT: usize = 68;
+
+    /// The small form a verifier installs: the classical public key and the
+    /// commitment, lifted out of a verify-form public key its own keygen
+    /// produced. Test-only: nothing in this crate's public surface derives
+    /// the stored form from a verify-form key today.
+    fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
+        let classical_len =
+            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
+        let mut stored = verify_public_key[..classical_len].to_vec();
+        stored.extend_from_slice(&verify_public_key[classical_len + COMMITMENT_AT..][..32]);
+        stored
+    }
+
+    /// The signer-supplied half: everything after the classical public key.
+    fn bundle_of(verify_public_key: &[u8]) -> &[u8] {
+        let classical_len =
+            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
+        &verify_public_key[classical_len..]
+    }
+
+    /// A bundle an attacker generated verifies their own signature perfectly
+    /// well through `pqhs_verify`, which has no stored key to compare it
+    /// against. Binding the two is what `pqhs_verify_with_stored_public_key`
+    /// adds, across the C boundary.
+    #[test]
+    fn verify_with_stored_public_key_refuses_a_bundle_the_stored_key_does_not_name() {
+        let (victim_sk, victim_pk) = h5_keypair(31);
+        let (attacker_sk, attacker_pk) = h5_keypair(32);
+        let victim_stored = stored_form(&victim_pk);
+
+        let msg = b"transfer everything";
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+        let budget = test_budget();
+        // SAFETY: every pointer below is either null with a zero length or
+        // points at a live, correctly sized local buffer for the duration
+        // of the call.
+        let rc = unsafe {
+            pqhs_sign_stateless(
+                5,
+                attacker_sk.as_ptr(),
+                attacker_sk.len(),
+                &budget,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let forged = &sig[..n];
+
+        // Whole-key verification accepts it.
+        let mut valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            crate::sign::pqhs_verify(
+                5,
+                attacker_pk.as_ptr(),
+                attacker_pk.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                forged.as_ptr(),
+                forged.len(),
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(valid);
+
+        // Against the victim's installed commitment it is refused.
+        let attacker_bundle = bundle_of(&attacker_pk);
+        let mut valid = true;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                attacker_bundle.as_ptr(),
+                attacker_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                forged.as_ptr(),
+                forged.len(),
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(!valid);
+
+        // The victim's own signature and bundle pass, proving the refusal
+        // above is the commitment check and not this entry point failing to
+        // verify anything at all.
+        let mut honest = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateless(
+                5,
+                victim_sk.as_ptr(),
+                victim_sk.len(),
+                &budget,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                honest.as_mut_ptr(),
+                honest.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let victim_bundle = bundle_of(&victim_pk);
+        let mut valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                victim_bundle.as_ptr(),
+                victim_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                honest.as_ptr(),
+                n,
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(valid);
+
+        // Every case above signed through the stateless path (`PathSelector`
+        // 0x02). `verify_with_stored_public_key` does not branch on the
+        // selector, but nothing else here exercises the stateful path
+        // (0x01, one leaf spent) through it.
+        provision_journal(5, &victim_pk);
+        let journal = test_journal();
+        let mut stateful_sig =
+            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sk_out = victim_sk.clone();
+        let mut n = 0usize;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_sign_stateful(
+                5,
+                victim_sk.as_ptr(),
+                victim_sk.len(),
+                &journal,
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                sk_out.as_mut_ptr(),
+                sk_out.len(),
+                stateful_sig.as_mut_ptr(),
+                stateful_sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let mut stateful_valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                victim_bundle.as_ptr(),
+                victim_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                stateful_sig.as_ptr(),
+                n,
+                &mut stateful_valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(stateful_valid);
+    }
+
+    #[test]
+    fn verify_with_stored_public_key_rejects_h1_through_h4_and_writes_false_on_every_path() {
+        let stored = [0u8; 64];
+        let bundle = [0u8; 164];
+        for code in [1u8, 2, 3, 4] {
+            let mut valid = true;
+            // SAFETY: every pointer below is a live local buffer of the
+            // length passed alongside it.
+            let rc = unsafe {
+                pqhs_verify_with_stored_public_key(
+                    code,
+                    stored.as_ptr(),
+                    stored.len(),
+                    bundle.as_ptr(),
+                    bundle.len(),
+                    b"m".as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    b"s".as_ptr(),
+                    1,
+                    &mut valid,
+                )
+            };
+            assert_eq!(rc, crate::error::PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
+            assert!(!valid, "suite {code}");
+        }
+
+        // A null `valid_out` is refused outright; every other pointer null
+        // with a zero length is read as an empty buffer.
+        // SAFETY: `valid_out` is the null pointer under test.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key(
+                5,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, PQHS_ERR_NULL_POINTER);
     }
 }

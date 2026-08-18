@@ -24,11 +24,15 @@ pub const PQHS_ERR_CONTEXT_TOO_LONG: c_int = 2;
 /// A caller-supplied output buffer was too small. Mirrors
 /// `AbiError::OutputBufferTooSmall`.
 pub const PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL: c_int = 3;
-/// A soft derivation junction was supplied. Mirrors
-/// `AbiError::SoftJunctionRejected`.
-pub const PQHS_ERR_SOFT_JUNCTION_REJECTED: c_int = 4;
 /// A path-selected signature (H5/H6) carried an unknown selector. Mirrors
 /// `AbiError::BadPathSelector`.
+///
+/// Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: junction
+/// derivation has no entry point in this crate, so no library code could
+/// ever return it. The number is left unassigned rather than reused by the
+/// next code added, so a caller already compiled against an older header
+/// that still branches on `4` keeps reading it as unknown rather than
+/// colliding with a future code's meaning.
 pub const PQHS_ERR_BAD_PATH_SELECTOR: c_int = 5;
 /// A stateful signature's declared leaf count was out of range. Mirrors
 /// `AbiError::LeafCountOutOfRange`.
@@ -136,7 +140,6 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
         PQHS_ERR_BAD_LENGTH => c"a byte string had the wrong length",
         PQHS_ERR_CONTEXT_TOO_LONG => c"the application context exceeded 255 bytes",
         PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL => c"the output buffer was too small",
-        PQHS_ERR_SOFT_JUNCTION_REJECTED => c"soft derivation junctions are rejected",
         PQHS_ERR_BAD_PATH_SELECTOR => c"the signature carried an unknown path selector",
         PQHS_ERR_LEAF_COUNT_OUT_OF_RANGE => c"the declared leaf count was out of range",
         PQHS_ERR_TRAILING_BYTES => c"the signature carried trailing bytes",
@@ -189,10 +192,6 @@ mod tests {
             (
                 AbiError::OutputBufferTooSmall,
                 PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL,
-            ),
-            (
-                AbiError::SoftJunctionRejected,
-                PQHS_ERR_SOFT_JUNCTION_REJECTED,
             ),
             (AbiError::BadPathSelector, PQHS_ERR_BAD_PATH_SELECTOR),
             (

@@ -47,15 +47,17 @@ pub use error::{
     PQHS_ERR_GRIND_ABORT, PQHS_ERR_INVALID_SUITE, PQHS_ERR_JOURNAL_FAILED,
     PQHS_ERR_JOURNAL_KEY_MISMATCH, PQHS_ERR_LEAF_COUNT_OUT_OF_RANGE, PQHS_ERR_LEAVES_EXHAUSTED,
     PQHS_ERR_NULL_POINTER, PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL, PQHS_ERR_PANIC,
-    PQHS_ERR_SIGNING_FAILED, PQHS_ERR_SOFT_JUNCTION_REJECTED, PQHS_ERR_STATELESS_BUDGET_EXHAUSTED,
-    PQHS_ERR_TRAILING_BYTES, PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, PQHS_OK,
+    PQHS_ERR_SIGNING_FAILED, PQHS_ERR_STATELESS_BUDGET_EXHAUSTED, PQHS_ERR_TRAILING_BYTES,
+    PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, PQHS_OK,
 };
 pub use keygen::{pqhs_keygen_from_seed, pqhs_keygen_stateful_from_seed};
 pub use profile::pqhs_profile_name;
 pub use sign::{pqhs_sign, pqhs_sign_deterministic, pqhs_verify};
-pub use sizes::{pqhs_public_key_len, pqhs_secret_key_len, pqhs_signature_len};
+pub use sizes::{
+    pqhs_public_key_len, pqhs_secret_key_len, pqhs_signature_len, pqhs_stored_public_key_len,
+};
 pub use stateful::{
     pqhs_adopt_key, pqhs_key_identity, pqhs_key_identity_from_secret_key, pqhs_sign_stateful,
-    pqhs_sign_stateless, PqhsLeafJournal, PqhsStatelessBudget, PQHS_BUDGET_KEY_LEN,
-    PQHS_KEY_IDENTITY_LEN,
+    pqhs_sign_stateless, pqhs_verify_with_stored_public_key, PqhsLeafJournal, PqhsStatelessBudget,
+    PQHS_BUDGET_KEY_LEN, PQHS_KEY_IDENTITY_LEN,
 };

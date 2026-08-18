@@ -103,6 +103,30 @@ export function signDeterministic(suite: string, secret_key: Uint8Array, msg: Ui
 export function signatureLen(suite: string): number;
 
 /**
+ * Stored public key length, in bytes, for `suite`: the form a verifier
+ * keeps, which is what [`verify_with_stored_public_key`] takes as
+ * `stored_public_key`.
+ *
+ * Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
+ * the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
+ * for H5 and H6 this is the classical public key and a 32-byte commitment
+ * to the post-quantum verify key, smaller than
+ * [`publicKeyLen`](public_key_len) reports for the same suite because the
+ * verify key itself is supplied per signature rather than stored. For H1
+ * through H4 the stored and verify forms are the same bytes, so this
+ * equals [`publicKeyLen`](public_key_len). Deliberately routed through
+ * [`any_suite`] rather than [`stateful_suite`]: this is a pure length
+ * accessor over public data, not a signing or verification call, so it has
+ * no reason to throw for the four suites every other function in this
+ * crate supports.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ */
+export function storedPublicKeyLen(suite: string): number;
+
+/**
  * Verify `sig` over `msg` under `ctx` for `suite`, against `public_key`.
  *
  * Returns `false`, never throws, for a malformed `public_key` or `sig`;
@@ -115,3 +139,36 @@ export function signatureLen(suite: string): number;
  * suites.
  */
 export function verify(suite: string, public_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+ * `"H6"`), against a signer-supplied verify key that must be the one
+ * `stored_public_key` commits to.
+ *
+ * This is the entry point the H5/H6 deployment is built for: the
+ * verifier stores the small form (`ClassicalPK || commitment`,
+ * [`storedPublicKeyLen`](stored_public_key_len) bytes -- 64 for both
+ * suites) and the signer supplies the full 164-byte commitment bundle
+ * alongside every signature, because the bundle is too large to keep on
+ * an account.
+ *
+ * `stored_public_key` is trusted and `pq_verify_key` is not. The
+ * commitment is recomputed from `pq_verify_key` and matched against the
+ * stored one before anything is verified, and the classical public key is
+ * taken from `stored_public_key`, so nothing the signer supplied can
+ * substitute a key of their own.
+ *
+ * [`verify`] is the other shape: it takes one whole verify-form public
+ * key and checks no commitment, because it has nothing to check one
+ * against. Use it only where the verify key itself came from a trusted
+ * place.
+ *
+ * Returns `false`, never throws, for a commitment that does not match, a
+ * malformed key or a malformed signature -- the same design [`verify`]
+ * uses, so a caller cannot learn which check rejected.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+ */
+export function verifyWithStoredPublicKey(suite: string, stored_public_key: Uint8Array, pq_verify_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
