@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Strict RFC 8032 ed25519 verification tests, checked independently of
 //! `ed25519-zebra`.
 //!
@@ -43,7 +57,7 @@ mod support;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use pqhybridsign::classical::Ed25519;
 use pqhybridsign::H1;
-use pqhybridsign_core::{composite, ClassicalScheme, Suite};
+use pqhybridsign_core::{component::ClassicalScheme, composite, suite::Suite};
 use support::{strict, warn, weak_classical_forgery};
 
 const LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
@@ -109,7 +123,7 @@ mod own_outputs {
     #[test]
     fn golden_vector_ed25519_halves_are_strict_valid() {
         use pqhybridsign::H2;
-        use pqhybridsign_core::{message, DeltaSuite};
+        use pqhybridsign_core::{message, suite::DeltaSuite};
 
         #[derive(serde::Deserialize)]
         struct Vector {

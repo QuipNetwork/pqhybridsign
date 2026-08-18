@@ -416,7 +416,7 @@ pub trait StatefulHybridSignatureScheme {
     /// # `budget` is required, and that is the point
     ///
     /// The stateless path has a hard security bound of its own
-    /// ([`crate::PqStatefulScheme::STATELESS_BUDGET`], specification section
+    /// ([`crate::component::PqStatefulScheme::STATELESS_BUDGET`], specification section
     /// 21), shared with rotation and recovery, and exceeding it degrades the
     /// underlying few-time scheme's security assumption. It is therefore not
     /// a bound a caller may opt into: this method cannot be called without a

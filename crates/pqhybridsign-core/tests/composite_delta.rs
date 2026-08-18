@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! `composite_delta`: sign/verify over a `DeltaSuite`, with stubs whose
 //! post-quantum signature length differs from the classical component's, so
 //! a test that happened to line the two up would not catch a swapped
@@ -7,7 +21,7 @@ mod common;
 
 use common::{HashClassical, HashClassicalSr, HashPqDelta};
 use pqhybridsign_core::composite_delta::{keypair_from_seed, sign, sign_deterministic, verify};
-use pqhybridsign_core::{hybrid_delta_suite, DeltaSuite, Error};
+use pqhybridsign_core::{error::Error, hybrid_delta_suite, suite::DeltaSuite};
 
 /// `HashPqDelta::SIGNATURE_LEN` is 96; `min_pq_sig_len` sits well below it
 /// so the wire `DeltaLen` byte is not pinned at either edge of its range.
@@ -81,7 +95,7 @@ fn the_wire_layout_carries_a_real_delta_field() {
     let written = sign_deterministic::<DeltaH2Test>(&sk, b"m", b"", b"n", &mut sig).expect("sign");
     sig.truncate(written);
 
-    let pq_len = <HashPqDelta as pqhybridsign_core::PqScheme>::SIGNATURE_LEN;
+    let pq_len = <HashPqDelta as pqhybridsign_core::component::PqScheme>::SIGNATURE_LEN;
     assert_eq!(sig.len(), 64 + 1 + pq_len);
     assert_eq!(sig[64], (pq_len - MIN_PQ_SIG_LEN) as u8, "DeltaLen byte");
 }

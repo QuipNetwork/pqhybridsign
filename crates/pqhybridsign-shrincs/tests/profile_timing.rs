@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Times the three costly SHRINCS operations under the active profile.
 //!
 //! `#[ignore]`d: this is a measurement, not an assertion, and under the
@@ -15,10 +29,10 @@
 //! at all, yet accounted for 3259 s under `profile-128s-q18` against 0.39 s
 //! under `profile-256s`. Per-operation numbers settle it.
 use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
+use pqhybridsign_core::component::PqStatefulScheme;
 use pqhybridsign_core::stateful::{
     adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
 };
-use pqhybridsign_core::PqStatefulScheme;
 use pqhybridsign_shrincs::{keygen, ShrincsScheme, H5};
 use std::time::Instant;
 

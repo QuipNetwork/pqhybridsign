@@ -203,7 +203,10 @@ enum Arming {
 /// and this type must stay usable without the `alloc` feature; the brief
 /// requires `LeafBitmap` to be a fixed array precisely so it is not one. The
 /// size cost is paid once per epoch's machine, not per leaf accepted.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "see the comment above: boxing LeafBitmap would need alloc, which this type must work without"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PolicyState {
     MonotonicIndex(Freeze),

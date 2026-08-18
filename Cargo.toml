@@ -32,6 +32,39 @@ fips204 = { version = "0.4.6", default-features = false, features = ["ml-dsa-44"
 fn-dsa = { version = "0.4.0", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hashsigs-rs = { git = "https://gitlab.com/quip.network/hashsigs-rs.git", rev = "833de08d618b7e42b7991f7c684571133c3d88ab", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[workspace.lints.rust]
+missing-docs           = "deny"
+unsafe-code            = "deny"
+unused-must-use        = "deny"
+unreachable-pub        = "warn"
+unused-qualifications  = "warn"
+
+[workspace.lints.clippy]
+# Panic prevention. A panic unwinding across `extern "C"` is undefined
+# behaviour, and the C ABI's catch_unwind is the only thing standing in
+# for these lints today. All four cost nothing: the workspace has zero
+# violations of each as of 2026-08-17.
+unwrap-used    = "deny"
+panic          = "deny"
+todo           = "deny"
+unimplemented  = "deny"
+# One violation, at pqhybridsign-cffi/src/profile.rs:32, carrying an
+# `#[expect]` -- not an allow -- so it fails the build if the lint ever
+# stops firing there. Its justification is in the doc comment above it.
+expect-used    = "deny"
+# 109 violations in the library targets, 444 counting tests, every one a
+# slice an upstream length check already guards. Denying it would need a
+# targeted suppression at each, which trains a reader to skip the
+# annotation rather than read it. Counts measured 2026-08-18 by setting
+# this lint to `warn` and reading the JSON diagnostics; state the scope
+# when you re-measure, because the two numbers differ fourfold. Recorded
+# decision: leave it off and revisit only if a genuinely unguarded slice
+# ever appears.
+indexing-slicing = "allow"
+allow-attributes = "deny"

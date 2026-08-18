@@ -33,8 +33,11 @@ use crate::stateful::{
     sign_after_commit, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme, StatefulSignError,
 };
 use crate::{
-    derive_component_seeds, m_prime, ClassicalScheme, Error, PqStatefulScheme, Result,
-    StatefulSuite,
+    component::{ClassicalScheme, PqStatefulScheme},
+    derive::derive_component_seeds,
+    error::{Error, Result},
+    message::m_prime,
+    suite::StatefulSuite,
 };
 
 /// The verify-key-sized composite public key: `ClassicalPK ||
@@ -859,7 +862,7 @@ mod tests {
         leaf: Option<u32>,
     }
 
-    impl zeroize::Zeroize for FakeSecretKey {
+    impl Zeroize for FakeSecretKey {
         fn zeroize(&mut self) {
             COMPONENT_WIPES.fetch_add(1, Ordering::SeqCst);
             if let Some(leaf) = self.leaf.as_mut() {
@@ -871,7 +874,7 @@ mod tests {
 
     pub struct FakePq;
 
-    impl crate::PqStatefulScheme for FakePq {
+    impl PqStatefulScheme for FakePq {
         const NAME: &'static str = "fake";
         const SEED_LEN: usize = 1;
         const PUBLIC_KEY_LEN: usize = 1;
@@ -1018,7 +1021,7 @@ mod tests {
         match verify_key {
             [byte] => Ok(byte.wrapping_add(1)),
             _ => Err(Error::BadLength {
-                expected: <FakePq as crate::PqStatefulScheme>::VERIFY_KEY_LEN,
+                expected: <FakePq as PqStatefulScheme>::VERIFY_KEY_LEN,
                 actual: verify_key.len(),
             }),
         }
@@ -1045,7 +1048,7 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     pub struct FakeClassical;
 
-    impl crate::ClassicalScheme for FakeClassical {
+    impl ClassicalScheme for FakeClassical {
         const NAME: &'static str = "stub";
         const PUBLIC_KEY_LEN: usize = 1;
         const SECRET_KEY_LEN: usize = 1;
@@ -1109,7 +1112,7 @@ mod tests {
     /// matters here.
     pub struct RaggedPq;
 
-    impl crate::PqStatefulScheme for RaggedPq {
+    impl PqStatefulScheme for RaggedPq {
         const NAME: &'static str = "ragged";
         const SEED_LEN: usize = 1;
         const PUBLIC_KEY_LEN: usize = 1;
@@ -1280,7 +1283,7 @@ mod tests {
         // of the two it is: every later call names the divergence rather
         // than reporting an opaque `SigningFailed` forever.
         assert_eq!(
-            <FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq),
+            <FakePq as PqStatefulScheme>::next_leaf(&sk.pq),
             0,
             "the component did not spend the leaf the journal committed"
         );
@@ -1299,7 +1302,7 @@ mod tests {
     /// returns.
     #[test]
     fn a_component_that_misreports_its_signature_length_is_refused() {
-        let fixed = <RaggedPq as crate::PqStatefulScheme>::FIXED_STATEFUL_SIG_LEN;
+        let fixed = <RaggedPq as PqStatefulScheme>::FIXED_STATEFUL_SIG_LEN;
         let node = encoding_path::AUTH_PATH_NODE_LEN;
 
         let (mut sk, _pk) = keygen::<RaggedH>(&[12u8; 32], 4).expect("keygen");
@@ -1428,7 +1431,7 @@ mod tests {
             Err(StatefulSignError::GrindAbort)
         );
         assert_eq!(journal.next_leaf(), 1);
-        assert_eq!(<FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq), 0);
+        assert_eq!(<FakePq as PqStatefulScheme>::next_leaf(&sk.pq), 0);
 
         assert_eq!(
             FakeH::sign_stateful(&mut sk, &mut journal, b"next", b""),
@@ -1445,14 +1448,14 @@ mod tests {
 
         FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("sign");
         assert_eq!(state.borrow().committed, alloc::vec![0]);
-        assert_eq!(<FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq), 1);
+        assert_eq!(<FakePq as PqStatefulScheme>::next_leaf(&sk.pq), 1);
     }
 
     /// Offset of the 4-byte leaf-counter field inside an exported
     /// `SecretKey<FakeH>`, per the layout documented on
     /// `SecretKey::exported_len`.
-    const FAKE_COUNTER_AT: usize = <FakeClassical as crate::ClassicalScheme>::SECRET_KEY_LEN
-        + <FakePq as crate::PqStatefulScheme>::SECRET_KEY_LEN;
+    const FAKE_COUNTER_AT: usize = <FakeClassical as ClassicalScheme>::SECRET_KEY_LEN
+        + <FakePq as PqStatefulScheme>::SECRET_KEY_LEN;
 
     #[test]
     fn export_import_round_trip_carries_every_part_of_the_key() {
@@ -1466,7 +1469,7 @@ mod tests {
 
         let mut restored = SecretKey::<FakeH>::import(&blob).expect("import");
         assert_eq!(
-            <FakePq as crate::PqStatefulScheme>::next_leaf(&restored.pq),
+            <FakePq as PqStatefulScheme>::next_leaf(&restored.pq),
             2,
             "the restored key resumes at the leaf the original stopped at"
         );
@@ -1493,16 +1496,16 @@ mod tests {
         for msg in [b"a".as_slice(), b"b", b"c", b"d"] {
             FakeH::sign_stateful(&mut sk, &mut journal, msg, b"").expect("sign");
         }
-        let capacity = <FakePq as crate::PqStatefulScheme>::leaf_capacity(&sk.pq);
+        let capacity = <FakePq as PqStatefulScheme>::leaf_capacity(&sk.pq);
         assert_eq!(
-            <FakePq as crate::PqStatefulScheme>::next_leaf(&sk.pq),
+            <FakePq as PqStatefulScheme>::next_leaf(&sk.pq),
             capacity,
             "the budget is spent"
         );
 
         let restored = SecretKey::<FakeH>::import(&sk.export().expect("export")).expect("import");
         assert_eq!(
-            <FakePq as crate::PqStatefulScheme>::next_leaf(&restored.pq),
+            <FakePq as PqStatefulScheme>::next_leaf(&restored.pq),
             capacity
         );
 
@@ -1620,7 +1623,7 @@ mod tests {
         let rebuilt = PublicKey::<FakeH>::from_bytes(pk.as_ref()).expect("from_bytes");
         assert_eq!(rebuilt.as_ref(), pk.as_ref());
 
-        let expected = <FakeH as crate::StatefulSuite>::VERIFY_PUBLIC_KEY_LEN;
+        let expected = <FakeH as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN;
         assert_eq!(
             PublicKey::<FakeH>::from_bytes(&pk.as_ref()[..pk.as_ref().len() - 1]).err(),
             Some(Error::BadLength {
@@ -1636,14 +1639,14 @@ mod tests {
     /// whole of the guarantee.
     #[test]
     fn from_stored_commitment_and_bundle_refuses_a_key_the_stored_key_does_not_name() {
-        let classical_len = <FakeClassical as crate::ClassicalScheme>::PUBLIC_KEY_LEN;
+        let classical_len = <FakeClassical as ClassicalScheme>::PUBLIC_KEY_LEN;
         let (_sk, pk) = keygen::<FakeH>(&[13u8; 32], 4).expect("keygen");
         let verify_key = &pk.as_ref()[classical_len..];
 
         // What a verifier installs: the classical public key and a
         // commitment to the post-quantum verify key, never the verify key
         // itself.
-        let mut stored = alloc::vec![0u8; <FakeH as crate::StatefulSuite>::STORED_PUBLIC_KEY_LEN];
+        let mut stored = alloc::vec![0u8; <FakeH as StatefulSuite>::STORED_PUBLIC_KEY_LEN];
         stored[..classical_len].copy_from_slice(&pk.as_ref()[..classical_len]);
         stored[classical_len] = fake_commitment(verify_key).expect("commitment");
 
@@ -1680,8 +1683,7 @@ mod tests {
         // `from_bytes` accepts the attacker's key as a whole verify-form
         // public key, because a key cannot vouch for itself and `from_bytes`
         // has nothing else to compare it against.
-        let mut attacker_bytes =
-            alloc::vec![0u8; <FakeH as crate::StatefulSuite>::VERIFY_PUBLIC_KEY_LEN];
+        let mut attacker_bytes = alloc::vec![0u8; <FakeH as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN];
         attacker_bytes[..classical_len].copy_from_slice(&pk.as_ref()[..classical_len]);
         attacker_bytes[classical_len..].copy_from_slice(&attacker_verify_key);
         assert!(PublicKey::<FakeH>::from_bytes(&attacker_bytes).is_ok());
@@ -1689,8 +1691,8 @@ mod tests {
 
     #[test]
     fn from_stored_commitment_and_bundle_rejects_either_wrong_length() {
-        let stored_len = <FakeH as crate::StatefulSuite>::STORED_PUBLIC_KEY_LEN;
-        let verify_key_len = <FakePq as crate::PqStatefulScheme>::VERIFY_KEY_LEN;
+        let stored_len = <FakeH as StatefulSuite>::STORED_PUBLIC_KEY_LEN;
+        let verify_key_len = <FakePq as PqStatefulScheme>::VERIFY_KEY_LEN;
         let stored = alloc::vec![0u8; stored_len];
         let verify_key = alloc::vec![0u8; verify_key_len];
 
@@ -1810,7 +1812,7 @@ mod tests {
         }
 
         let (_sk, pk) = keygen::<FakeH>(&[26u8; 32], 4).expect("keygen");
-        let bound = <FakePq as crate::PqStatefulScheme>::max_signatures_from_vk(pk.pq_verify_key())
+        let bound = <FakePq as PqStatefulScheme>::max_signatures_from_vk(pk.pq_verify_key())
             .expect("the fake declares a bound");
         assert!(
             bound < u32::MAX,

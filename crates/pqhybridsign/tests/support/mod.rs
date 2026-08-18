@@ -8,6 +8,12 @@
 //! `tests/ed25519_strict.rs` and `tests/generate_vectors.rs` pull it in with
 //! `#[path = "support/mod.rs"] mod support;` so the strict verifier and the
 //! forgery construction have exactly one definition each.
+//!
+//! `warn` is dead code in exactly one of the two including binaries (see
+//! its own doc comment), so `#[expect(dead_code)]` on it would error in
+//! whichever binary the lint does not fire. Allowed at module scope
+//! instead of per-item.
+#![cfg_attr(test, allow(dead_code))]
 
 use curve25519_dalek::constants::EIGHT_TORSION;
 use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
@@ -36,13 +42,12 @@ use sha2::{Digest, Sha512};
 /// visibility; it does not change what gets asserted, since these warnings
 /// never gate test pass/fail either way.
 ///
-/// `#[allow(dead_code)]`: `#[path = "support/mod.rs"]` compiles a separate
-/// copy of this module into each test binary that includes it.
+/// `#[path = "support/mod.rs"]` compiles a separate copy of this module
+/// into each test binary that includes it.
 /// `tests/generate_vectors.rs` includes it for `strict`/`weak_classical_forgery`
 /// but never emits a warning itself, so its copy never calls this function;
 /// `tests/ed25519_strict.rs`'s copy does. `-D warnings` sees each copy in
 /// isolation.
-#[allow(dead_code)]
 pub fn warn(message: &str) {
     use std::io::Write;
     match std::fs::OpenOptions::new().write(true).open("/dev/stderr") {
@@ -133,7 +138,10 @@ pub mod strict {
 
     /// Check `(pk, msg, sig)` against every strict criterion and report each
     /// signal independently.
-    #[allow(non_snake_case)]
+    #[expect(
+        non_snake_case,
+        reason = "A, R and R_prime match RFC 8032's own notation for these values"
+    )]
     pub fn check(pk_bytes: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> Outcome {
         let mut r_bytes = [0u8; 32];
         r_bytes.copy_from_slice(&sig[..32]);

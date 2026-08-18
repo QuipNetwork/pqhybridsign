@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Leaf-indexed golden vectors for H5 (ed25519 + SHRINCS) and H6 (sr25519 +
 //! SHRINCS): these pin the stateful wire format the way
 //! `pqhybridsign/tests/golden.rs` pins the stateless H1/H3 format.
@@ -43,7 +57,7 @@
 use pqhybridsign_core::stateful::{
     adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
 };
-use pqhybridsign_core::{PqStatefulScheme, StatefulSuite};
+use pqhybridsign_core::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_shrincs::{keygen, PublicKey, ShrincsScheme, H5, H6};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -124,7 +138,7 @@ where
         + StatefulHybridSignatureScheme<
             Signature = Vec<u8>,
             SecretKey = pqhybridsign_shrincs::SecretKey<S>,
-            PublicKey = pqhybridsign_shrincs::PublicKey<S>,
+            PublicKey = PublicKey<S>,
         >,
 {
     assert_eq!(
@@ -183,7 +197,7 @@ where
         + StatefulHybridSignatureScheme<
             Signature = Vec<u8>,
             SecretKey = pqhybridsign_shrincs::SecretKey<S>,
-            PublicKey = pqhybridsign_shrincs::PublicKey<S>,
+            PublicKey = PublicKey<S>,
         >,
 {
     let ctx = hex::decode(&v.ctx_hex).expect("ctx");
@@ -228,7 +242,7 @@ where
         + StatefulHybridSignatureScheme<
             Signature = Vec<u8>,
             SecretKey = pqhybridsign_shrincs::SecretKey<S>,
-            PublicKey = pqhybridsign_shrincs::PublicKey<S>,
+            PublicKey = PublicKey<S>,
         >,
 {
     assert_eq!(

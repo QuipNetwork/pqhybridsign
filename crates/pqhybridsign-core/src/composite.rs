@@ -6,8 +6,11 @@
 //! per specification section 6. Keys use the same order.
 
 use crate::{
-    derive_component_seeds, m_prime_len, write_m_prime, ClassicalScheme, Error, PqScheme, Result,
-    Suite,
+    component::{ClassicalScheme, PqScheme},
+    derive::derive_component_seeds,
+    error::{Error, Result},
+    message::{m_prime_len, write_m_prime},
+    suite::Suite,
 };
 use subtle::Choice;
 use zeroize::Zeroize;

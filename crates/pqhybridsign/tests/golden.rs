@@ -1,3 +1,17 @@
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 // Golden vectors: these pin the wire format. A change to the suite label,
 // the `M'` message binding, the HKDF derivation or the signature layout
 // breaks these tests instead of silently producing a new format.
@@ -21,7 +35,10 @@
 // Adding external or cross-implementation vectors is Cycle 2 work.
 use pqhybridsign::{H1, H2, H3, H4};
 use pqhybridsign_core::composite::{keypair_from_seed, sign_deterministic, verify};
-use pqhybridsign_core::{composite_delta, DeltaSuite, Suite};
+use pqhybridsign_core::{
+    composite_delta,
+    suite::{DeltaSuite, Suite},
+};
 
 #[derive(serde::Deserialize)]
 struct Vector {

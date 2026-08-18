@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Cross-checks the type-erased dispatch layer against the generic API it
 //! wraps, for all six suites, and proves the stateless/stateful split holds
 //! at the boundary.
@@ -8,7 +22,10 @@ use pqhybridsign_abi::{
     AbiError, BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, Suite,
 };
 use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
-use pqhybridsign_core::{composite, composite_delta, DeltaSuite, Suite as CoreSuite};
+use pqhybridsign_core::{
+    composite, composite_delta,
+    suite::{DeltaSuite, Suite as CoreSuite},
+};
 use pqhybridsign_shrincs::{H5, H6};
 use rand_core::OsRng;
 use std::cell::RefCell;

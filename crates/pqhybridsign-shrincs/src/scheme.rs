@@ -29,7 +29,10 @@ use hashsigs_rs::shrincs::{
 };
 use pqhybridsign_core::rotation::RotationPayload;
 use pqhybridsign_core::stateful_composite::CommittedVerifyKey;
-use pqhybridsign_core::{Error, PqStatefulScheme, Result};
+use pqhybridsign_core::{
+    component::PqStatefulScheme,
+    error::{Error, Result},
+};
 use subtle::Choice;
 use zeroize::Zeroize;
 
@@ -787,7 +790,7 @@ mod tests {
     fn an_attacker_generated_bundle_is_refused_only_against_the_stored_commitment() {
         use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
         use pqhybridsign_core::stateful_composite::{keygen, PublicKey};
-        use pqhybridsign_core::{ClassicalScheme, StatefulSuite};
+        use pqhybridsign_core::{component::ClassicalScheme, suite::StatefulSuite};
 
         use crate::H5;
 

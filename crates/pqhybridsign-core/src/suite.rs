@@ -2,7 +2,7 @@
 //! Suite traits: the classical and post-quantum components, and the
 //! registry-checked label, that together identify one hybrid construction.
 
-use crate::{ClassicalScheme, PqScheme, PqStatefulScheme};
+use crate::component::{ClassicalScheme, PqScheme, PqStatefulScheme};
 
 /// One hybrid construction: a classical component, a post-quantum
 /// component, and the label that separates it from every other suite.
@@ -57,7 +57,7 @@ macro_rules! hybrid_suite {
         #[derive(Clone, Copy, Debug)]
         pub struct $name;
 
-        impl $crate::Suite for $name {
+        impl $crate::suite::Suite for $name {
             type Classical = $classical;
             type Pq = $pq;
             const LABEL: &'static [u8] =
@@ -82,13 +82,13 @@ macro_rules! hybrid_suite {
             // Each name token must equal its component's NAME constant.
             assert!(
                 $crate::suite::const_str_eq(
-                    <$classical as $crate::ClassicalScheme>::NAME, $ctok,
+                    <$classical as $crate::component::ClassicalScheme>::NAME, $ctok,
                 ),
                 "classical name token does not match ClassicalScheme::NAME",
             );
             assert!(
                 $crate::suite::const_str_eq(
-                    <$pq as $crate::PqScheme>::NAME, $ptok,
+                    <$pq as $crate::component::PqScheme>::NAME, $ptok,
                 ),
                 "post-quantum name token does not match PqScheme::NAME",
             );
@@ -172,7 +172,7 @@ macro_rules! hybrid_stateful_suite {
         #[derive(Clone, Copy, Debug)]
         pub struct $name;
 
-        impl $crate::StatefulSuite for $name {
+        impl $crate::suite::StatefulSuite for $name {
             type Classical = $classical;
             type Pq = $pq;
             const LABEL: &'static [u8] =
@@ -212,13 +212,13 @@ macro_rules! hybrid_stateful_suite {
             // Each name token must equal its component's NAME constant.
             assert!(
                 $crate::suite::const_str_eq(
-                    <$classical as $crate::ClassicalScheme>::NAME, $ctok,
+                    <$classical as $crate::component::ClassicalScheme>::NAME, $ctok,
                 ),
                 "classical name token does not match ClassicalScheme::NAME",
             );
             assert!(
                 $crate::suite::const_str_eq(
-                    <$pq as $crate::PqStatefulScheme>::NAME, $ptok,
+                    <$pq as $crate::component::PqStatefulScheme>::NAME, $ptok,
                 ),
                 "post-quantum name token does not match PqStatefulScheme::NAME",
             );
@@ -298,7 +298,7 @@ macro_rules! hybrid_delta_suite {
         #[derive(Clone, Copy, Debug)]
         pub struct $name;
 
-        impl $crate::DeltaSuite for $name {
+        impl $crate::suite::DeltaSuite for $name {
             type Classical = $classical;
             type Pq = $pq;
             const LABEL: &'static [u8] =
@@ -324,13 +324,13 @@ macro_rules! hybrid_delta_suite {
             // Each name token must equal its component's NAME constant.
             assert!(
                 $crate::suite::const_str_eq(
-                    <$classical as $crate::ClassicalScheme>::NAME, $ctok,
+                    <$classical as $crate::component::ClassicalScheme>::NAME, $ctok,
                 ),
                 "classical name token does not match ClassicalScheme::NAME",
             );
             assert!(
                 $crate::suite::const_str_eq(
-                    <$pq as $crate::PqScheme>::NAME, $ptok,
+                    <$pq as $crate::component::PqScheme>::NAME, $ptok,
                 ),
                 "post-quantum name token does not match PqScheme::NAME",
             );
@@ -339,11 +339,11 @@ macro_rules! hybrid_delta_suite {
             // no more than 255 bytes above it, or `DeltaLen` cannot encode
             // it.
             assert!(
-                <$pq as $crate::PqScheme>::SIGNATURE_LEN >= $min_len,
+                <$pq as $crate::component::PqScheme>::SIGNATURE_LEN >= $min_len,
                 "min_pq_sig_len exceeds the post-quantum component's signature length",
             );
             assert!(
-                <$pq as $crate::PqScheme>::SIGNATURE_LEN - $min_len <= 255,
+                <$pq as $crate::component::PqScheme>::SIGNATURE_LEN - $min_len <= 255,
                 "the post-quantum component's signature length does not fit the 1-byte delta field",
             );
         };

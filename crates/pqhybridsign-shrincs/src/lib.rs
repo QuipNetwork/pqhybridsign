@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![deny(missing_docs)]
+// This crate genuinely forbids `unsafe`. `forbid` is stricter than the
+// workspace `[lints.rust] unsafe-code = "deny"` and, unlike `deny`,
+// cannot be relaxed by a downstream `#![allow(unsafe_code)]` -- which
+// `clippy::allow_attributes` would not flag, because it does not fire on
+// crate-scope inner attributes.
 #![forbid(unsafe_code)]
+// Test-only fixtures use `unwrap`/`expect` freely; test failure is the
+// desired outcome of a bad input.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 #![doc = "Stateful hash-based hybrid signatures: H5 (ed25519 + SHRINCS) and H6 (sr25519 + SHRINCS)."]
 
 // Upstream hashsigs-rs allows at most one profile feature to be active at a

@@ -2,8 +2,8 @@
 //! The classical and post-quantum component traits every hybrid suite
 //! composes, and their stateful variant.
 
+use crate::error::Result;
 use crate::rotation::RotationPayload;
-use crate::Result;
 use subtle::Choice;
 
 /// A classical signature component, for example ed25519 or sr25519.
@@ -30,8 +30,8 @@ pub trait ClassicalScheme {
     fn derive(seed: &[u8; 32], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()>;
 
     /// Hedged signing. `label` is the suite's domain-separation label
-    /// ([`Suite::LABEL`](crate::Suite::LABEL), or
-    /// [`StatefulSuite::ROTATE_LABEL`](crate::StatefulSuite::ROTATE_LABEL)
+    /// ([`Suite::LABEL`](crate::suite::Suite::LABEL), or
+    /// [`StatefulSuite::ROTATE_LABEL`](crate::suite::StatefulSuite::ROTATE_LABEL)
     /// on the rotation path), used as the schnorrkel signing context where
     /// the component needs one.
     fn sign(
@@ -191,8 +191,8 @@ pub trait PqStatefulScheme {
     /// [`Error::BadLength`] if `out` is not exactly [`SECRET_KEY_LEN`] bytes,
     /// [`Error::ComponentFailure`] if the key has been wiped.
     ///
-    /// [`Error::BadLength`]: crate::Error::BadLength
-    /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure
+    /// [`Error::BadLength`]: crate::error::Error::BadLength
+    /// [`Error::ComponentFailure`]: crate::error::Error::ComponentFailure
     /// [`SECRET_KEY_LEN`]: PqStatefulScheme::SECRET_KEY_LEN
     fn export_secret_key(sk: &Self::SecretKey, out: &mut [u8]) -> Result<()>;
 
@@ -212,8 +212,8 @@ pub trait PqStatefulScheme {
     /// bytes, [`Error::ComponentFailure`] if validation rejects the blob.
     ///
     /// [`export_secret_key`]: PqStatefulScheme::export_secret_key
-    /// [`Error::BadLength`]: crate::Error::BadLength
-    /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure
+    /// [`Error::BadLength`]: crate::error::Error::BadLength
+    /// [`Error::ComponentFailure`]: crate::error::Error::ComponentFailure
     /// [`SECRET_KEY_LEN`]: PqStatefulScheme::SECRET_KEY_LEN
     fn import_secret_key(bytes: &[u8]) -> Result<Self::SecretKey>;
 
@@ -264,8 +264,8 @@ pub trait PqStatefulScheme {
     /// [`TrustedMaxSignatures`]: crate::encoding_path::TrustedMaxSignatures
     /// [`encoding_path`]: crate::encoding_path
     /// [`LeafJournal`]: crate::stateful::LeafJournal
-    /// [`Error::BadLength`]: crate::Error::BadLength
-    /// [`Error::ComponentFailure`]: crate::Error::ComponentFailure
+    /// [`Error::BadLength`]: crate::error::Error::BadLength
+    /// [`Error::ComponentFailure`]: crate::error::Error::ComponentFailure
     fn max_signatures_from_vk(verify_key: &[u8]) -> Result<u32>;
 
     /// Sign `msg` with the next unused leaf, advancing this component's own

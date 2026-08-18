@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Path-selected encoding: round trips and every rejection the decode order
 //! in specification section 6 requires.
 
@@ -7,7 +21,7 @@ use pqhybridsign_core::encoding_path::{
     PathProfile, PathSelectedSig, TrustedMaxSignatures, AUTH_PATH_NODE_LEN, CLASSICAL_SIG_LEN,
     LEAF_COUNT_LEN, SELECTOR_LEN, SELECTOR_STATEFUL, SELECTOR_STATELESS,
 };
-use pqhybridsign_core::Error;
+use pqhybridsign_core::error::Error;
 
 /// Stand-in profile lengths. The real values come from the SHRINCS profile;
 /// the decoder only ever sees them as parameters.

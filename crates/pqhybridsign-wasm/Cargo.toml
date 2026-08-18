@@ -9,6 +9,11 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# crates.io refuses a crate with a git dependency, and hashsigs-rs is
+# pinned to a GitLab revision. Recorded decision on pqhs-eig: this crate
+# is not a publication candidate until hashsigs-rs reaches crates.io.
+# Remove this line when it does.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -29,3 +34,6 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.77"
+
+[lints]
+workspace = true

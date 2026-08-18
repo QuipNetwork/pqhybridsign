@@ -2,7 +2,7 @@
 use pqhybridsign::{H1, H2, H3, H4};
 use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
 use pqhybridsign_core::stateful_composite::PublicKey;
-use pqhybridsign_core::{composite, composite_delta, StatefulSuite};
+use pqhybridsign_core::{composite, composite_delta, suite::StatefulSuite};
 use pqhybridsign_shrincs::{H5, H6};
 
 use crate::suite::Suite;

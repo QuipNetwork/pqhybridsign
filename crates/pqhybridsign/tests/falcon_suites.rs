@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! H2 (ed25519 + FN-DSA-512) and H4 (sr25519 + FN-DSA-512): round trips and
 //! cross-suite rejection, over the real `fn-dsa` component rather than a
 //! stub. `pqhybridsign_core::tests::composite_delta` covers the wire-layout
@@ -7,7 +21,7 @@
 //! composition works end to end.
 use pqhybridsign::{H1, H2, H4};
 use pqhybridsign_core::composite_delta::{keypair_from_seed, sign, sign_deterministic, verify};
-use pqhybridsign_core::DeltaSuite;
+use pqhybridsign_core::suite::DeltaSuite;
 use rand_core::OsRng;
 
 fn keys<S: DeltaSuite>(seed: u8) -> (Vec<u8>, Vec<u8>) {
@@ -88,12 +102,11 @@ fn a_signature_does_not_verify_under_a_different_suite() {
     // Neither verifies under H1: an unrelated H1 key, and a wire length
     // (731 bytes) that does not even match H1::SIGNATURE_LEN (2484 bytes),
     // which `composite::verify`'s length check rejects outright.
-    use pqhybridsign_core::{composite, Suite};
+    use pqhybridsign_core::{composite, suite::Suite};
     let (_h1_sk, h1_pk) = {
         let mut sk = vec![0u8; H1::SECRET_KEY_LEN];
         let mut pk = vec![0u8; H1::PUBLIC_KEY_LEN];
-        pqhybridsign_core::composite::keypair_from_seed::<H1>(&[5u8; 32], &mut sk, &mut pk)
-            .expect("keygen");
+        composite::keypair_from_seed::<H1>(&[5u8; 32], &mut sk, &mut pk).expect("keygen");
         (sk, pk)
     };
     assert!(!composite::verify::<H1>(&h1_pk, b"m", b"", &sig2));

@@ -156,7 +156,7 @@ mod tests {
         let copied = e;
         assert_eq!(copied, e);
         #[cfg(feature = "std")]
-        assert!(!std::string::ToString::to_string(&e).is_empty());
+        assert!(!ToString::to_string(&e).is_empty());
     }
 
     #[test]

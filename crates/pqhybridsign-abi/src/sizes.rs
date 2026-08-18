@@ -2,7 +2,10 @@
 use pqhybridsign::{H1, H2, H3, H4};
 use pqhybridsign_core::encoding_path::{CLASSICAL_SIG_LEN, LEAF_COUNT_LEN, SELECTOR_LEN};
 use pqhybridsign_core::stateful_composite::SecretKey;
-use pqhybridsign_core::{DeltaSuite, PqStatefulScheme, StatefulSuite, Suite as CoreSuite};
+use pqhybridsign_core::{
+    component::PqStatefulScheme,
+    suite::{DeltaSuite, StatefulSuite, Suite as CoreSuite},
+};
 use pqhybridsign_shrincs::{H5, H6};
 
 use crate::suite::Suite;

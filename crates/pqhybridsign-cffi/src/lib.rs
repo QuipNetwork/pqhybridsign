@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
+// This crate is the FFI boundary: every entry point takes raw pointers
+// from a caller the compiler cannot see. The unsafe is confined to the
+// pointer-to-slice conversions at the boundary, each carrying a
+// `// Safety:` comment naming its invariant.
+#![allow(unsafe_code)]
+// Test-only fixtures use `unwrap`/`expect`/`panic` freely; test failure is
+// the desired outcome of a bad input, and `guard(|| panic!("boom"))` tests
+// the panic guard itself.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 #![doc = "The C ABI binding over `pqhybridsign-abi`.
 
 Every function here is `extern \"C\"`, `#[no_mangle]`, and prefixed `pqhs_`.

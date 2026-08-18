@@ -1,3 +1,17 @@
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 // Generator for the checked-in golden vectors. These tests are ignored by
 // default: run them explicitly and capture the output into
 // tests/vectors/*.json only when a format change is intended.
@@ -7,7 +21,11 @@ mod support;
 use pqhybridsign::classical::Ed25519;
 use pqhybridsign::{H1, H2, H3, H4};
 use pqhybridsign_core::composite::{keypair_from_seed, sign_deterministic};
-use pqhybridsign_core::{composite_delta, ClassicalScheme, DeltaSuite, Suite};
+use pqhybridsign_core::{
+    component::ClassicalScheme,
+    composite_delta,
+    suite::{DeltaSuite, Suite},
+};
 use support::{strict, weak_classical_forgery};
 
 fn emit<S: Suite>(name: &str) {

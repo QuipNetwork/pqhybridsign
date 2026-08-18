@@ -19,7 +19,7 @@
 use pqhybridsign_core::budget::StatelessBudgetStore;
 use pqhybridsign_core::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_core::stateful_composite::{keygen, CommittedVerifyKey, PublicKey, SecretKey};
-use pqhybridsign_core::StatefulSuite;
+use pqhybridsign_core::suite::StatefulSuite;
 use pqhybridsign_shrincs::{H5, H6};
 use zeroize::Zeroize;
 

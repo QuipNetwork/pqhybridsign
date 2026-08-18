@@ -1,9 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; `hybrid_suite!`
+// generates undocumented, unconditionally `pub` fixture structs, which is
+// fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 mod common;
 
 use common::{Ed25519Stub, HashClassical, HashClassicalSr, HashPq, MlDsaStub};
 use pqhybridsign_core::composite::{keypair_from_seed, sign, sign_deterministic, verify};
-use pqhybridsign_core::{hybrid_suite, Error, Suite};
+use pqhybridsign_core::{error::Error, hybrid_suite, suite::Suite};
 
 hybrid_suite! {
     /// H1 sizes, with the accept-everything stubs.

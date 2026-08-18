@@ -24,9 +24,12 @@
 // unused items here are the normal case rather than a defect. Declared once
 // on the module instead of once per `mod fixture;` site, so a new consumer
 // does not have to remember it.
-#![allow(dead_code)]
+#![expect(
+    dead_code,
+    reason = "see the comment above: every consumer uses a subset of this loader"
+)]
 
-use pqhybridsign_core::PqStatefulScheme;
+use pqhybridsign_core::component::PqStatefulScheme;
 use pqhybridsign_shrincs::ShrincsScheme;
 use std::sync::OnceLock;
 

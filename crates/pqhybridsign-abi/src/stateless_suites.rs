@@ -8,7 +8,7 @@
 //! ordinary stateless sign must never be able to consume one.
 
 use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_core::{composite, composite_delta, Suite as CoreSuite};
+use pqhybridsign_core::{composite, composite_delta, suite::Suite as CoreSuite};
 use rand_core::CryptoRngCore;
 
 use crate::error::AbiError;

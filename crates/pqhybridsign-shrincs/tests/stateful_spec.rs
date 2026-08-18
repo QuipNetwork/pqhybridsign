@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Specification section 17, conformance tests 15 to 32: the stateful
 //! properties of H5/H6 that are not covered by the plain round trips in
 //! `roundtrip.rs`.
@@ -34,7 +48,9 @@ use pqhybridsign_core::encoding_path::{
 use pqhybridsign_core::stateful::{
     adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme, StatefulSignError,
 };
-use pqhybridsign_core::{m_prime, Error, PqStatefulScheme, StatefulSuite};
+use pqhybridsign_core::{
+    component::PqStatefulScheme, error::Error, message::m_prime, suite::StatefulSuite,
+};
 use pqhybridsign_shrincs::{action, keygen, PublicKey, ShrincsScheme, H5};
 use std::cell::RefCell;
 use std::rc::Rc;

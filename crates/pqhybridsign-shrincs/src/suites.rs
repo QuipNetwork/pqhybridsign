@@ -8,7 +8,7 @@
 //! `pqhybridsign_core::stateful::StatefulHybridSignatureScheme` for free,
 //! from the blanket implementation in
 //! `pqhybridsign_core::stateful_composite` over every
-//! `pqhybridsign_core::StatefulSuite` -- there is nothing to implement here
+//! `pqhybridsign_core::suite::StatefulSuite` -- there is nothing to implement here
 //! beyond the label declarations themselves.
 
 use pqhybridsign::classical::{Ed25519, Sr25519};

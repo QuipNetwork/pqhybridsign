@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use pqhybridsign_core::{ClassicalScheme, Error, Result};
+use pqhybridsign_core::{
+    component::ClassicalScheme,
+    error::{Error, Result},
+};
 use rand_core::{CryptoRng, RngCore};
 use schnorrkel::context::attach_rng;
 use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, PublicKey, SecretKey, Signature};
@@ -232,7 +235,7 @@ fn sign_with_rng(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::ClassicalScheme;
+    use pqhybridsign_core::component::ClassicalScheme;
 
     const H1: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
     const H3: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";

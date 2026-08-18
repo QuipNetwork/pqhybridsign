@@ -46,7 +46,7 @@ pub struct BudgetKey([u8; 32]);
 
 impl BudgetKey {
     /// Derive the key a store should use for `material` (the bytes
-    /// [`crate::PqStatefulScheme::stateless_key_material`] returns).
+    /// [`crate::component::PqStatefulScheme::stateless_key_material`] returns).
     pub fn from_material(material: &[u8]) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(material);
@@ -108,9 +108,9 @@ pub enum StatelessBudgetRejected {
     StoreFailed,
 }
 
-impl From<StatelessBudgetRejected> for crate::Error {
+impl From<StatelessBudgetRejected> for crate::error::Error {
     /// The `consumed` and `budget` figures do not survive the conversion.
-    /// Every type downstream of this one -- [`crate::Error`],
+    /// Every type downstream of this one -- [`crate::error::Error`],
     /// `pqhybridsign_abi::AbiError`, a C integer -- is a flat code, so
     /// carrying the pair further would only postpone dropping it. A caller
     /// that wants the numbers calls [`spend_stateless_budget`] itself and
@@ -125,7 +125,7 @@ impl From<StatelessBudgetRejected> for crate::Error {
 
 impl From<StatelessBudgetRejected> for crate::stateful::StatefulSignError {
     /// Loses the same two figures, for the same reason as the
-    /// [`crate::Error`] conversion above.
+    /// [`crate::error::Error`] conversion above.
     fn from(rejected: StatelessBudgetRejected) -> Self {
         match rejected {
             StatelessBudgetRejected::BudgetExhausted { .. } => Self::StatelessBudgetExhausted,
@@ -156,7 +156,7 @@ impl fmt::Display for StatelessBudgetRejected {
 /// rotation authorization (specification section 21: "Every stateless
 /// signature -- including each rotation authorization -- decrements the
 /// few-time budget"). `budget` is the component's
-/// [`crate::PqStatefulScheme::STATELESS_BUDGET`]; callers MUST NOT pass a
+/// [`crate::component::PqStatefulScheme::STATELESS_BUDGET`]; callers MUST NOT pass a
 /// literal here; the constant is what keeps the bound in sync with the
 /// active profile (specification section 21).
 ///
@@ -260,7 +260,7 @@ pub fn spend_before_rotation<S: StatelessBudgetStore>(
 ///
 /// `E` is the caller's own error type rather than
 /// [`StatelessBudgetRejected`] because the two consumers report different
-/// vocabularies: rotation returns [`crate::Error`] and stateless signing
+/// vocabularies: rotation returns [`crate::error::Error`] and stateless signing
 /// returns [`crate::stateful::StatefulSignError`]. Both implement the
 /// required `From`.
 ///
@@ -621,12 +621,12 @@ mod tests {
             budget: 1,
         };
         assert_eq!(
-            crate::Error::from(exhausted),
-            crate::Error::StatelessBudgetExhausted
+            crate::error::Error::from(exhausted),
+            crate::error::Error::StatelessBudgetExhausted
         );
         assert_eq!(
-            crate::Error::from(StatelessBudgetRejected::StoreFailed),
-            crate::Error::BudgetStoreFailed
+            crate::error::Error::from(StatelessBudgetRejected::StoreFailed),
+            crate::error::Error::BudgetStoreFailed
         );
 
         use crate::stateful::StatefulSignError;

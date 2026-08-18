@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Export and import of a live H5 composite secret key.
 //!
 //! `stateful_spec.rs` proves the counter properties at the upstream
@@ -19,7 +33,7 @@ use pqhybridsign_core::stateful::{
     adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme,
 };
 use pqhybridsign_core::stateful_composite::SecretKey;
-use pqhybridsign_core::{Error, PqStatefulScheme};
+use pqhybridsign_core::{component::PqStatefulScheme, error::Error};
 use pqhybridsign_shrincs::{keygen, PublicKey, ShrincsScheme, H5};
 use std::cell::RefCell;
 use std::rc::Rc;

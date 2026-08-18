@@ -29,3 +29,6 @@ proptest = "1.11.0"
 default = ["std", "alloc"]
 std = ["alloc"]
 alloc = []
+
+[lints]
+workspace = true

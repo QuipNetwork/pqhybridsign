@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Fixture shape and verify-only golden vector coverage for every SHRINCS profile.
 //!
 //! This binary is the single place that proves the per-profile fixtures are
@@ -19,8 +33,8 @@
 
 mod fixture;
 
+use pqhybridsign_core::component::PqStatefulScheme;
 use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
-use pqhybridsign_core::PqStatefulScheme;
 use pqhybridsign_shrincs::{PublicKey, ShrincsScheme, H5, H6};
 
 #[cfg(any(feature = "profile-256s", feature = "profile-256s-sha2"))]
@@ -29,7 +43,7 @@ use pqhybridsign_shrincs::SecretKey;
 fn check_suite<S>(f: &fixture::Fixture, want_suite: &str, other_pk_bytes: &[u8])
 where
     S: StatefulHybridSignatureScheme<Signature = Vec<u8>, PublicKey = PublicKey<S>>,
-    S: pqhybridsign_core::StatefulSuite<Pq = ShrincsScheme>,
+    S: pqhybridsign_core::suite::StatefulSuite<Pq = ShrincsScheme>,
 {
     assert_eq!(f.suite, want_suite);
     assert_eq!(

@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 //! Property tests over the encoders, required by DESIGN.md lines 485-491.
 //!
 //! The hand-written tests in `tests/encoding_path.rs` and
@@ -33,9 +47,12 @@ use pqhybridsign_core::encoding_path::{
     SELECTOR_LEN, SELECTOR_STATEFUL,
 };
 #[cfg(feature = "alloc")]
-use pqhybridsign_core::m_prime;
+use pqhybridsign_core::message::m_prime;
 use pqhybridsign_core::rotation::{RotationPayload, ROTATION_PAYLOAD_LEN};
-use pqhybridsign_core::{m_prime_len, write_m_prime, Error};
+use pqhybridsign_core::{
+    error::Error,
+    message::{m_prime_len, write_m_prime},
+};
 use proptest::prelude::*;
 
 /// A stand-in `PathProfile`, matching `tests/encoding_path.rs:14-17`. The

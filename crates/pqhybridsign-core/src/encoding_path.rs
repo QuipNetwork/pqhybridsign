@@ -40,7 +40,7 @@
 //! in [`TrustedMaxSignatures`] so that step 1 is visible in the type of every
 //! call.
 
-use crate::{Error, Result};
+use crate::error::{Error, Result};
 
 /// Length of the classical signature that opens every path-selected
 /// encoding.
@@ -212,10 +212,7 @@ pub fn write_path_selected(
 /// The same as [`write_path_selected`], except that the buffer is always
 /// large enough.
 #[cfg(feature = "alloc")]
-pub fn encode_path_selected(
-    sig: &PathSelectedSig<'_>,
-    profile: &PathProfile,
-) -> Result<alloc::vec::Vec<u8>> {
+pub fn encode_path_selected(sig: &PathSelectedSig<'_>, profile: &PathProfile) -> Result<Vec<u8>> {
     check_body(&sig.body, profile)?;
     let mut out = alloc::vec![0u8; path_selected_len(sig)];
     write_path_selected(&mut out, sig, profile)?;

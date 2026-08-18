@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Integration test binary: `cfg(test)` is always true here. `unwrap`/
+// `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
+// family of macros generates undocumented, unconditionally `pub` fixture
+// structs, which is fine for a binary with no public API of its own.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        missing_docs,
+        unreachable_pub
+    )
+)]
 mod common;
 
 use common::{Ed25519Stub, MlDsaStub};
@@ -15,7 +29,7 @@ hybrid_suite! {
 
 #[test]
 fn label_carries_the_trailing_null_byte() {
-    use pqhybridsign_core::Suite;
+    use pqhybridsign_core::suite::Suite;
     assert_eq!(H1Test::LABEL, b"hybrid-ed25519-mldsa44-v1\0");
     assert_eq!(H1Test::LABEL.len(), 26);
     assert_eq!(*H1Test::LABEL.last().unwrap(), 0u8);
@@ -23,7 +37,7 @@ fn label_carries_the_trailing_null_byte() {
 
 #[test]
 fn composite_sizes_are_the_component_sums() {
-    use pqhybridsign_core::Suite;
+    use pqhybridsign_core::suite::Suite;
     assert_eq!(H1Test::PUBLIC_KEY_LEN, 1344);
     assert_eq!(H1Test::SECRET_KEY_LEN, 2624);
     assert_eq!(H1Test::SIGNATURE_LEN, 2484);
