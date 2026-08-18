@@ -103,15 +103,26 @@ export function signDeterministic(suite: string, secret_key: Uint8Array, msg: Ui
 export function signatureLen(suite: string): number;
 
 /**
- * Stored public key length, in bytes, for `"H5"` or `"H6"`.
+ * Stored public key length, in bytes, for `suite`: the form a verifier
+ * keeps, which is what [`verify_with_stored_public_key`] takes as
+ * `stored_public_key`.
  *
- * The small on-storage form (`ClassicalPK || commitment`) a verifier
- * installs and passes to [`verify_with_stored_public_key`], not the
- * verify-form length [`publicKeyLen`](public_key_len) reports.
+ * Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
+ * the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
+ * for H5 and H6 this is the classical public key and a 32-byte commitment
+ * to the post-quantum verify key, smaller than
+ * [`publicKeyLen`](public_key_len) reports for the same suite because the
+ * verify key itself is supplied per signature rather than stored. For H1
+ * through H4 the stored and verify forms are the same bytes, so this
+ * equals [`publicKeyLen`](public_key_len). Deliberately routed through
+ * [`any_suite`] rather than [`stateful_suite`]: this is a pure length
+ * accessor over public data, not a signing or verification call, so it has
+ * no reason to throw for the four suites every other function in this
+ * crate supports.
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
  */
 export function storedPublicKeyLen(suite: string): number;
 
