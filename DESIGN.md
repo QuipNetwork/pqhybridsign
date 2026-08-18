@@ -52,7 +52,7 @@ reads only this table misses those crates.
 The workspace denies `unsafe_code` for every crate through
 `[workspace.lints.rust]`. The five pure-Rust crates also set
 `#![forbid(unsafe_code)]`, which no downstream attribute can relax. The two
-binding crates cannot: `pqhybridsign-cffi` is the raw-pointer boundary, and
+foreign-ABI crates cannot: `pqhybridsign-cffi` is the raw-pointer boundary, and
 `pqhybridsign-py` links the `unsafe` that pyo3's macros generate. Each of the
 two carries a crate-root allow naming its reason. The core and lattice
 crates build for `wasm32-unknown-unknown` without an allocator. The SHRINCS
