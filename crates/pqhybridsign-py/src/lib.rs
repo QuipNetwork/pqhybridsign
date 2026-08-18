@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// The only `unsafe` reachable from this crate is what pyo3's
+// `#[pymodule]`/`#[pyclass]`/`#[pyfunction]` macros generate to satisfy the
+// CPython C API. Nothing in this crate's own source writes `unsafe`.
+#![allow(unsafe_code)]
 //! Python bindings for `pqhybridsign`, over `pqhybridsign-abi`'s
 //! type-erased dispatch layer.
 //!
