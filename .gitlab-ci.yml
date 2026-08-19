@@ -33,6 +33,25 @@ deps:
         exit 1
       fi
 
+# `pqhybridsign-core` is required to compile where there is no `std`, both
+# with and without an allocator. `wasm32-unknown-unknown` cannot prove that
+# on its own: rustup ships a `std` for it, so a dependency that reached for
+# `std` would still link and this check would pass. `thumbv7em-none-eabi`
+# has no `std` to link against, which is what makes the requirement
+# falsifiable rather than merely stated.
+#
+# The alloc-only test run is here rather than in `test-debug` because the
+# default feature set is `["std", "alloc"]`: under `std` the prelude
+# supplies `Vec`, so every missing `use alloc::vec::Vec` is invisible to
+# every other job in this file.
+no-std:
+  stage: check
+  script:
+    - rustup target add thumbv7em-none-eabi
+    - cargo build -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
+    - cargo build -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
+    - cargo test -p pqhybridsign-core --no-default-features --features alloc
+
 wasm:
   stage: check
   script:
