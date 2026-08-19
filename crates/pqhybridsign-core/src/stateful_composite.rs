@@ -826,9 +826,9 @@ mod tests {
     use crate::budget::test_store::MemoryStore;
     use crate::budget::BudgetKey;
     use crate::stateful::LeafJournal;
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use std::cell::RefCell;
-    use std::rc::Rc;
     use subtle::Choice;
 
     /// Counts calls into `FakePq::verify_stateful`, so a test can prove the
