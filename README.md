@@ -126,9 +126,15 @@ same suite under another parameter set.
 
 ## Platforms
 
-`pqhybridsign-core` builds without `std`. `alloc` is a separate feature. The
-workspace builds for `wasm32-unknown-unknown`, and continuous integration
-checks it.
+`pqhybridsign-core` must build for a target that provides no `std`, both with
+and without the `alloc` feature. Treat a failure there as a defect in core.
+`DESIGN.md` states the requirement in full, with the rule it puts on authors:
+core has no `std` prelude, so every `alloc` type needs an import by its full
+path.
+
+Continuous integration builds core for `thumbv7em-none-eabi`, which has no
+`std` to link against, and for `wasm32-unknown-unknown`, which the workspace
+ships to.
 
 The minimum supported Rust version is 1.89, set by `hashsigs-rs`.
 
@@ -136,6 +142,7 @@ The minimum supported Rust version is 1.89, set by `hashsigs-rs`.
 
 ```bash
 cargo test --workspace                    # default profile
+cargo test -p pqhybridsign-core --no-default-features --features alloc
 cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q20
 cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q18
 ```

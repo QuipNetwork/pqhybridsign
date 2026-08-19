@@ -54,9 +54,66 @@ The workspace denies `unsafe_code` for every crate through
 `#![forbid(unsafe_code)]`, which no downstream attribute can relax. The two
 foreign-ABI crates cannot: `pqhybridsign-cffi` is the raw-pointer boundary, and
 `pqhybridsign-py` links the `unsafe` that pyo3's macros generate. Each of the
-two carries a crate-root allow naming its reason. The core and lattice
-crates build for `wasm32-unknown-unknown` without an allocator. The SHRINCS
-crate needs `std`, because the reference signer needs `std` today.
+two carries a crate-root allow naming its reason.
+
+### Platform requirement: Core builds where there is no `std`
+
+`pqhybridsign-core` must compile for a target that provides no `std`. Both
+of these feature sets must build:
+
+| Feature set | What it gives the caller |
+|-------------|--------------------------|
+| `--no-default-features` | Core types, plus encoders and decoders that write into caller-supplied buffers. No heap. |
+| `--no-default-features --features alloc` | Adds the owned-buffer API, the stateful composite layer, and rotation. |
+
+Treat a build failure in either feature set as a defect in core. The target
+is not at fault.
+
+Core has no `std` prelude. Import every `alloc` type by its full path, and
+gate the import on the feature. `Vec` comes from `alloc::vec::Vec`, `Rc`
+from `alloc::rc::Rc`, and `String` from `alloc::string::String`.
+
+```rust
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+```
+
+A missing import of this kind passes every default build. `default = ["std",
+"alloc"]`, and under `std` the prelude supplies the name. On 2026-08-19 four
+modules used `Vec` with no import. `encoding_delta`, `encoding_path`,
+`message` and `rotation` each failed to compile without `std`, while every
+job that built the default feature set passed.
+
+#### How the pipeline checks the requirement
+
+The `no-std` job in `.gitlab-ci.yml` builds core for `thumbv7em-none-eabi`
+in both feature sets. It then runs the core tests under `alloc` alone.
+
+`thumbv7em-none-eabi` has no `std` to link against, which is what makes the
+requirement falsifiable. `wasm32-unknown-unknown` cannot do that job alone.
+Rustup ships a `std` for it, so a dependency that reached for `std` would
+still link and the check would pass. The `wasm` job stays, because
+`wasm32-unknown-unknown` is a target this workspace ships to.
+
+Run the same four commands before you push:
+
+```bash
+rustup target add thumbv7em-none-eabi
+cargo build -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
+cargo build -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
+cargo test -p pqhybridsign-core --no-default-features --features alloc
+```
+
+#### Limits of the requirement
+
+The requirement covers the library. It does not cover the core test targets
+under `--no-default-features` with no `alloc`, which do not build today.
+Whole test files cover the owned-buffer API that the feature set removes.
+Tracked as `pqhs-b5w`.
+
+`pqhybridsign` builds for `wasm32-unknown-unknown` without an allocator.
+`pqhybridsign-shrincs` needs `std`, because the reference signer needs `std`
+today.
 
 ### ed25519 verification: ZIP-215 acceptance is stated, not mandated
 
