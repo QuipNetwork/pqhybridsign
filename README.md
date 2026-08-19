@@ -142,6 +142,7 @@ The minimum supported Rust version is 1.89, set by `hashsigs-rs`.
 
 ```bash
 cargo test --workspace                    # default profile
+cargo test -p pqhybridsign-core --no-default-features
 cargo test -p pqhybridsign-core --no-default-features --features alloc
 cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q20
 cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q18

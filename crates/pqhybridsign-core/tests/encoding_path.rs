@@ -17,10 +17,15 @@
 //! in specification section 6 requires.
 
 use pqhybridsign_core::encoding_path::{
-    decode_path_selected, encode_path_selected, path_selected_len, write_path_selected, PathBody,
-    PathProfile, PathSelectedSig, TrustedMaxSignatures, AUTH_PATH_NODE_LEN, CLASSICAL_SIG_LEN,
-    LEAF_COUNT_LEN, SELECTOR_LEN, SELECTOR_STATEFUL, SELECTOR_STATELESS,
+    decode_path_selected, path_selected_len, write_path_selected, PathBody, PathProfile,
+    PathSelectedSig, TrustedMaxSignatures, AUTH_PATH_NODE_LEN, CLASSICAL_SIG_LEN, LEAF_COUNT_LEN,
+    SELECTOR_LEN, SELECTOR_STATEFUL, SELECTOR_STATELESS,
 };
+// The owned-buffer encoder only exists under `alloc`. The decode side and
+// `write_path_selected` are the no-allocator API, so the tests that cover
+// them stay in every feature set.
+#[cfg(feature = "alloc")]
+use pqhybridsign_core::encoding_path::encode_path_selected;
 use pqhybridsign_core::error::Error;
 
 /// Stand-in profile lengths. The real values come from the SHRINCS profile;
@@ -75,6 +80,7 @@ fn raw_stateless(classical: &[u8], body: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "alloc")]
 #[test]
 fn encoding_path_round_trip_stateful() {
     let classical = classical();
@@ -108,6 +114,7 @@ fn encoding_path_round_trip_stateful() {
     }
 }
 
+#[cfg(feature = "alloc")]
 #[test]
 fn encoding_path_round_trip_stateless() {
     let classical = classical();
@@ -131,6 +138,7 @@ fn encoding_path_round_trip_stateless() {
     }
 }
 
+#[cfg(feature = "alloc")]
 #[test]
 fn encoding_path_wire_layout_matches_the_specification() {
     let classical = classical();
@@ -329,6 +337,7 @@ fn encoding_path_selector_check_precedes_the_leaf_count_read() {
     );
 }
 
+#[cfg(feature = "alloc")]
 #[test]
 fn encoding_path_encoder_rejects_a_body_that_contradicts_its_leaf_count() {
     let classical = classical();

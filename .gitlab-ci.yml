@@ -62,6 +62,7 @@ no-std:
     - rustup target add thumbv7em-none-eabi
     - cargo build -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
     - cargo build -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
+    - cargo test -p pqhybridsign-core --no-default-features
     - cargo test -p pqhybridsign-core --no-default-features --features alloc
 
 wasm:

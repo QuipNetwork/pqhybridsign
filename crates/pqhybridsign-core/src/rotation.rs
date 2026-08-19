@@ -512,6 +512,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "alloc")]
     use subtle::Choice;
 
     #[cfg(feature = "alloc")]
@@ -530,6 +531,7 @@ mod tests {
     // single-byte tamper detection, kind-binding) against a fake component,
     // cheaply -- the expensive equivalents against the real SHRINCS
     // component live in `pqhybridsign-shrincs/tests/rotation.rs`.
+    #[cfg(feature = "alloc")]
     #[derive(Clone, Copy, Debug)]
     pub struct FakeClassical;
 
@@ -547,6 +549,7 @@ mod tests {
     /// SHA-256 rather than an XOR fold, and tiled over the whole signature
     /// rather than one repeated byte, so distinguishing two labels does not
     /// come down to a one-byte coincidence.
+    #[cfg(feature = "alloc")]
     fn classical_pattern(key: u8, label: &[u8], msg: &[u8]) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -557,6 +560,7 @@ mod tests {
         hasher.finalize().into()
     }
 
+    #[cfg(feature = "alloc")]
     impl ClassicalScheme for FakeClassical {
         const NAME: &'static str = "stub";
         const PUBLIC_KEY_LEN: usize = 1;
@@ -609,11 +613,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "alloc")]
     #[derive(Default)]
     pub struct FakeSecretKey {
         key: u8,
     }
 
+    #[cfg(feature = "alloc")]
     impl zeroize::Zeroize for FakeSecretKey {
         fn zeroize(&mut self) {
             self.key.zeroize();
@@ -631,6 +637,7 @@ mod tests {
     /// an XOR fold. Using `sha2::Sha256` here (already a dependency of this
     /// crate) keeps this fake honest about that property instead of hiding
     /// it behind toy arithmetic.
+    #[cfg(feature = "alloc")]
     fn mix(payload: &RotationPayload, m_prime_rotation: &[u8]) -> u8 {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -640,8 +647,10 @@ mod tests {
         hasher.finalize()[0]
     }
 
+    #[cfg(feature = "alloc")]
     pub struct FakePq;
 
+    #[cfg(feature = "alloc")]
     impl PqStatefulScheme for FakePq {
         const NAME: &'static str = "fake";
         const SEED_LEN: usize = 1;
@@ -790,6 +799,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "alloc")]
     crate::hybrid_stateful_suite! {
         FakeH,
         classical = FakeClassical as "stub",
@@ -876,6 +886,12 @@ mod tests {
         );
     }
 
+    // Reads a `FakeH` associated constant, and `FakeH` comes from the
+    // fixture suite above, which this module can only declare under
+    // `alloc`: it imports the component traits under that feature. The
+    // constant does not vary by feature, so the other two configurations
+    // cover it.
+    #[cfg(feature = "alloc")]
     #[test]
     fn rotate_label_ends_in_a_null_byte_with_the_declared_length() {
         assert_eq!(FakeH::ROTATE_LABEL, b"hybrid-stub-fake-rotate-v1\0");

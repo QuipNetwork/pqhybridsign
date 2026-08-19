@@ -87,7 +87,7 @@ job that built the default feature set passed.
 #### How the pipeline checks the requirement
 
 The `no-std` job in `.gitlab-ci.yml` builds core for `thumbv7em-none-eabi`
-in both feature sets. It then runs the core tests under `alloc` alone.
+in both feature sets. It then runs the core tests in both feature sets.
 
 `thumbv7em-none-eabi` has no `std` to link against, which is what makes the
 requirement falsifiable. `wasm32-unknown-unknown` cannot do that job alone.
@@ -95,21 +95,32 @@ Rustup ships a `std` for it, so a dependency that reached for `std` would
 still link and the check would pass. The `wasm` job stays, because
 `wasm32-unknown-unknown` is a target this workspace ships to.
 
-Run the same four commands before you push:
+Run the same commands before you push:
 
 ```bash
 rustup target add thumbv7em-none-eabi
 cargo build -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
 cargo build -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
+cargo test -p pqhybridsign-core --no-default-features
 cargo test -p pqhybridsign-core --no-default-features --features alloc
 ```
 
-#### Limits of the requirement
+#### What the tests do in each feature set
 
-The requirement covers the library. It does not cover the core test targets
-under `--no-default-features` with no `alloc`, which do not build today.
-Whole test files cover the owned-buffer API that the feature set removes.
-Tracked as `pqhs-b5w`.
+The tests follow the requirement. `cargo test -p pqhybridsign-core` passes
+in all three feature sets, so the preceding checks run real assertions and
+not an empty suite.
+
+Any test that reaches for the owned-buffer API carries
+`#[cfg(feature = "alloc")]`. The run with no `alloc` covers the
+caller-supplied-buffer API and nothing else, which is the API a caller
+without an allocator can reach. It runs 93 tests. The `alloc` run covers
+both and runs 145.
+
+Gate a test, never a whole file, when it needs an allocator. A gated file
+hides the no-allocator half of the same module from the no-allocator run.
+
+#### Limits of the requirement
 
 `pqhybridsign` builds for `wasm32-unknown-unknown` without an allocator.
 `pqhybridsign-shrincs` needs `std`, because the reference signer needs `std`
