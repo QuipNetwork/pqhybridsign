@@ -40,6 +40,9 @@
 //! in [`TrustedMaxSignatures`] so that step 1 is visible in the type of every
 //! call.
 
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 use crate::error::{Error, Result};
 
 /// Length of the classical signature that opens every path-selected

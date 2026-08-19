@@ -31,6 +31,9 @@
 //! says, so there is no allocation-based denial of service here the way
 //! [`encoding_path`](crate::encoding_path) guards against for `LeafCount`.
 
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 use crate::error::{Error, Result};
 
 /// Length of the classical signature that opens every delta-length

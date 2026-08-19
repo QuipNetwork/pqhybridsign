@@ -19,6 +19,9 @@
 //! separator. Either place alone is enough to reject a splice, so neither
 //! has to be trusted to hold if the other is restructured.
 
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 use crate::{
     error::{Error, Result},
     message,

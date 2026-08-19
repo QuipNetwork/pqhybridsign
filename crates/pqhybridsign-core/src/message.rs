@@ -2,6 +2,9 @@
 //! `M'` framing, specification section 7: the domain-separated message every
 //! component signature is actually computed over.
 
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+
 use crate::error::{Error, Result};
 
 /// Hybrid construction version prefix, specification section 7.
