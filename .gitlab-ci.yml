@@ -19,19 +19,31 @@ clippy:
 deps:
   stage: check
   script:
-    # All three component crates require rand_core ^0.6. `cargo tree -i`
-    # prints one root line per matching version plus indented dependency
-    # edges below it, so counting lines that start at column 0 (no leading
-    # whitespace) and match "rand_core v" gives the count of distinct
-    # versions resolved in the graph, not the count of edges to it.
+    # All three component crates require rand_core ^0.6, and they must all
+    # resolve to the same version so that they share one RngCore trait.
+    #
+    # `cargo tree -i rand_core` cannot answer this. Once the lockfile holds
+    # two versions it exits with "specification rand_core is ambiguous" and
+    # prints no tree at all, so counting its root lines reports 0 whatever
+    # the truth is. Adding `-e normal,build` does not help, because cargo
+    # resolves the package specification before it filters edges.
+    #
+    # Reading the versions off the forward tree does work, because
+    # `-e normal,build` drops the dev-dependency edges before the versions
+    # are read. That matters here: proptest is a dev-dependency of
+    # pqhybridsign-core and pulls rand_core 0.9, which reaches no published
+    # artifact and does not put a second RngCore in front of any component.
     - |
       set -euo pipefail
-      count=$(cargo tree -i rand_core --workspace | grep -c '^rand_core v')
+      versions=$(cargo tree --workspace -e normal,build --prefix none \
+        | grep -o 'rand_core v[0-9][0-9.]*' | sort -u || true)
+      count=$(printf '%s\n' "$versions" | grep -c '^rand_core v' || true)
       if [ "$count" -ne 1 ]; then
-        echo "Expected exactly one rand_core major version in the graph, found $count:"
-        cargo tree -i rand_core --workspace
+        echo "Expected exactly one rand_core version outside dev-dependencies, found $count:"
+        printf '%s\n' "$versions"
         exit 1
       fi
+      echo "rand_core outside dev-dependencies: $versions"
 
 # `pqhybridsign-core` is required to compile where there is no `std`, both
 # with and without an allocator. `wasm32-unknown-unknown` cannot prove that
