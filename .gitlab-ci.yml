@@ -1,10 +1,40 @@
-stages: [check, test]
+# Stage order is publish order. The reversible registries go first: an
+# unwanted npm version can be unpublished for 72 hours and PyPI tolerates
+# re-upload attempts with --skip-existing, but a crates.io version can only
+# ever be yanked, never replaced. `crates` therefore runs last, and `notes`
+# creates the release page only once every artifact is live.
+stages: [check, test, validate, smoke, release, pypi, crates, notes]
 
 default:
   image: rust:1.97.1
   before_script:
     - rustup component add clippy rustfmt
     - rustup target add wasm32-unknown-unknown
+
+variables:
+  NODE_MAJOR: "24"
+
+.setup-node:
+  script:
+    # One block with pipefail, because `curl ... | bash -` reports only bash's
+    # status. bash reading an empty stdin exits 0, so a failed or truncated
+    # download would leave the pipeline believing the repository had been
+    # added and fail later, somewhere unrelated.
+    - |
+      set -euo pipefail
+      curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+    - apt-get install -y --no-install-recommends nodejs
+    # Assert the major rather than printing it. The nodesource script chooses
+    # the version, so this is the only place that can catch it installing
+    # something other than what the jobs below assume. The npm package
+    # declares engines.node >= 20; Debian bookworm's apt nodejs is 18.
+    - |
+      set -euo pipefail
+      HAVE="$(node --version)"
+      if [ "${HAVE%%.*}" != "v${NODE_MAJOR}" ]; then
+          echo "expected node ${NODE_MAJOR}.x, got ${HAVE}" >&2
+          exit 1
+      fi
 
 fmt:
   stage: check
@@ -106,15 +136,23 @@ cross-profile:
 wasm-npm:
   stage: test
   script:
+    # Node comes from nodesource, not apt: the npm package declares
+    # engines.node >= 20 and its wrapper builds with TypeScript 7, and
+    # bookworm's apt nodejs is 18.
+    - apt-get update
+    - !reference [.setup-node, script]
     # `curl | sh` must fail if curl fails. Without pipefail the installer
     # can run on a truncated script and exit 0.
     - |
       set -euo pipefail
-      apt-get update && apt-get install -y --no-install-recommends nodejs
       curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       cd crates/pqhybridsign-wasm
       ./scripts/check-types.sh
       ./scripts/build-npm.sh
+      # The Promise-API suite against the built dist/, on top of (not
+      # instead of) the raw-export smoke test below, which still guards
+      # the underlying wasm-bindgen surface.
+      (cd npm && npm test)
       node tests/node/sign_and_verify.mjs
 
 deny:
@@ -280,3 +318,448 @@ python:
       cd crates/pqhybridsign-py
       maturin develop
       pytest
+
+# ---------------------------------------------------------------------------
+# Release pipeline.
+#
+# The dry run always runs. The real publish runs only on a tag.
+#
+#   release:validate  every pipeline. Dry-runs all four publish paths.
+#   smoke:*           every pipeline. Install the built artifacts and run
+#                     the roundtrip examples against them.
+#   release:npm       tag only. Publishes @quip.network/pqhybridsign.
+#   release:pypi      tag only. Publishes the wheel and sdist.
+#   release:clib      tag only. Attaches the C library tarball.
+#   release:crates    tag only. Publishes the four crates, last, because
+#                     crates.io is the one registry that can never accept a
+#                     replacement for a version.
+#   release:notes     tag only. Creates the release page once all of the
+#                     above are live.
+#
+# No CI/CD variables and no stored secrets. All three registries use OIDC
+# trusted publishing: each pipeline proves its own identity and receives a
+# short-lived token. Every registry needs its publisher registered once
+# against namespace quip.network, project pqhybridsign, pipeline
+# .gitlab-ci.yml, and the environment named on the job below (npm, pypi,
+# crates-io). crates.io needs one registration per crate. A protected tag
+# pattern `v*` keeps these environments reachable only from a
+# Maintainer-pushed tag.
+#
+# The first rc1 artifacts were published by hand from the CLI, so every
+# publish job skips a version that is already live rather than failing on
+# it. A re-run after a partial failure is safe the same way.
+# ---------------------------------------------------------------------------
+
+.on-release-tag: &on-release-tag
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d/
+
+# Runs on every pipeline. This is the gate everything downstream hangs off.
+#
+# It writes to no registry: every step is a dry run or a local build, and
+# `make check-release` runs the same steps locally. Its artifacts are the
+# exact files the publish jobs upload, which is what lets the smoke jobs
+# test the real thing instead of a rebuild.
+release:validate:
+  stage: validate
+  # No `rules:` on purpose: a broken release setup should fail on a branch
+  # pipeline, not halfway through a release.
+  #
+  # `needs:` starts a job as soon as its own needs are met and ignores stage
+  # order, so a job left off this list is not waited for at all. Two jobs are
+  # deliberately absent: schedule-exists is allow_failure and informational,
+  # so it must never gate a release; regenerate-fixtures exists only in
+  # scheduled pipelines, and a needs: edge onto a job that is absent from
+  # the pipeline makes the whole pipeline invalid.
+  needs:
+    - job: fmt
+    - job: clippy
+    - job: deps
+    - job: no-std
+    - job: wasm
+    - job: cross-profile
+    - job: msrv
+    - job: doc
+    - job: deny
+    - job: test-debug
+    - job: test-release
+    - job: wasm-npm
+    - job: profile-matrix
+    - job: smoke-128s-q18
+    - job: c-abi
+    - job: python
+  dependencies: []
+  timeout: 60m
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends python3 python3-venv python3-dev jq
+    - !reference [.setup-node, script]
+    - |
+      set -euo pipefail
+      curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+  script:
+    # The C library tarball carries the tag in its name on a tag pipeline,
+    # and the short SHA otherwise, so a branch artifact is never mistaken
+    # for a release one.
+    - export TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+    # On a tag pipeline the tag IS the version, so the manifests must
+    # already agree with it. Checked before anything is built, because this
+    # is the last point where the answer costs nothing.
+    - |
+      set -euo pipefail
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+          python3 scripts/check-release-version.py "$CI_COMMIT_TAG"
+      else
+          echo "Not a tag pipeline; skipping the tag/manifest version check."
+      fi
+    - make check-release TAG="$TAG"
+  artifacts:
+    name: "pqhybridsign-artifacts-${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+    paths:
+      - target/package/*.crate
+      - dist/python/*.whl
+      - dist/python/*.tar.gz
+      - crates/pqhybridsign-wasm/npm/*.tgz
+      - dist/pqhybridsign-clib-*.tar.gz
+      - dist/pqhybridsign-clib-*.tar.gz.sha256
+    expire_in: 1 week
+
+.smoke:
+  stage: smoke
+  needs:
+    - job: release:validate
+      artifacts: true
+  timeout: 30m
+
+# Builds against the PACKAGED crates, unpacked from the .crate tarballs,
+# rather than against crates/. [patch.crates-io] redirects the registry
+# dependency to the unpacked package, so a file missing from the tarball
+# fails here instead of after publication. cargo warns about patch entries
+# the example does not use (shrincs, abi); the warning is harmless and the
+# loop stays uniform.
+smoke:rust:
+  extends: .smoke
+  script:
+    - mkdir -p /opt/pkg && for f in target/package/*.crate; do tar xzf "$f" -C /opt/pkg; done
+    - ls /opt/pkg
+    - |
+      {
+        echo
+        echo '[patch.crates-io]'
+        for d in /opt/pkg/*/; do
+          name=$(basename "${d%/}" | sed -E 's/-[0-9]+\.[0-9]+\.[0-9]+.*$//')
+          echo "$name = { path = \"${d%/}\" }"
+        done
+      } >> examples/rust/Cargo.toml
+    - tail -8 examples/rust/Cargo.toml
+    - cd examples/rust && cargo run --release
+
+# Compiles against the released tarball's header and library only. The
+# repository's target/ is never on the include or link path, so a header
+# that does not match the shipped object fails here.
+smoke:cpp:
+  extends: .smoke
+  script:
+    - mkdir -p /opt/clib && tar xzf dist/pqhybridsign-clib-*.tar.gz -C /opt/clib
+    - ls -R /opt/clib
+    - g++ -std=c++17 -O2 -Wall -Wextra -I/opt/clib/include examples/cpp/roundtrip.cpp
+      -o /tmp/roundtrip_cpp -L/opt/clib -Wl,-rpath,/opt/clib -lpqhybridsign_cffi
+    - /tmp/roundtrip_cpp
+
+# Installs the built wheel into a fresh virtual environment. The example
+# imports pqhybridsign from site-packages, not from crates/ in this tree.
+smoke:python:
+  extends: .smoke
+  image: python:3.11
+  before_script: []
+  script:
+    - python -m venv /opt/venv
+    - /opt/venv/bin/pip install --quiet dist/python/*.whl
+    - /opt/venv/bin/python -c "import pqhybridsign; print('pqhybridsign from', pqhybridsign.__file__)"
+    - /opt/venv/bin/python examples/python/roundtrip.py
+
+# Installs the packed tarball into a clean project. The example resolves
+# @quip.network/pqhybridsign from node_modules, not from crates/ in this
+# tree.
+smoke:typescript:
+  extends: .smoke
+  before_script:
+    - apt-get update
+    - !reference [.setup-node, script]
+  script:
+    - mkdir -p /opt/ts && cp -r examples/typescript/src examples/typescript/tsconfig.json examples/typescript/package.json /opt/ts/
+    - cd /opt/ts
+    - npm install --no-audit --no-fund "$CI_PROJECT_DIR"/crates/pqhybridsign-wasm/npm/quip.network-pqhybridsign-*.tgz
+    - npm install --no-audit --no-fund
+    - npx tsc
+    - node dist/roundtrip.js
+
+release:npm:
+  stage: release
+  <<: *on-release-tag
+  needs:
+    - job: release:validate
+      artifacts: true
+    - job: smoke:rust
+    - job: smoke:cpp
+    - job: smoke:python
+    - job: smoke:typescript
+  environment:
+    name: npm
+    url: https://www.npmjs.com/package/@quip.network/pqhybridsign
+  # NPM_ID_TOKEN authenticates the publish. SIGSTORE_ID_TOKEN signs a
+  # provenance attestation, which this job disables because npm accepts one
+  # only from a GitLab-hosted runner. It stays declared so that moving this
+  # job to a hosted runner is the only change needed to restore provenance.
+  id_tokens:
+    NPM_ID_TOKEN:
+      aud: npm:registry.npmjs.org
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  timeout: 30m
+  before_script:
+    - apt-get update
+    - !reference [.setup-node, script]
+    # 11.5.1 is the floor for OIDC trusted publishing.
+    - npm install -g npm@latest
+  script:
+    # Preflight, because npm reports a rejected or missing OIDC token as
+    # ENEEDAUTH, which sends you looking for a password this pipeline
+    # deliberately does not have.
+    - |
+      set -euo pipefail
+      require_min() {
+          local what="$1" have="$2" want="$3"
+          if [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n1)" != "$want" ]; then
+              echo "$what $have is below the $want that npm trusted publishing requires." >&2
+              exit 1
+          fi
+      }
+      NODE_HAVE="$(node --version)"
+      NPM_HAVE="$(npm --version)"
+      echo "node ${NODE_HAVE}, npm ${NPM_HAVE}"
+      require_min node "${NODE_HAVE#v}" 22.14.0
+      require_min npm "${NPM_HAVE}" 11.5.1
+      : "${NPM_ID_TOKEN:?NPM_ID_TOKEN is unset. Declare it under id_tokens: with aud: npm:registry.npmjs.org}"
+      echo "NPM_ID_TOKEN is present (${#NPM_ID_TOKEN} chars)."
+    - cd crates/pqhybridsign-wasm/npm
+    # Exactly one tarball, or the glob below would publish an arbitrary one.
+    # release:validate packs it after deleting stale ones, so a second file
+    # here means the artifact set is not what this job expects.
+    - |
+      set -euo pipefail
+      set -- ./quip.network-pqhybridsign-*.tgz
+      if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+          echo "expected exactly one packed tarball, found: $*" >&2
+          exit 1
+      fi
+      TARBALL="$1"
+      export TARBALL
+      echo "publishing $TARBALL"
+    # A version that is already live is a success, not a failure: rc1 was
+    # published by hand to create the package for trusted publishing, and a
+    # re-run after a partial pipeline failure lands here too. npm has no
+    # --skip-existing, so the check is explicit.
+    #
+    # The dist-tag is derived from the version: a semver prerelease (a
+    # hyphen after the version core) publishes under `next`, anything else
+    # under `latest`. Publishing the packed tarball, not the directory,
+    # skips prepack entirely, so what ships is the artifact
+    # smoke:typescript installed and drove.
+    #
+    # --no-provenance is required, not a preference: npm turns provenance
+    # on by itself under trusted publishing and accepts the bundle only
+    # from a GitLab-hosted runner.
+    - |
+      set -euo pipefail
+      VERSION="${CI_COMMIT_TAG#v}"
+      if [ -n "$(npm view "@quip.network/pqhybridsign@${VERSION}" version 2>/dev/null || true)" ]; then
+          echo "@quip.network/pqhybridsign@${VERSION} is already on npm; nothing to publish."
+          exit 0
+      fi
+      case "$VERSION" in
+          *-*) DIST_TAG="next" ;;
+          *) DIST_TAG="latest" ;;
+      esac
+      echo "version $VERSION publishes under dist-tag $DIST_TAG"
+      npm publish "$TARBALL" --tag "$DIST_TAG" --no-provenance
+
+release:pypi:
+  stage: pypi
+  # A plain Python image, because this job builds nothing. It promotes the
+  # wheel and sdist release:validate built and smoke:python installed and
+  # ran.
+  image: python:3.11
+  <<: *on-release-tag
+  # Waits for npm, the one registry whose publish can still be undone.
+  needs:
+    - job: release:validate
+      artifacts: true
+    - job: smoke:rust
+    - job: smoke:cpp
+    - job: smoke:python
+    - job: smoke:typescript
+    - job: release:npm
+  # Matches the environment registered on the PyPI trusted publisher. PyPI
+  # rejects the OIDC exchange when the two disagree.
+  environment:
+    name: pypi
+    url: https://pypi.org/project/pqhybridsign/
+  # The audience must be the literal `pypi`, not `pypi.org`.
+  id_tokens:
+    PYPI_ID_TOKEN:
+      aud: pypi
+  timeout: 30m
+  before_script: []
+  script:
+    - python3 -m pip install --disable-pip-version-check twine
+    - ls -la dist/python/
+    - twine check dist/python/*
+    # Exchange the short-lived GitLab token for a PyPI API token. Minted
+    # in-process by python3 rather than by curl: the OIDC token is a live
+    # credential, and putting it in a process argument list makes it
+    # readable through /proc and echoed by any shell trace.
+    - |
+      set -euo pipefail
+      MINTED=$(python3 - <<'PY'
+      import json
+      import os
+      import urllib.request
+
+      request = urllib.request.Request(
+          "https://pypi.org/_/oidc/mint-token",
+          data=json.dumps({"token": os.environ["PYPI_ID_TOKEN"]}).encode(),
+          headers={"Content-Type": "application/json"},
+      )
+      with urllib.request.urlopen(request) as response:
+          print(json.load(response)["token"])
+      PY
+      )
+      # --skip-existing so a re-run after a partial failure is safe.
+      # --verbose because twine prints the HTTP status and hides the body,
+      # and a bare "400 Bad Request" says nothing about the cause.
+      TWINE_USERNAME=__token__ TWINE_PASSWORD="$MINTED" twine upload --verbose --skip-existing dist/python/*
+  artifacts:
+    paths:
+      - dist/python/*.whl
+      - dist/python/*.tar.gz
+    expire_in: never
+
+# The C library ships as a release asset rather than through a registry,
+# because a C consumer wants the compiled object and the header. This job
+# promotes the tarball release:validate already built and smoke:cpp already
+# compiled against; rebuilding here would attach an object no smoke test
+# ever exercised.
+release:clib:
+  stage: release
+  <<: *on-release-tag
+  needs:
+    - job: release:validate
+      artifacts: true
+    - job: smoke:rust
+    - job: smoke:cpp
+    - job: smoke:python
+    - job: smoke:typescript
+  timeout: 10m
+  script:
+    - cd dist && sha256sum -c pqhybridsign-clib-*.tar.gz.sha256
+    - ls -la pqhybridsign-clib-*
+  artifacts:
+    name: "pqhybridsign-clib-$CI_COMMIT_TAG"
+    paths:
+      - dist/pqhybridsign-clib-*.tar.gz
+      - dist/pqhybridsign-clib-*.tar.gz.sha256
+    expire_in: never
+
+release:crates:
+  stage: crates
+  <<: *on-release-tag
+  # Depends on the other registries, not only on the gates. This is the
+  # irreversible publish, so it must not run until the reversible ones have
+  # succeeded.
+  needs:
+    - job: release:validate
+      artifacts: true
+    - job: smoke:rust
+    - job: smoke:cpp
+    - job: smoke:python
+    - job: smoke:typescript
+    - job: release:npm
+    - job: release:pypi
+  environment:
+    name: crates-io
+    url: https://crates.io/crates/pqhybridsign
+  # Trusted publishing, so no long-lived token is stored. The audience must
+  # be the literal `crates.io`.
+  id_tokens:
+    CRATES_IO_ID_TOKEN:
+      aud: crates.io
+  timeout: 30m
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends jq
+  script:
+    # Assignment and export are separate statements. `export VAR=$(cmd)`
+    # takes its exit status from `export`, which succeeds whatever the
+    # command did, so a rejected token exchange would otherwise continue to
+    # `cargo publish` with an empty token.
+    - CARGO_REGISTRY_TOKEN="$(bash scripts/exchange-crates-token.sh)"
+    - export CARGO_REGISTRY_TOKEN
+    # Per crate, in dependency order, skipping versions that are already
+    # live. cargo hard-fails on an already-published version and has no
+    # --skip-existing, and rc1 of all four crates was published by hand to
+    # create them for trusted publishing, so the first tag pipeline finds
+    # every version already present. The sparse index answers "is this
+    # version live" without authentication: all four names share the
+    # pq/hy prefix (first two, next two characters of the name).
+    - |
+      set -euo pipefail
+      VERSION="${CI_COMMIT_TAG#v}"
+      for crate in pqhybridsign-core pqhybridsign pqhybridsign-shrincs pqhybridsign-abi; do
+        if curl -fsSL "https://index.crates.io/pq/hy/${crate}" | jq -r '.vers' | grep -qxF "$VERSION"; then
+          echo "${crate} ${VERSION} is already on crates.io; skipping."
+        else
+          cargo publish --locked -p "${crate}"
+        fi
+      done
+
+# Runs last so the release page appears only once every artifact is live. A
+# release pointing at a package that failed to publish is worse than no
+# release. Uses the declarative `release:` keyword, so CI_JOB_TOKEN is
+# enough and a re-run does not error when the release already exists.
+release:notes:
+  stage: notes
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  <<: *on-release-tag
+  needs:
+    - job: release:crates
+    - job: release:pypi
+    - job: release:npm
+    - job: release:clib
+      artifacts: true
+  timeout: 15m
+  before_script: []
+  script:
+    - echo "Creating the release page for $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "pqhybridsign $CI_COMMIT_TAG"
+    description: |
+      pqhybridsign $CI_COMMIT_TAG.
+
+      | Artifact | Where |
+      | -- | -- |
+      | `pqhybridsign-core`, `pqhybridsign`, `pqhybridsign-shrincs`, `pqhybridsign-abi` | crates.io |
+      | `pqhybridsign` wheel and sdist | PyPI |
+      | `@quip.network/pqhybridsign` | npm |
+      | `libpqhybridsign_cffi` plus `pqhybridsign.h` | attached below |
+
+      See CHANGELOG.md for the changes in this version, and examples/ for a
+      sign/verify roundtrip in Rust, C++, Python, and TypeScript.
+    assets:
+      links:
+        - name: "C library, Linux amd64"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/pqhybridsign-clib-${CI_COMMIT_TAG}-linux-amd64.tar.gz?job=release:clib"
+          link_type: package
+        - name: "C library checksum"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/dist/pqhybridsign-clib-${CI_COMMIT_TAG}-linux-amd64.tar.gz.sha256?job=release:clib"
+          link_type: other
