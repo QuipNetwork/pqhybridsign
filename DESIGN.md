@@ -39,7 +39,7 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | `pqhybridsign-core` | Component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port | `subtle`, `zeroize`, `hkdf`, `sha2` |
 | `pqhybridsign` | H1 through H4 | core, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa` |
 | `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` from crates.io |
-| `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter | core, `pqhybridsign`, `pqhybridsign-shrincs` |
+| `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter. Not published: the bindings reach it by path | core, `pqhybridsign`, `pqhybridsign-shrincs` |
 | `pqhybridsign-cffi` | C ABI, with a checked-in header. Ships as a release-asset C library | abi |
 | `pqhybridsign-wasm` | WebAssembly, shipped as an npm package. Signing is H1 through H4 only. H5 and H6 are verify-side only | abi |
 | `pqhybridsign-py` | Python bindings on the `abi3-py39` stable ABI, shipped as a PyPI wheel | abi |
@@ -59,11 +59,14 @@ the release.
 All publishing runs through GitLab OIDC trusted publishing. No registry
 holds a stored secret.
 
-`pqhybridsign-cffi`, `pqhybridsign-py`, and `pqhybridsign-wasm` keep
-`publish = false`. Each already ships through its own channel. The C
-library ships as the GitLab release asset. The Python bindings ship as the
-PyPI wheel. The WebAssembly bindings ship as the npm package. A Rust
-consumer wants the library crates, not a foreign-ABI wrapper.
+Four crates keep `publish = false`. `pqhybridsign-cffi`, `pqhybridsign-py`,
+and `pqhybridsign-wasm` each ship through their own channel: the C library
+as the GitLab release asset, the Python bindings as the PyPI wheel, the
+WebAssembly bindings as the npm package. A Rust consumer wants the library
+crates, not a foreign-ABI wrapper. `pqhybridsign-abi` is not published for a
+different reason. It exists only to carry those three bindings, and they
+reach it by path. No published crate depends on it, so a crates.io release
+and its trusted-publisher registration would serve nothing.
 
 The workspace denies `unsafe_code` for every crate through
 `[workspace.lints.rust]`. The five pure-Rust crates also set

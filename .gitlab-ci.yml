@@ -728,7 +728,7 @@ release:crates:
     - |
       set -euo pipefail
       VERSION="${CI_COMMIT_TAG#v}"
-      for crate in pqhybridsign-core pqhybridsign pqhybridsign-shrincs pqhybridsign-abi; do
+      for crate in pqhybridsign-core pqhybridsign pqhybridsign-shrincs; do
         if curl -fsSL "https://index.crates.io/pq/hy/${crate}" | jq -r '.vers' | grep -qxF "$VERSION"; then
           echo "${crate} ${VERSION} is already on crates.io; skipping."
         else
@@ -762,7 +762,7 @@ release:notes:
 
       | Artifact | Where |
       | -- | -- |
-      | `pqhybridsign-core`, `pqhybridsign`, `pqhybridsign-shrincs`, `pqhybridsign-abi` | crates.io |
+      | `pqhybridsign-core`, `pqhybridsign`, `pqhybridsign-shrincs` | crates.io |
       | `pqhybridsign` wheel and sdist | PyPI |
       | `@quip.network/pqhybridsign` | npm |
       | `libpqhybridsign_cffi` plus `pqhybridsign.h` | attached below |

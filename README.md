@@ -60,7 +60,8 @@ pqhybridsign-shrincs = "0.0.0-rc2"
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
-WebAssembly bindings share. A Rust consumer does not need it.
+WebAssembly bindings share. A Rust consumer does not need it, and it is not
+published to crates.io.
 
 ### JavaScript and TypeScript
 

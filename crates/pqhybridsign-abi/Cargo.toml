@@ -9,6 +9,13 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Not published to crates.io. The type-erased API exists only to carry the
+# C, Python, and WebAssembly bindings, and those three crates reach it by
+# path, not by registry version. No published crate depends on it, so
+# publishing it adds a crates.io release and a trusted-publisher
+# registration for nothing. Remove this line only if an external consumer
+# ever needs to build a binding on the runtime-dispatch API directly.
+publish = false
 
 [dependencies]
 pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc2" }
