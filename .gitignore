@@ -18,3 +18,11 @@ Cargo.lock.bak
 
 # Python packaging build output (maturin/twine)
 /dist/
+
+# Packed npm tarball (npm pack output; release:validate artifacts, never committed)
+crates/pqhybridsign-wasm/npm/*.tgz
+# TypeScript example build output. The lock file stays out too: before the
+# npm package is published it can only record a file: URL into this tree.
+examples/typescript/dist/
+examples/typescript/node_modules/
+examples/typescript/package-lock.json
