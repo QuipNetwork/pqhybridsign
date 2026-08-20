@@ -1,0 +1,20 @@
+# Empty table on purpose: this makes the example a standalone workspace
+# rather than a member of the repository's, so it resolves pqhybridsign
+# and pqhybridsign-core from crates.io like any external consumer would.
+[workspace]
+
+[package]
+name = "pqhybridsign-roundtrip-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Sign/verify roundtrip example, built against the published crates.io release"
+
+[dependencies]
+# Registry releases only, no path dependency into this repository.
+pqhybridsign = "0.0.0-rc1"
+pqhybridsign-core = "0.0.0-rc1"
+
+[[bin]]
+name = "roundtrip"
+path = "src/main.rs"
