@@ -10,7 +10,26 @@ name = "pqhybridsign"
 dynamic = ["version"]
 description = "Python bindings for pqhybridsign, a suite of hybrid classical/post-quantum signature schemes"
 readme = "README.md"
-license = { text = "AGPL-3.0-or-later" }
+# The workspace LICENSE lives two directories up from this file (the crate
+# root, then the crates/ directory). The modern PEP 639 mechanisms --
+# `license = "<SPDX expression>"` plus a `license-files` glob, or this
+# crate's own `[tool.maturin] include` -- both refuse a pattern that steps
+# outside the project directory with `..`, so neither can reach it. The
+# legacy PEP 621 `license.file` form has no such restriction: maturin
+# copies the file it names into the wheel's `dist-info/licenses/` and the
+# sdist's package root, and writes the matching `License-File` metadata
+# entry from wherever it copied the file, not from a project-relative
+# guess.
+#
+# quip-solver-core hit the failure mode this guards against, with a
+# pyproject.toml that sat next to its LICENSE and used the modern form:
+# maturin wrote `License-File: LICENSE` into sdist metadata but packed no
+# such file, because a stale copy of that logic did not account for a
+# root-level file outside the crate. twine check accepted the mismatch;
+# PyPI rejected the upload with 400 after already accepting the wheel of
+# the same version. See scripts/check-sdist-license-files.sh, which
+# catches this before upload.
+license = { file = "../../LICENSE" }
 requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
