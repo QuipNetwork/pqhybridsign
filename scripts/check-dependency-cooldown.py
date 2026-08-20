@@ -5,9 +5,11 @@
 A supply-chain attack on a crate is loudest in the hours after it is
 published: the malicious version is live, and the attacker often yanks the
 prior good versions to force a `cargo update` onto the new one. A cooldown
-turns that window into a wall. This script reads Cargo.lock, asks crates.io
-when each locked version was published, and fails when any version is
-younger than the cooldown.
+turns that window into a wall. This script reads Cargo.lock, finds when each
+locked version was published, and fails when any version is younger than the
+cooldown. It reads the publish time from the local Cargo sparse-index cache
+(Cargo 1.94 and later record it there), and falls back to the crates.io API
+for any version the cache does not hold.
 
 The attack this guards against, in full, is recorded in the incident notes:
 `arrayref 0.3.9` was yanked and a malicious `arrayref 0.3.10` published in
@@ -40,6 +42,7 @@ import argparse
 import concurrent.futures
 import datetime
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -81,8 +84,65 @@ def load_allowlist(root: Path) -> dict[tuple[str, str], str]:
     return out
 
 
-def published_at(name: str, version: str) -> datetime.datetime:
-    """Return the crates.io publication time of one version.
+def _index_cache_files(name: str) -> list[Path]:
+    """Return the sparse-index cache files for a crate, most likely first.
+
+    Cargo 1.94 and later record each version's publish time in the local
+    sparse-index cache. The cache shards a name into a path by length: one
+    character is `1/<name>`, two is `2/<name>`, three is `3/<c>/<name>`, and
+    four or more is `<first two>/<next two>/<name>`.
+    """
+    lowered = name.lower()
+    if len(lowered) == 1:
+        shard = Path("1") / lowered
+    elif len(lowered) == 2:
+        shard = Path("2") / lowered
+    elif len(lowered) == 3:
+        shard = Path("3") / lowered[0] / lowered
+    else:
+        shard = Path(lowered[0:2]) / lowered[2:4] / lowered
+    cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    root = cargo_home / "registry" / "index"
+    return [
+        index / ".cache" / shard
+        for index in sorted(root.glob("index.crates.io-*"))
+    ]
+
+
+def published_at_index(name: str, version: str) -> datetime.datetime | None:
+    """Return the publish time from the local sparse-index cache, or None.
+
+    None means the answer is not in the cache (the crate or version was never
+    fetched, the cache predates Cargo 1.94, or the file could not be parsed).
+    The caller then asks crates.io. This path never raises, so a cache miss
+    can only fall back, never fail the check.
+    """
+    for path in _index_cache_files(name):
+        if not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        for part in raw.split(b"\x00"):
+            part = part.strip()
+            if not part.startswith(b"{"):
+                continue
+            try:
+                entry = json.loads(part)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("vers") == version and entry.get("pubtime"):
+                stamp = entry["pubtime"].replace("Z", "+00:00")
+                try:
+                    return datetime.datetime.fromisoformat(stamp)
+                except ValueError:
+                    return None
+    return None
+
+
+def published_at_api(name: str, version: str) -> datetime.datetime:
+    """Return the crates.io publication time of one version, over the API.
 
     Raises RuntimeError if the version cannot be found after retries, so the
     caller fails closed rather than treating an unknown as safe.
@@ -109,6 +169,14 @@ def published_at(name: str, version: str) -> datetime.datetime:
     raise RuntimeError(
         f"could not reach crates.io for {name} {version}: {last_error}"
     )
+
+
+def published_at(name: str, version: str) -> datetime.datetime:
+    """Return the publish time, from the local index if possible, else the API."""
+    from_index = published_at_index(name, version)
+    if from_index is not None:
+        return from_index
+    return published_at_api(name, version)
 
 
 def check(

@@ -44,7 +44,7 @@ fmt:
 clippy:
   stage: check
   script:
-    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo clippy --locked --workspace --all-targets -- -D warnings
 
 deps:
   stage: check
@@ -65,7 +65,7 @@ deps:
     # artifact and does not put a second RngCore in front of any component.
     - |
       set -euo pipefail
-      versions=$(cargo tree --workspace -e normal,build --prefix none \
+      versions=$(cargo tree --locked --workspace -e normal,build --prefix none \
         | grep -o 'rand_core v[0-9][0-9.]*' | sort -u || true)
       count=$(printf '%s\n' "$versions" | grep -c '^rand_core v' || true)
       if [ "$count" -ne 1 ]; then
@@ -103,20 +103,20 @@ no-std:
   stage: check
   script:
     - rustup target add thumbv7em-none-eabi
-    - cargo build -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
-    - cargo build -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
-    - cargo test -p pqhybridsign-core --no-default-features
-    - cargo test -p pqhybridsign-core --no-default-features --features alloc
+    - cargo build --locked -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
+    - cargo build --locked -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
+    - cargo test --locked -p pqhybridsign-core --no-default-features
+    - cargo test --locked -p pqhybridsign-core --no-default-features --features alloc
 
 wasm:
   stage: check
   script:
-    - cargo build -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features
-    - cargo build -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features --features alloc
+    - cargo build --locked -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features
+    - cargo build --locked -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features --features alloc
     # The lattice crate must also build without an allocator: it is the
     # crate that pulls in ed25519-zebra, schnorrkel and fips204, any of
     # which could introduce a std or getrandom dependency.
-    - cargo build -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
+    - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
 
 cross-profile:
   stage: check
@@ -131,7 +131,7 @@ cross-profile:
       set -euo pipefail
       out=$(mktemp)
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
-        cargo test -p pqhybridsign-shrincs --release --no-default-features \
+        cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
           --features "$p" --test cross_profile -- --nocapture \
           | grep CROSS_PROFILE_FINGERPRINT >> "$out"
       done
@@ -177,7 +177,7 @@ deny:
 doc:
   stage: check
   script:
-    - RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+    - RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 
 msrv:
   stage: check
@@ -198,14 +198,14 @@ msrv:
 test-debug:
   stage: test
   script:
-    - cargo test --workspace
+    - cargo test --locked --workspace
 
 test-release:
   stage: test
   script:
     # subtle uses debug_assert with secret-dependent branches, so release
     # mode exercises different code than the debug build above.
-    - cargo test --workspace --release
+    - cargo test --locked --workspace --release
 
 # Full suite under each of the four profiles. Proves the tiering holds: a
 # test that generates a key under a 128s profile slows this job and is the
@@ -221,9 +221,9 @@ profile-matrix:
     - |
       set -euo pipefail
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
-        cargo clippy -p pqhybridsign-shrincs --all-targets --no-default-features \
+        cargo clippy --locked -p pqhybridsign-shrincs --all-targets --no-default-features \
           --features "$p" -- -D warnings
-        cargo test -p pqhybridsign-shrincs --release --no-default-features \
+        cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
           --features "$p"
       done
 
@@ -235,7 +235,7 @@ smoke-128s-q18:
   stage: test
   script:
     - |
-      cargo test -p pqhybridsign-shrincs --release --no-default-features \
+      cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
         --features profile-128s-q18 --test smoke_128s -- --ignored
 
 # regenerate-fixtures is gated on a pipeline schedule. If no schedule
@@ -293,7 +293,7 @@ regenerate-fixtures:
     - |
       set -euo pipefail
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
-        cargo test -p pqhybridsign-shrincs --release --no-default-features \
+        cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
           --features "$p" --test generate_fixtures -- --ignored --nocapture
       done
       # `git diff` alone would ignore a fixture the generator created rather
