@@ -26,3 +26,7 @@ crates/pqhybridsign-wasm/npm/*.tgz
 examples/typescript/dist/
 examples/typescript/node_modules/
 examples/typescript/package-lock.json
+
+# Python bytecode
+__pycache__/
+*.pyc
