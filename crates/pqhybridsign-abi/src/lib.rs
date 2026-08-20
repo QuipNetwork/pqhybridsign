@@ -43,7 +43,7 @@ variable-length.
 # Out of scope
 
 Key rotation and the leaf-tracking policy machine
-([`pqhybridsign_core::rotation`], [`pqhybridsign_core::policy`]) are not
+([`pqhybridsign::rotation`], [`pqhybridsign::policy`]) are not
 part of this crate's surface. Both need registry state -- which leaves a
 key has already offered, which rotation epoch is current -- that has to
 live in the integrator's own system, not behind a stateless FFI call.
@@ -92,7 +92,7 @@ pub use verify::verify;
 /// An implementation must persist a [`KeyIdentity`] alongside its leaf
 /// counter, and both must survive a restart. See the trait's own
 /// documentation for why the counter alone is not enough.
-pub use pqhybridsign_core::stateful::LeafJournal;
+pub use pqhybridsign::stateful::LeafJournal;
 
 /// Re-exported so a caller can implement [`StatelessBudgetStore`] for
 /// [`sign_stateless`] without depending on `pqhybridsign-core` directly.
@@ -106,7 +106,7 @@ pub use pqhybridsign_core::stateful::LeafJournal;
 /// material, so one store serves every key an integrator holds and no
 /// separate adoption step is needed: a store that has never seen a given
 /// material reports `None` for that material alone.
-pub use pqhybridsign_core::budget::StatelessBudgetStore;
+pub use pqhybridsign::budget::StatelessBudgetStore;
 
 /// The fixed-width identity a [`StatelessBudgetStore`] keys its entries by.
 ///
@@ -115,7 +115,7 @@ pub use pqhybridsign_core::budget::StatelessBudgetStore;
 /// resolve to the same value, and two keys with different stateless material
 /// never do -- which is what makes a rotation unable to refill the bound
 /// while the material itself survives.
-pub use pqhybridsign_core::budget::BudgetKey;
+pub use pqhybridsign::budget::BudgetKey;
 
 /// The public name a [`LeafJournal`] records for the one key it belongs to.
 ///
@@ -124,7 +124,7 @@ pub use pqhybridsign_core::budget::BudgetKey;
 /// journal once with [`adopt_key`], and store the
 /// [`KEY_IDENTITY_LEN`]-byte value
 /// ([`KeyIdentity::as_bytes`]) next to the counter.
-pub use pqhybridsign_core::stateful::{KeyIdentity, KEY_IDENTITY_LEN};
+pub use pqhybridsign::stateful::{KeyIdentity, KEY_IDENTITY_LEN};
 
 /// Re-exported so a caller can check a SHRINCS commitment bundle on its own,
 /// without depending on `pqhybridsign-shrincs` directly.
@@ -137,7 +137,7 @@ pub use pqhybridsign_core::stateful::{KeyIdentity, KEY_IDENTITY_LEN};
 /// `hashsigs_rs::shrincs::PublicKey`, from a crate this one does not
 /// re-export, so a caller who cannot name that type can still use the
 /// `Result` as a yes or no.
-pub use pqhybridsign_shrincs::bundle::{verify_bundle, BundleError};
+pub use pqhybridsign::shrincs::bundle::{verify_bundle, BundleError};
 
 /// The SHRINCS profile this build links against, for example
 /// `"shrincs-256s"`.
@@ -152,7 +152,7 @@ pub use pqhybridsign_shrincs::bundle::{verify_bundle, BundleError};
 /// wire.
 #[must_use]
 pub fn profile_name() -> &'static str {
-    <<pqhybridsign_shrincs::H5 as pqhybridsign_core::suite::StatefulSuite>::Pq as pqhybridsign_core::component::PqStatefulScheme>::NAME
+    <<pqhybridsign::shrincs::H5 as pqhybridsign::suite::StatefulSuite>::Pq as pqhybridsign::component::PqStatefulScheme>::NAME
 }
 
 #[cfg(test)]

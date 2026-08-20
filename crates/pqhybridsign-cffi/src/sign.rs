@@ -87,7 +87,7 @@ pub unsafe extern "C" fn pqhs_sign(
 /// and the number of bytes written into `*sig_written`.
 ///
 /// Not every component honours `nonce`; see
-/// `pqhybridsign_core::composite::sign_deterministic`'s documentation for
+/// `pqhybridsign::composite::sign_deterministic`'s documentation for
 /// which do.
 ///
 /// # Errors

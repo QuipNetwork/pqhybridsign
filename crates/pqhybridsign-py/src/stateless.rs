@@ -83,7 +83,7 @@ pub(crate) fn sign(
 /// Deterministic signing for `suite`. Returns the signature as `bytes`.
 ///
 /// Not every suite's classical or post-quantum component honours `nonce`;
-/// see `pqhybridsign_core::composite::sign_deterministic`.
+/// see `pqhybridsign::composite::sign_deterministic`.
 ///
 /// # Errors
 ///

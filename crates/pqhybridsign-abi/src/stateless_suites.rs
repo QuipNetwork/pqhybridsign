@@ -7,8 +7,8 @@
 //! H6 spend a one-time leaf per signature, and a call shaped like an
 //! ordinary stateless sign must never be able to consume one.
 
+use pqhybridsign::{composite, composite_delta, suite::Suite as CoreSuite};
 use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_core::{composite, composite_delta, suite::Suite as CoreSuite};
 use rand_core::CryptoRngCore;
 
 use crate::error::AbiError;
@@ -80,7 +80,7 @@ pub fn sign(
 /// Deterministic signing for `suite`. Returns the number of bytes written
 /// into `sig_out`.
 ///
-/// See [`pqhybridsign_core::composite::sign_deterministic`] for which
+/// See [`pqhybridsign::composite::sign_deterministic`] for which
 /// components honour `nonce`; not every suite does.
 ///
 /// # Errors

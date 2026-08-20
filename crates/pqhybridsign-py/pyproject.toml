@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "pqhybridsign"
 # Derived from crates/pqhybridsign-py/Cargo.toml's `version.workspace =
-# true` (currently 0.0.0-rc2) rather than pinned here, so the wheel cannot
+# true` (currently 0.0.0-rc3) rather than pinned here, so the wheel cannot
 # drift from the workspace version the way a literal copy did before.
 dynamic = ["version"]
 description = "Python bindings for pqhybridsign, a suite of hybrid classical/post-quantum signature schemes"

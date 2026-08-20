@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_core::encoding_path::{CLASSICAL_SIG_LEN, LEAF_COUNT_LEN, SELECTOR_LEN};
-use pqhybridsign_core::stateful_composite::SecretKey;
-use pqhybridsign_core::{
+use pqhybridsign::encoding_path::{CLASSICAL_SIG_LEN, LEAF_COUNT_LEN, SELECTOR_LEN};
+use pqhybridsign::shrincs::{H5, H6};
+use pqhybridsign::stateful_composite::SecretKey;
+use pqhybridsign::{
     component::PqStatefulScheme,
     suite::{DeltaSuite, StatefulSuite, Suite as CoreSuite},
 };
-use pqhybridsign_shrincs::{H5, H6};
+use pqhybridsign::{H1, H2, H3, H4};
 
 use crate::suite::Suite;
 
@@ -97,7 +97,7 @@ pub fn signature_len(suite: Suite) -> usize {
 }
 
 /// Worst-case path-selected signature length for `S`
-/// (`pqhybridsign_core::encoding_path`): the classical signature, the
+/// (`pqhybridsign::encoding_path`): the classical signature, the
 /// 1-byte path selector, and the larger of the stateful body at the
 /// component's largest allowed leaf budget or the fixed-length stateless
 /// body.

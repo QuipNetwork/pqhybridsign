@@ -1,6 +1,6 @@
 [package]
 name = "pqhybridsign"
-description = "Hybrid post-quantum signatures: H1/H3 (ML-DSA-44) and H2/H4 (FN-DSA-512)"
+description = "Hybrid classical/post-quantum signatures: H1-H4 lattice (ML-DSA-44, FN-DSA-512) and H5/H6 stateful hash-based (SHRINCS)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,31 +11,35 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-pqhybridsign-core = { path = "../pqhybridsign-core", version = "0.0.0-rc2", default-features = false }
 subtle.workspace = true
 zeroize.workspace = true
 rand_core.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
 ed25519-zebra.workspace = true
 schnorrkel.workspace = true
 fips204.workspace = true
 fn-dsa.workspace = true
-sha2.workspace = true
+# Stateful hash-based backend for H5/H6. Optional: a SHRINCS profile feature
+# is the only thing that turns it on, so a lattice-only build never compiles
+# or downloads it or `sha3`.
+hashsigs-rs = { workspace = true, optional = true }
+sha3 = { version = "0.10", default-features = false, optional = true }
 
 [dev-dependencies]
-hex.workspace = true
+subtle.workspace = true
 rand_core = { workspace = true, features = ["getrandom"] }
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Test-only. `ed25519-zebra` verifies under ZIP-215, so the strict RFC 8032
-# checks in tests/ed25519_strict.rs need curve arithmetic that
-# `ed25519-zebra` does not expose. The version range matches the one
-# `ed25519-zebra` 4.2 already resolves, so this adds a dev-dependency edge
-# and no new crate to the graph. It never enters a release build.
-# `alloc` is required for `EdwardsPoint::vartime_double_scalar_mul_basepoint`
-# (the two-scalar multiplication the strict verification equation needs) and
-# `digest` for `Scalar::from_hash`. Both are dev-only: `cargo build` never
-# pulls in dev-dependencies, so the `--no-default-features` wasm build stays
-# alloc-free regardless of what this line enables.
+# Property tests over the encoders and decoders, named as a requirement by
+# DESIGN.md. Dev-only, so it reaches no published artifact.
+proptest = "1.11.0"
+# Compile-fail tests for the stateful API's type-level guards.
+trybuild = "1"
+# Independent oracle for the strict RFC 8032 ed25519 checks that
+# `ed25519-zebra` (ZIP-215) does not expose. Dev-only: `cargo build` never
+# pulls dev-dependencies, so the no-allocator build stays alloc-free.
 curve25519-dalek = { version = "4.1", default-features = false, features = [
     "precomputed-tables",
     "alloc",
@@ -43,8 +47,18 @@ curve25519-dalek = { version = "4.1", default-features = false, features = [
 ] }
 
 [features]
-default = ["std"]
-std = ["pqhybridsign-core/std", "schnorrkel/std", "ed25519-zebra/std"]
+default = ["std", "stateful"]
+std = ["alloc", "schnorrkel/std", "ed25519-zebra/std"]
+alloc = []
+# H5/H6 stateful hash-based suites, on by default. This is the friendly
+# on-switch: it selects the 256s profile. To use another profile, disable
+# default features and name it (each profile turns the suites on by itself).
+# hashsigs-rs allows exactly one profile per build.
+stateful = ["profile-256s"]
+profile-256s = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-256s"]
+profile-256s-sha2 = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-256s-sha2"]
+profile-128s-q18 = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-128s-q18"]
+profile-128s-q20 = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-128s-q20"]
 
 [lints]
 workspace = true

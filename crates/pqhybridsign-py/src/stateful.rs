@@ -53,7 +53,7 @@
 //! after the sibling already has. Those surface as
 //! [`CountersDivergedError`](crate::errors::CountersDivergedError), from the
 //! same check `sign_stateful` has always used internally (see
-//! `pqhybridsign_core::stateful_composite`'s `sign_stateful`).
+//! `pqhybridsign::stateful_composite`'s `sign_stateful`).
 
 use std::cell::RefCell;
 

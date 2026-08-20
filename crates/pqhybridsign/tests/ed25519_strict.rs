@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//! ed25519 strict RFC 8032 checks. Need std (curve25519-dalek, getrandom, alloc).
+#![cfg(feature = "std")]
 // Integration test binary: `cfg(test)` is always true here. `unwrap`/
 // `expect`/`panic` are the normal way a test fails; the `hybrid_suite!`
 // family of macros generates undocumented, unconditionally `pub` fixture
@@ -57,7 +59,7 @@ mod support;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use pqhybridsign::classical::Ed25519;
 use pqhybridsign::H1;
-use pqhybridsign_core::{component::ClassicalScheme, composite, suite::Suite};
+use pqhybridsign::{component::ClassicalScheme, composite, suite::Suite};
 use support::{strict, warn, weak_classical_forgery};
 
 const LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
@@ -123,7 +125,7 @@ mod own_outputs {
     #[test]
     fn golden_vector_ed25519_halves_are_strict_valid() {
         use pqhybridsign::H2;
-        use pqhybridsign_core::{message, suite::DeltaSuite};
+        use pqhybridsign::{message, suite::DeltaSuite};
 
         #[derive(serde::Deserialize)]
         struct Vector {

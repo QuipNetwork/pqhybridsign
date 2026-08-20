@@ -15,13 +15,13 @@
 )]
 //! H2 (ed25519 + FN-DSA-512) and H4 (sr25519 + FN-DSA-512): round trips and
 //! cross-suite rejection, over the real `fn-dsa` component rather than a
-//! stub. `pqhybridsign_core::tests::composite_delta` covers the wire-layout
+//! stub. `pqhybridsign::tests::composite_delta` covers the wire-layout
 //! edge cases (buffer sizing, trailing bytes, truncation) against a
 //! cheaper stub component; this file only needs to show the real
 //! composition works end to end.
+use pqhybridsign::composite_delta::{keypair_from_seed, sign, sign_deterministic, verify};
+use pqhybridsign::suite::DeltaSuite;
 use pqhybridsign::{H1, H2, H4};
-use pqhybridsign_core::composite_delta::{keypair_from_seed, sign, sign_deterministic, verify};
-use pqhybridsign_core::suite::DeltaSuite;
 use rand_core::OsRng;
 
 fn keys<S: DeltaSuite>(seed: u8) -> (Vec<u8>, Vec<u8>) {
@@ -102,7 +102,7 @@ fn a_signature_does_not_verify_under_a_different_suite() {
     // Neither verifies under H1: an unrelated H1 key, and a wire length
     // (731 bytes) that does not even match H1::SIGNATURE_LEN (2484 bytes),
     // which `composite::verify`'s length check rejects outright.
-    use pqhybridsign_core::{composite, suite::Suite};
+    use pqhybridsign::{composite, suite::Suite};
     let (_h1_sk, h1_pk) = {
         let mut sk = vec![0u8; H1::SECRET_KEY_LEN];
         let mut pk = vec![0u8; H1::PUBLIC_KEY_LEN];

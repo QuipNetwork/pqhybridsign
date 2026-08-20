@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use pqhybridsign_core::{
+use crate::{
     component::ClassicalScheme,
     error::{Error, Result},
 };
@@ -235,7 +235,7 @@ fn sign_with_rng(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::component::ClassicalScheme;
+    use crate::component::ClassicalScheme;
 
     const H1: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
     const H3: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";

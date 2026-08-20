@@ -13,7 +13,7 @@
     "start": "node dist/roundtrip.js"
   },
   "dependencies": {
-    "@quip.network/pqhybridsign": "0.0.0-rc2"
+    "@quip.network/pqhybridsign": "0.0.0-rc3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

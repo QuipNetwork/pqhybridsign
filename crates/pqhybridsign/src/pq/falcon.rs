@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+use crate::{
+    component::PqScheme,
+    error::{Error, Result},
+};
 use fn_dsa::{
     sign_key_size, signature_size, vrfy_key_size, DomainContext, KeyPairGenerator,
     KeyPairGenerator512, SigningKey, SigningKey512, VerifyingKey, VerifyingKey512, DOMAIN_NONE,
     FN_DSA_LOGN_512, HASH_ID_RAW,
-};
-use pqhybridsign_core::{
-    component::PqScheme,
-    error::{Error, Result},
 };
 use rand_core::{CryptoRng, RngCore};
 use sha2::{Digest, Sha512};
@@ -213,7 +213,7 @@ impl Drop for SeededRng {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::component::PqScheme;
+    use crate::component::PqScheme;
 
     fn keypair(
         seed: u8,

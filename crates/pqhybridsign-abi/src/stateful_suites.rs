@@ -16,11 +16,11 @@
 //! [`sign_stateful`]'s documentation for why `sk_out` is written even when
 //! the call fails.
 
-use pqhybridsign_core::budget::StatelessBudgetStore;
-use pqhybridsign_core::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
-use pqhybridsign_core::stateful_composite::{keygen, CommittedVerifyKey, PublicKey, SecretKey};
-use pqhybridsign_core::suite::StatefulSuite;
-use pqhybridsign_shrincs::{H5, H6};
+use pqhybridsign::budget::StatelessBudgetStore;
+use pqhybridsign::shrincs::{H5, H6};
+use pqhybridsign::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign::stateful_composite::{keygen, CommittedVerifyKey, PublicKey, SecretKey};
+use pqhybridsign::suite::StatefulSuite;
 use zeroize::Zeroize;
 
 use crate::error::AbiError;
@@ -137,7 +137,7 @@ fn secret_key_identity_of<S: StatefulSuite>(sk: &[u8]) -> Result<KeyIdentity, Ab
 /// [`AbiError::JournalKeyMismatch`] rather than silently accepted.
 ///
 /// Idempotent for a journal already bound to `key`, so a provisioning step is
-/// safe to re-run. See [`pqhybridsign_core::stateful::adopt_key`] for the
+/// safe to re-run. See [`pqhybridsign::stateful::adopt_key`] for the
 /// full contract, including why calling this on every process start
 /// reinstates the defect it closes.
 ///
@@ -147,7 +147,7 @@ fn secret_key_identity_of<S: StatefulSuite>(sk: &[u8]) -> Result<KeyIdentity, Ab
 /// key; nothing is written. [`AbiError::JournalFailed`] if the binding did
 /// not become durable.
 pub fn adopt_key(journal: &mut impl LeafJournal, key: KeyIdentity) -> Result<(), AbiError> {
-    pqhybridsign_core::stateful::adopt_key(journal, key).map_err(AbiError::from)
+    pqhybridsign::stateful::adopt_key(journal, key).map_err(AbiError::from)
 }
 
 /// Refuse `journal` unless it already belongs to `key`.
@@ -160,7 +160,7 @@ pub fn adopt_key(journal: &mut impl LeafJournal, key: KeyIdentity) -> Result<(),
 ///
 /// It binds nothing. A journal that has never been bound is refused exactly
 /// as one bound to another key is: neither is a record of what this key has
-/// spent. Use [`pqhybridsign_core::stateful::LeafJournal::bound_key`] to tell
+/// spent. Use [`pqhybridsign::stateful::LeafJournal::bound_key`] to tell
 /// the two apart.
 ///
 /// # Errors
@@ -168,7 +168,7 @@ pub fn adopt_key(journal: &mut impl LeafJournal, key: KeyIdentity) -> Result<(),
 /// [`AbiError::JournalKeyMismatch`] if `journal` is unbound or bound to a
 /// different key.
 pub fn require_bound_key(journal: &impl LeafJournal, key: KeyIdentity) -> Result<(), AbiError> {
-    pqhybridsign_core::stateful::require_bound_key(journal, key).map_err(AbiError::from)
+    pqhybridsign::stateful::require_bound_key(journal, key).map_err(AbiError::from)
 }
 
 /// Sign `msg` under `ctx` for `suite`, spending one leaf.
@@ -176,7 +176,7 @@ pub fn require_bound_key(journal: &impl LeafJournal, key: KeyIdentity) -> Result
 /// `sk` is the exported secret key blob from [`keygen_stateful_from_seed`]
 /// or a previous call to this function. `journal` durably records the
 /// spent leaf before the signature is built; see
-/// [`pqhybridsign_core::stateful::LeafJournal`] for the durability contract
+/// [`pqhybridsign::stateful::LeafJournal`] for the durability contract
 /// an implementation must honour.
 ///
 /// `journal` must already be bound to this key ([`adopt_key`]). That is
@@ -186,7 +186,7 @@ pub fn require_bound_key(journal: &impl LeafJournal, key: KeyIdentity) -> Result
 /// alone is what lets a second holder reissue every leaf.
 ///
 /// **`sk_out` is written on every outcome that reaches the component
-/// signer, including a failed one.** [`pqhybridsign_core::stateful::StatefulSignError::GrindAbort`]
+/// signer, including a failed one.** [`pqhybridsign::stateful::StatefulSignError::GrindAbort`]
 /// (surfaced here as [`AbiError::GrindAbort`]) is raised only after the
 /// leaf is already durably committed in `journal`, so the leaf is spent
 /// whether or not a signature comes back. Writing `sk_out` unconditionally
@@ -225,7 +225,7 @@ pub fn require_bound_key(journal: &impl LeafJournal, key: KeyIdentity) -> Result
 /// [`AbiError::LeavesExhausted`] if the key's leaf budget is spent, checked
 /// before the journal is touched. [`AbiError::JournalFailed`] if the
 /// journal could not durably commit; nothing was spent. See
-/// [`pqhybridsign_core::stateful::StatefulSignError`] for the rest.
+/// [`pqhybridsign::stateful::StatefulSignError`] for the rest.
 pub fn sign_stateful(
     suite: Suite,
     sk: &[u8],
@@ -298,7 +298,7 @@ fn sign_stateful_suite<S: StatefulSuite>(
 /// exceeding it degrades the security assumption of the underlying few-time
 /// scheme. The spend is made durable before the signature is built, on the
 /// same terms [`sign_stateful`] commits its leaf; see
-/// [`pqhybridsign_core::budget::StatelessBudgetStore`] for the durability
+/// [`pqhybridsign::budget::StatelessBudgetStore`] for the durability
 /// contract an implementation must honour.
 ///
 /// The budget is keyed to the key's stateless material (`pkSeed ||
@@ -315,7 +315,7 @@ fn sign_stateful_suite<S: StatefulSuite>(
 /// spent; nothing was recorded and no signature was built.
 /// [`AbiError::BudgetStoreFailed`] if the store could not durably record the
 /// spend; nothing was recorded either. See
-/// [`pqhybridsign_core::stateful::StatefulSignError`] for the rest.
+/// [`pqhybridsign::stateful::StatefulSignError`] for the rest.
 pub fn sign_stateless(
     suite: Suite,
     sk: &[u8],
@@ -439,8 +439,8 @@ fn write_sig(sig_out: &mut [u8], sig: &[u8]) -> Result<usize, AbiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::budget::BudgetKey;
-    use pqhybridsign_core::stateful::LeafJournal;
+    use pqhybridsign::budget::BudgetKey;
+    use pqhybridsign::stateful::LeafJournal;
     use std::cell::RefCell;
     use std::rc::Rc;
 

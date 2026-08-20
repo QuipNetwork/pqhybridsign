@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sign/verify roundtrip example for H1 through H4, built against the
-//! published `pqhybridsign` and `pqhybridsign-core` crates from crates.io.
+//! published `pqhybridsign` crate from crates.io.
 //!
 //! For each suite: derive a keypair from a fixed seed, sign a message
 //! deterministically, verify the signature, tamper one message byte, and
@@ -8,14 +8,14 @@
 //! constant, so the run needs no random number generator and is
 //! byte-for-byte repeatable.
 //!
-//! H1 and H3 are fixed-offset suites (`pqhybridsign_core::composite`); H2
-//! and H4 are delta-length suites (`pqhybridsign_core::composite_delta`),
+//! H1 and H3 are fixed-offset suites (`pqhybridsign::composite`); H2
+//! and H4 are delta-length suites (`pqhybridsign::composite_delta`),
 //! since their FN-DSA-512 half has a variable-length signature.
 
 use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_core::composite;
-use pqhybridsign_core::composite_delta;
-use pqhybridsign_core::suite::{DeltaSuite, Suite};
+use pqhybridsign::composite;
+use pqhybridsign::composite_delta;
+use pqhybridsign::suite::{DeltaSuite, Suite};
 use std::process::ExitCode;
 
 /// Application context bound into every signature.

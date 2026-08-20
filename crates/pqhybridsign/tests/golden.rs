@@ -33,12 +33,12 @@
 // are covered; the composition layer this crate adds is not.
 //
 // Adding external or cross-implementation vectors is Cycle 2 work.
-use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_core::composite::{keypair_from_seed, sign_deterministic, verify};
-use pqhybridsign_core::{
+use pqhybridsign::composite::{keypair_from_seed, sign_deterministic, verify};
+use pqhybridsign::{
     composite_delta,
     suite::{DeltaSuite, Suite},
 };
+use pqhybridsign::{H1, H2, H3, H4};
 
 #[derive(serde::Deserialize)]
 struct Vector {
