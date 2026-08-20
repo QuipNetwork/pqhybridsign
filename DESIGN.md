@@ -40,14 +40,30 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | `pqhybridsign` | H1 through H4 | core, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa` |
 | `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` from crates.io |
 | `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter | core, `pqhybridsign`, `pqhybridsign-shrincs` |
-| `pqhybridsign-cffi` | C ABI, with a checked-in header | abi |
-| `pqhybridsign-wasm` | WebAssembly and npm package. Signing is H1 through H4 only. H5 and H6 are verify-side only | abi |
-| `pqhybridsign-py` | Python wheel on the `abi3-py39` stable ABI | abi |
+| `pqhybridsign-cffi` | C ABI, with a checked-in header. Ships as a release-asset C library | abi |
+| `pqhybridsign-wasm` | WebAssembly, shipped as an npm package. Signing is H1 through H4 only. H5 and H6 are verify-side only | abi |
+| `pqhybridsign-py` | Python bindings on the `abi3-py39` stable ABI, shipped as a PyPI wheel | abi |
 
 H5 and H6 reuse the lattice crate classical components. They do not write
 those schemes again. Those components come from `ed25519-zebra` and
 `schnorrkel` through `pqhybridsign`. A license or dependency audit that
 reads only this table misses those crates.
+
+### Publication
+
+Publication order is npm, then PyPI, then the C release asset, then
+crates.io last. crates.io is the only registry of the four that can never
+delete or replace a version, so it goes last, after the other three confirm
+the release.
+
+All publishing runs through GitLab OIDC trusted publishing. No registry
+holds a stored secret.
+
+`pqhybridsign-cffi`, `pqhybridsign-py`, and `pqhybridsign-wasm` keep
+`publish = false`. Each already ships through its own channel. The C
+library ships as the GitLab release asset. The Python bindings ship as the
+PyPI wheel. The WebAssembly bindings ship as the npm package. A Rust
+consumer wants the library crates, not a foreign-ABI wrapper.
 
 The workspace denies `unsafe_code` for every crate through
 `[workspace.lints.rust]`. The five pure-Rust crates also set
