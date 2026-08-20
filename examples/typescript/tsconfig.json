@@ -4,6 +4,8 @@
     "module": "node16",
     "moduleResolution": "node16",
     "lib": ["ES2022"],
+    // Explicit: TypeScript 7 does not pick @types/node up automatically here.
+    "types": ["node"],
     "rootDir": "./src",
     "outDir": "dist",
     "strict": true,
