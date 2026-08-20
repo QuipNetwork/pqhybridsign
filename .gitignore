@@ -15,3 +15,6 @@
 # Rust
 /target
 Cargo.lock.bak
+
+# Python packaging build output (maturin/twine)
+/dist/
