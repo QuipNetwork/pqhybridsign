@@ -107,10 +107,12 @@ and `LICENSE`.
 
 ## Examples
 
-`examples/` holds a roundtrip program written in Rust, TypeScript, Python,
-and C. Each program installs the packaged artifact, not the crate or module
-from this source tree. Continuous integration runs all four as smoke jobs
-against the published packages.
+No `examples/` directory exists in this repository yet. Separate work
+tracks the plan: a roundtrip program for each of Rust, TypeScript, Python,
+and C, each one installing the packaged artifact instead of the crate or
+module from this source tree, then running as a continuous integration
+smoke job against the published packages once merged. The issue tracker
+holds its current status.
 
 ## Stateless signing, H1 and H3
 
