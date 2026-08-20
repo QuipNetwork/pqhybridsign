@@ -534,8 +534,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hashsigs-rs"
-version = "0.2.0-rc.2"
-source = "git+https://gitlab.com/quip.network/hashsigs-rs.git?rev=833de08d618b7e42b7991f7c684571133c3d88ab#833de08d618b7e42b7991f7c684571133c3d88ab"
+version = "0.2.1-rc2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e0e91b8f111701ac815e825406ead873b494af182cbc23afcb4326743854380"
 dependencies = [
  "serde",
  "sha2",

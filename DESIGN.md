@@ -38,7 +38,7 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 |-------|----------|--------------|
 | `pqhybridsign-core` | Component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port | `subtle`, `zeroize`, `hkdf`, `sha2` |
 | `pqhybridsign` | H1 through H4 | core, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa` |
-| `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` pinned by revision |
+| `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` from crates.io |
 | `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter | core, `pqhybridsign`, `pqhybridsign-shrincs` |
 | `pqhybridsign-cffi` | C ABI, with a checked-in header | abi |
 | `pqhybridsign-wasm` | WebAssembly and npm package. Signing is H1 through H4 only. H5 and H6 are verify-side only | abi |
@@ -977,7 +977,7 @@ Cycle 4: H2 and H4, over `fn-dsa` 0.4.0. The maintainer decided on 2026-08-10
 to ship these now rather than wait for a final FIPS 206, having been told that
 the standard may change the wire format and that signatures made before then
 could stop verifying. The dependency set the workspace Rust floor to 1.82.
-The pinned `hashsigs-rs` revision later raised that floor to 1.89.
+`hashsigs-rs`, now consumed from crates.io, later raised that floor to 1.95.
 
 Cycle 5: the language bindings, all on `pqhybridsign-abi`. The C ABI with a
 checked-in header, the WebAssembly and npm package, and the Python wheel.

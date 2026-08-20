@@ -9,10 +9,9 @@ repository.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-# crates.io refuses a crate with a git dependency, and hashsigs-rs is
-# pinned to a GitLab revision. Recorded decision on pqhs-eig: this crate
-# is not a publication candidate until hashsigs-rs reaches crates.io.
-# Remove this line when it does.
+# Not a crates.io publication candidate: this binding ships through its
+# own channel (see DESIGN.md's crates table), and a Rust consumer wants
+# pqhybridsign or pqhybridsign-shrincs, not a foreign-ABI wrapper.
 publish = false
 
 [lib]

@@ -47,5 +47,3 @@ crate = "windows-sys"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# hashsigs-rs is consumed from its GitLab repository at a pinned revision.
-allow-git = ["https://gitlab.com/quip.network/hashsigs-rs.git"]

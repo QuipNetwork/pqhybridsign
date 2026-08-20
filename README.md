@@ -38,7 +38,7 @@ for one suite cannot verify under another.
 |---|---|
 | `pqhybridsign-core` | Composition layer: suite macros, message binding, key derivation, wire encoding, and the stateful signer and verifier ports. Carries no cryptography of its own. |
 | `pqhybridsign` | H1 through H4, over `ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`. |
-| `pqhybridsign-shrincs` | H5 and H6, over `hashsigs-rs` pinned by revision. Depends on `pqhybridsign-core` and `pqhybridsign`. |
+| `pqhybridsign-shrincs` | H5 and H6, over `hashsigs-rs`. Depends on `pqhybridsign-core` and `pqhybridsign`. |
 
 H5 and H6 reuse the lattice crate classical components. They do not write
 those schemes again. Those components come from `ed25519-zebra` and
@@ -136,7 +136,7 @@ Continuous integration builds core for `thumbv7em-none-eabi`, which has no
 `std` to link against, and for `wasm32-unknown-unknown`, which the workspace
 ships to.
 
-The minimum supported Rust version is 1.89, set by `hashsigs-rs`.
+The minimum supported Rust version is 1.95, set by `hashsigs-rs`.
 
 ## Testing
 
