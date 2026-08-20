@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // node16 rather than commonjs/node10: TypeScript 7 removed the node10
+    // resolver. package.json declares no "type", so a plain .ts file
+    // still emits CommonJS; index.node.cts and index.web.mts each force
+    // their own module format by extension regardless of that default,
+    // which is why this package has two entry-point source files instead
+    // of one.
+    "module": "node16",
+    "moduleResolution": "node16",
+    "lib": ["ES2022"],
+    "rootDir": "./src",
+    "outDir": "dist",
+    "declaration": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    // verbatimModuleSyntax is omitted: api.ts emits CommonJS (no
+    // "type":"module" in package.json) and index.node.cts's `require`
+    // call needs that CommonJS emit to resolve relative to dist/ at
+    // runtime. TypeScript rejects ESM import/export syntax under that
+    // flag when the emit is CJS.
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    // index.node.cts's `require` call needs the ambient Node globals
+    // @types/node declares. Naming "node" here explicitly, rather than
+    // relying on the implicit include-every-@types-package default, is
+    // what actually pulls those globals in under TypeScript 7.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.cts", "src/**/*.mts"]
+}

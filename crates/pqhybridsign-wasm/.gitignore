@@ -3,3 +3,9 @@
 # separately, under npm/types/, and diff-tested by scripts/check-types.sh.
 /npm/web/
 /npm/node/
+/npm/dist/
+/npm/node_modules/
+# Copied in by npm/package.json's "prepack" script (from the workspace
+# root) so the packed tarball carries the license; never the source of
+# truth, so never committed.
+/npm/LICENSE
