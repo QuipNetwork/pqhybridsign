@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "curve25519-dalek",
  "ed25519-zebra",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-abi"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "pqhybridsign",
  "pqhybridsign-core",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-cffi"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "cbindgen",
  "pqhybridsign-abi",
@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-core"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "hkdf",
  "proptest",
@@ -798,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-py"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "pqhybridsign-abi",
  "pyo3",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-shrincs"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "hashsigs-rs",
  "hex",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-wasm"
-version = "0.0.0-rc1"
+version = "0.0.0-rc2"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",

@@ -11,8 +11,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-pqhybridsign-core = { path = "../pqhybridsign-core", version = "0.0.0-rc1" }
-pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc1" }
+pqhybridsign-core = { path = "../pqhybridsign-core", version = "0.0.0-rc2" }
+pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc2" }
 hashsigs-rs.workspace = true
 subtle.workspace = true
 zeroize.workspace = true

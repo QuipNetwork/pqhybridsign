@@ -12,8 +12,8 @@ description = "Sign/verify roundtrip example, built against the published crates
 
 [dependencies]
 # Registry releases only, no path dependency into this repository.
-pqhybridsign = "0.0.0-rc1"
-pqhybridsign-core = "0.0.0-rc1"
+pqhybridsign = "0.0.0-rc2"
+pqhybridsign-core = "0.0.0-rc2"
 
 [[bin]]
 name = "roundtrip"

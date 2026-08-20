@@ -2,6 +2,30 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc2
+
+rc2 keeps the signature suites, wire format, and public API from rc1. This
+release candidate hardens the build and the supply chain.
+
+### Added
+
+- A dependency cooldown. `scripts/check-dependency-cooldown.py` fails the
+  build when any locked crates.io dependency is newer than seven days. It
+  reads the publish time from the local Cargo sparse-index cache and falls
+  back to the crates.io API. The `cooldown` CI job runs it over the whole
+  lockfile, `release:validate` waits for that job, and a pre-commit hook
+  runs it against a staged `Cargo.lock`. `scripts/cooldown-allowlist.toml`
+  holds the reviewed first-party exemptions.
+
+### Changed
+
+- Every dependency-resolving `cargo` command in CI now passes `--locked`, so
+  a drifted `Cargo.lock` fails the pipeline instead of re-resolving.
+- `arrayref` comes from crates.io again at the legitimate 0.3.9. An attacker
+  replaced it during rc2 development. The crate was vendored while the attack
+  was live, then returned to the registry source once crates.io removed the
+  malicious version.
+
 ## 0.0.0-rc1
 
 First release candidate. The wire format is not frozen.

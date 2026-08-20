@@ -53,10 +53,10 @@ Each binding ships from its own registry.
 
 ```toml
 [dependencies]
-pqhybridsign = "0.0.0-rc1"
+pqhybridsign = "0.0.0-rc2"
 
 # H5 and H6 need the SHRINCS crate too.
-pqhybridsign-shrincs = "0.0.0-rc1"
+pqhybridsign-shrincs = "0.0.0-rc2"
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -95,7 +95,7 @@ length accessors work for every suite.
 pip install --pre pqhybridsign
 ```
 
-PEP 440 spells the prerelease version `0.0.0rc1`, not `0.0.0-rc1`. Without
+PEP 440 spells the prerelease version `0.0.0rc2`, not `0.0.0-rc2`. Without
 `--pre`, pip does not find it.
 
 ### C and C++
