@@ -19,13 +19,13 @@
 mod support;
 
 use pqhybridsign::classical::Ed25519;
-use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_core::composite::{keypair_from_seed, sign_deterministic};
-use pqhybridsign_core::{
+use pqhybridsign::composite::{keypair_from_seed, sign_deterministic};
+use pqhybridsign::{
     component::ClassicalScheme,
     composite_delta,
     suite::{DeltaSuite, Suite},
 };
+use pqhybridsign::{H1, H2, H3, H4};
 use support::{strict, weak_classical_forgery};
 
 fn emit<S: Suite>(name: &str) {

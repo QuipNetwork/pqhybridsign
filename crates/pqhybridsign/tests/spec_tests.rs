@@ -31,9 +31,9 @@
 //
 // `composite_sizes_match_the_specification` is an extra size check, not one
 // of the numbered tests.
+use pqhybridsign::composite::{keypair_from_seed, sign, sign_deterministic, verify};
+use pqhybridsign::suite::Suite;
 use pqhybridsign::{H1, H3};
-use pqhybridsign_core::composite::{keypair_from_seed, sign, sign_deterministic, verify};
-use pqhybridsign_core::suite::Suite;
 use rand_core::OsRng;
 
 macro_rules! keys {

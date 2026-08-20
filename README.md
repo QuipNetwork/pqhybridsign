@@ -5,7 +5,7 @@ signature with a post-quantum signature. A composite signature verifies only
 when both halves verify, so the composite stays unforgeable while either
 component survives.
 
-The crates are a standalone reference implementation. They do not depend on
+This crate is a standalone reference implementation. It does not depend on
 Substrate.
 
 **Status: pre-release.** The wire format is not frozen, and no
@@ -32,18 +32,17 @@ The suite name is the domain separator. `H1` signs under the label
 checked against a registry literal when the crate compiles. A signature made
 for one suite cannot verify under another.
 
-## Crates
+## Crate
 
-| Crate | Contents |
-|---|---|
-| `pqhybridsign-core` | Composition layer: suite macros, message binding, key derivation, wire encoding, and the stateful signer and verifier ports. Carries no cryptography of its own. |
-| `pqhybridsign` | H1 through H4, over `ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`. |
-| `pqhybridsign-shrincs` | H5 and H6, over `hashsigs-rs`. Depends on `pqhybridsign-core` and `pqhybridsign`. |
+One crate, `pqhybridsign`, holds all six suites. H1 through H4 (lattice, over
+`ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`) are always built. H5
+and H6 (stateful hash-based, over `hashsigs-rs`) live behind the `stateful`
+feature, which is on by default.
 
-H5 and H6 reuse the lattice crate classical components. They do not write
-those schemes again. Those components come from `ed25519-zebra` and
-`schnorrkel` through `pqhybridsign`. A license or dependency audit that
-reads only this table misses those crates.
+Turn the `stateful` feature off and the SHRINCS code and the `hashsigs-rs`
+dependency are not compiled or downloaded, so a lattice-only consumer never
+links them. The stateful suites reuse the H1 through H4 classical components
+rather than reimplementing them.
 
 ## Install
 
@@ -53,10 +52,11 @@ Each binding ships from its own registry.
 
 ```toml
 [dependencies]
-pqhybridsign = "0.0.0-rc2"
+# All six suites, stateful (H5/H6) on by default.
+pqhybridsign = "0.0.0-rc3"
 
-# H5 and H6 need the SHRINCS crate too.
-pqhybridsign-shrincs = "0.0.0-rc2"
+# Lattice suites H1 through H4 only, no hashsigs-rs:
+# pqhybridsign = { version = "0.0.0-rc3", default-features = false, features = ["std"] }
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -96,7 +96,7 @@ length accessors work for every suite.
 pip install --pre pqhybridsign
 ```
 
-PEP 440 spells the prerelease version `0.0.0rc2`, not `0.0.0-rc2`. Without
+PEP 440 spells the prerelease version `0.0.0rc3`, not `0.0.0-rc3`. Without
 `--pre`, pip does not find it.
 
 ### C and C++
@@ -118,10 +118,10 @@ holds its current status.
 ## Stateless signing, H1 and H3
 
 ```rust
+use pqhybridsign::composite::{keypair_from_seed, sign, verify};
+use pqhybridsign::error::Error;
+use pqhybridsign::suite::Suite;
 use pqhybridsign::H1;
-use pqhybridsign_core::composite::{keypair_from_seed, sign, verify};
-use pqhybridsign_core::error::Error;
-use pqhybridsign_core::suite::Suite;
 
 fn demo() -> Result<(), Error> {
     let mut sk = [0u8; <H1 as Suite>::SECRET_KEY_LEN];
@@ -175,8 +175,9 @@ the signer.
 
 ### Profiles
 
-`pqhybridsign-shrincs` selects one SHRINCS parameter set at compile time.
-Exactly one profile feature must be active.
+The `stateful` feature selects one SHRINCS parameter set at compile time.
+Exactly one profile feature may be active. `stateful` selects `profile-256s`;
+to pick another, disable default features and name it.
 
 | Feature | Default | Stateful signature at leaf 1 |
 |---|---|---|
@@ -196,8 +197,8 @@ same suite under another parameter set.
 
 ## Platforms
 
-`pqhybridsign-core` must build for a target that provides no `std`, both with
-and without the `alloc` feature. Treat a failure there as a defect in core.
+`pqhybridsign` must build for a target that provides no `std`, both with and
+without the `alloc` feature. Treat a failure there as a defect.
 `DESIGN.md` states the requirement in full, with the rule it puts on authors:
 core has no `std` prelude, so every `alloc` type needs an import by its full
 path.
@@ -212,10 +213,10 @@ The minimum supported Rust version is 1.95, set by `hashsigs-rs`.
 
 ```bash
 cargo test --workspace                    # default profile
-cargo test -p pqhybridsign-core --no-default-features
-cargo test -p pqhybridsign-core --no-default-features --features alloc
-cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q20
-cargo test -p pqhybridsign-shrincs --no-default-features --features profile-128s-q18
+cargo test -p pqhybridsign --no-default-features
+cargo test -p pqhybridsign --no-default-features --features alloc
+cargo test -p pqhybridsign --no-default-features --features profile-128s-q20
+cargo test -p pqhybridsign --no-default-features --features profile-128s-q18
 ```
 
 `cargo test --workspace` finishes in about 16.5 seconds under the default
@@ -227,14 +228,14 @@ dependencies at `opt-level = 3` while workspace crates stay unoptimized.
 Before that change, one binary took 184.80 seconds.
 
 Tests read per-profile fixtures from
-`crates/pqhybridsign-shrincs/tests/vectors/` instead of generating keys and
+`crates/pqhybridsign/tests/vectors/` instead of generating keys and
 signatures. Regenerate a fixture with the command in `generate_fixtures.rs`.
 
 One real 128s key generation still runs per commit, in `smoke_128s.rs`. It
 carries `#[ignore]`, so run it explicitly:
 
 ```bash
-cargo test -p pqhybridsign-shrincs --release --no-default-features \
+cargo test -p pqhybridsign --release --no-default-features \
     --features profile-128s-q18 --test smoke_128s -- --ignored
 ```
 
@@ -247,7 +248,7 @@ Measured on one machine in release mode, for one H5 key with four leaves.
 Reproduce with:
 
 ```bash
-cargo test -p pqhybridsign-shrincs --release --no-default-features \
+cargo test -p pqhybridsign --release --no-default-features \
     --features profile-128s-q18 --test profile_timing -- --ignored --nocapture
 ```
 
@@ -321,7 +322,7 @@ delivers.
   below CPython 3.11.
 - **Golden vectors pin every profile, but only against this implementation.**
   All four profiles carry verify-only vectors in
-  `crates/pqhybridsign-shrincs/tests/vectors/`. Live re-signing runs under
+  `crates/pqhybridsign/tests/vectors/`. Live re-signing runs under
   `profile-256s` alone, because obtaining a secret key at 128s costs about 47
   seconds.
 

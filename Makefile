@@ -25,19 +25,14 @@ check-release: check-crate-publish check-python-dist check-npm-dist check-clib
 # --locked so packaging resolves the committed Cargo.lock. Without it a
 # drifted lock file passes here and fails in the real publish.
 #
-# The three publishable crates are named explicitly. The four non-published
-# crates carry publish = false: the abi runtime-dispatch layer, which no
-# published crate needs, and the three foreign-ABI bindings. `cargo publish
-# --workspace` skips those on its own, but `cargo package` does not, and
-# each would fail on a missing Python or JavaScript toolchain long before the
-# packaging question even came up.
+# Only pqhybridsign publishes to crates.io. The abi runtime-dispatch layer
+# and the three foreign-ABI bindings all carry publish = false. `cargo
+# package` is scoped to the one published crate with -p, because packaging a
+# binding crate would fail on a missing Python or JavaScript toolchain.
 .PHONY: check-crate-publish
 check-crate-publish:
 	rm -f target/package/*.crate
-	cargo package --locked \
-		-p pqhybridsign-core \
-		-p pqhybridsign \
-		-p pqhybridsign-shrincs
+	cargo package --locked -p pqhybridsign
 
 # Wheel and sdist into dist/python/, then the two guards. twine check
 # validates the metadata is well formed; check-sdist-license-files.sh

@@ -2,6 +2,28 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc3
+
+The workspace collapses to a single published crate, `pqhybridsign`. This is
+a breaking change to the crate layout and import paths. The signature suites
+and wire format do not change.
+
+### Changed
+
+- `pqhybridsign-core` and `pqhybridsign-shrincs` are merged into
+  `pqhybridsign`. The composite foundation and the lattice suites are the
+  crate's top-level modules. The stateful hash-based suites move to
+  `pqhybridsign::shrincs`. Import paths change: `pqhybridsign_core::X`
+  becomes `pqhybridsign::X`, and `pqhybridsign_shrincs::X` becomes
+  `pqhybridsign::shrincs::X`.
+- The stateful suites H5 and H6 are behind the `stateful` feature, on by
+  default. Turning it off drops the SHRINCS code and the `hashsigs-rs`
+  dependency, so a lattice-only build never compiles or downloads them. The
+  `profile-*` features still select one SHRINCS parameter set per build.
+- `pqhybridsign-abi` is no longer published to crates.io. The C, Python, and
+  WebAssembly bindings reach it by path, and no published crate depends on
+  it. crates.io now holds one crate, `pqhybridsign`.
+
 ## 0.0.0-rc2
 
 rc2 keeps the signature suites, wire format, and public API from rc1. This

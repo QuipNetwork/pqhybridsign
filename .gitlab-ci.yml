@@ -61,7 +61,7 @@ deps:
     # Reading the versions off the forward tree does work, because
     # `-e normal,build` drops the dev-dependency edges before the versions
     # are read. That matters here: proptest is a dev-dependency of
-    # pqhybridsign-core and pulls rand_core 0.9, which reaches no published
+    # pqhybridsign and pulls rand_core 0.9, which reaches no published
     # artifact and does not put a second RngCore in front of any component.
     - |
       set -euo pipefail
@@ -88,7 +88,7 @@ cooldown:
     - apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates
     - python3 scripts/check-dependency-cooldown.py
 
-# `pqhybridsign-core` is required to compile where there is no `std`, both
+# `pqhybridsign` is required to compile where there is no `std`, both
 # with and without an allocator. `wasm32-unknown-unknown` cannot prove that
 # on its own: rustup ships a `std` for it, so a dependency that reached for
 # `std` would still link and this check would pass. `thumbv7em-none-eabi`
@@ -103,16 +103,16 @@ no-std:
   stage: check
   script:
     - rustup target add thumbv7em-none-eabi
-    - cargo build --locked -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
-    - cargo build --locked -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
-    - cargo test --locked -p pqhybridsign-core --no-default-features
-    - cargo test --locked -p pqhybridsign-core --no-default-features --features alloc
+    - cargo build --locked -p pqhybridsign --no-default-features --target thumbv7em-none-eabi
+    - cargo build --locked -p pqhybridsign --no-default-features --features alloc --target thumbv7em-none-eabi
+    - cargo test --locked -p pqhybridsign --no-default-features
+    - cargo test --locked -p pqhybridsign --no-default-features --features alloc
 
 wasm:
   stage: check
   script:
-    - cargo build --locked -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features
-    - cargo build --locked -p pqhybridsign-core --target wasm32-unknown-unknown --no-default-features --features alloc
+    - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
+    - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features --features alloc
     # The lattice crate must also build without an allocator: it is the
     # crate that pulls in ed25519-zebra, schnorrkel and fips204, any of
     # which could introduce a std or getrandom dependency.
@@ -131,7 +131,7 @@ cross-profile:
       set -euo pipefail
       out=$(mktemp)
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
-        cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
+        cargo test --locked -p pqhybridsign --release --no-default-features \
           --features "$p" --test cross_profile -- --nocapture \
           | grep CROSS_PROFILE_FINGERPRINT >> "$out"
       done
@@ -221,9 +221,9 @@ profile-matrix:
     - |
       set -euo pipefail
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
-        cargo clippy --locked -p pqhybridsign-shrincs --all-targets --no-default-features \
+        cargo clippy --locked -p pqhybridsign --all-targets --no-default-features \
           --features "$p" -- -D warnings
-        cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
+        cargo test --locked -p pqhybridsign --release --no-default-features \
           --features "$p"
       done
 
@@ -235,7 +235,7 @@ smoke-128s-q18:
   stage: test
   script:
     - |
-      cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
+      cargo test --locked -p pqhybridsign --release --no-default-features \
         --features profile-128s-q18 --test smoke_128s -- --ignored
 
 # regenerate-fixtures is gated on a pipeline schedule. If no schedule
@@ -293,17 +293,17 @@ regenerate-fixtures:
     - |
       set -euo pipefail
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
-        cargo test --locked -p pqhybridsign-shrincs --release --no-default-features \
+        cargo test --locked -p pqhybridsign --release --no-default-features \
           --features "$p" --test generate_fixtures -- --ignored --nocapture
       done
       # `git diff` alone would ignore a fixture the generator created rather
       # than overwrote, so an added profile would pass silently. Comparing the
       # whole porcelain status catches modified and untracked files together.
-      drift=$(git status --porcelain crates/pqhybridsign-shrincs/tests/vectors/)
+      drift=$(git status --porcelain crates/pqhybridsign/tests/vectors/)
       if [ -n "$drift" ]; then
         echo "Fixtures drifted from the committed files:"
         echo "$drift"
-        git diff crates/pqhybridsign-shrincs/tests/vectors/
+        git diff crates/pqhybridsign/tests/vectors/
         exit 1
       fi
 
@@ -728,7 +728,7 @@ release:crates:
     - |
       set -euo pipefail
       VERSION="${CI_COMMIT_TAG#v}"
-      for crate in pqhybridsign-core pqhybridsign pqhybridsign-shrincs; do
+      for crate in pqhybridsign; do
         if curl -fsSL "https://index.crates.io/pq/hy/${crate}" | jq -r '.vers' | grep -qxF "$VERSION"; then
           echo "${crate} ${VERSION} is already on crates.io; skipping."
         else
@@ -762,7 +762,7 @@ release:notes:
 
       | Artifact | Where |
       | -- | -- |
-      | `pqhybridsign-core`, `pqhybridsign`, `pqhybridsign-shrincs` | crates.io |
+      | `pqhybridsign` | crates.io |
       | `pqhybridsign` wheel and sdist | PyPI |
       | `@quip.network/pqhybridsign` | npm |
       | `libpqhybridsign_cffi` plus `pqhybridsign.h` | attached below |

@@ -1,9 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/pqhybridsign-core",
     "crates/pqhybridsign",
-    "crates/pqhybridsign-shrincs",
     "crates/pqhybridsign-abi",
     "crates/pqhybridsign-wasm",
     "crates/pqhybridsign-py",
@@ -11,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0-rc2"
+version = "0.0.0-rc3"
 edition = "2021"
 rust-version = "1.95"
 license = "AGPL-3.0-or-later"

@@ -18,9 +18,7 @@ categories.workspace = true
 publish = false
 
 [dependencies]
-pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc2" }
-pqhybridsign-core = { path = "../pqhybridsign-core", version = "0.0.0-rc2" }
-pqhybridsign-shrincs = { path = "../pqhybridsign-shrincs", version = "0.0.0-rc2" }
+pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc3" }
 rand_core.workspace = true
 zeroize.workspace = true
 

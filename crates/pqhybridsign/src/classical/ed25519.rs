@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use ed25519_zebra::{SigningKey, VerificationKey};
-use pqhybridsign_core::{
+use crate::{
     component::ClassicalScheme,
     error::{Error, Result},
 };
+use ed25519_zebra::{SigningKey, VerificationKey};
 use subtle::Choice;
 use zeroize::Zeroize;
 
@@ -177,7 +177,7 @@ fn raw_sign(sk: &[u8], msg: &[u8], sig_out: &mut [u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::component::ClassicalScheme;
+    use crate::component::ClassicalScheme;
 
     const LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
 

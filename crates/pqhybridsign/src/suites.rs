@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::classical::{Ed25519, Sr25519};
 use crate::pq::{Falcon512, MlDsa44};
-use pqhybridsign_core::{hybrid_delta_suite, hybrid_suite};
+use crate::{hybrid_delta_suite, hybrid_suite};
 
 hybrid_suite! {
     /// H1: ed25519 + ML-DSA-44. Composite sizes 1344 / 2624 / 2484.

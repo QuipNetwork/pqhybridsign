@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use fips204::ml_dsa_44;
-use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
-use pqhybridsign_core::{
+use crate::{
     component::PqScheme,
     error::{Error, Result},
 };
+use fips204::ml_dsa_44;
+use fips204::traits::{KeyGen, SerDes, Signer, Verifier};
 use subtle::Choice;
 use zeroize::Zeroize;
 
@@ -113,7 +113,7 @@ fn check_len(buf: &[u8], want: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign_core::component::PqScheme;
+    use crate::component::PqScheme;
 
     fn keypair(seed: u8) -> ([u8; MlDsa44::SECRET_KEY_LEN], [u8; MlDsa44::PUBLIC_KEY_LEN]) {
         let mut sk = [0u8; MlDsa44::SECRET_KEY_LEN];

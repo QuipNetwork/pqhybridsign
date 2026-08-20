@@ -17,16 +17,16 @@
 //! wraps, for all six suites, and proves the stateless/stateful split holds
 //! at the boundary.
 
+use pqhybridsign::shrincs::{H5, H6};
+use pqhybridsign::stateful::StatefulHybridSignatureScheme;
+use pqhybridsign::{
+    composite, composite_delta,
+    suite::{DeltaSuite, Suite as CoreSuite},
+};
 use pqhybridsign::{H1, H2, H3, H4};
 use pqhybridsign_abi::{
     AbiError, BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, Suite,
 };
-use pqhybridsign_core::stateful::StatefulHybridSignatureScheme;
-use pqhybridsign_core::{
-    composite, composite_delta,
-    suite::{DeltaSuite, Suite as CoreSuite},
-};
-use pqhybridsign_shrincs::{H5, H6};
 use rand_core::OsRng;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -226,7 +226,7 @@ fn h5_stateful_signing_matches_the_generic_api_and_advances_the_leaf() {
         .unwrap();
 
     let (mut generic_sk, generic_pk) =
-        pqhybridsign_core::stateful_composite::keygen::<H5>(&SEED, 4).unwrap();
+        pqhybridsign::stateful_composite::keygen::<H5>(&SEED, 4).unwrap();
     assert_eq!(abi_pk, generic_pk.as_ref());
 
     let mut journal_a = adopted_journal(Suite::H5, &abi_pk);
@@ -442,7 +442,7 @@ fn h6_stateful_dispatch_matches_the_generic_api() {
         .unwrap();
 
     let (mut generic_sk, generic_pk) =
-        pqhybridsign_core::stateful_composite::keygen::<H6>(&SEED, 4).unwrap();
+        pqhybridsign::stateful_composite::keygen::<H6>(&SEED, 4).unwrap();
     assert_eq!(abi_pk, generic_pk.as_ref());
 
     let mut journal_a = adopted_journal(Suite::H6, &abi_pk);

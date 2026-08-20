@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use core::fmt;
 
-use pqhybridsign_core::error::Error as CoreError;
-use pqhybridsign_core::stateful::StatefulSignError;
+use pqhybridsign::error::Error as CoreError;
+use pqhybridsign::stateful::StatefulSignError;
 
 /// One flat error enum for every function in this crate, with a stable
 /// integer code per variant.
@@ -10,7 +10,7 @@ use pqhybridsign_core::stateful::StatefulSignError;
 /// A C caller gets an integer back and nothing else, so this is the whole
 /// vocabulary a binding has to translate failures into its own language's
 /// idiom (an exception type, an error class, ...). It flattens two Rust
-/// sources: [`pqhybridsign_core::error::Error`], from the stateless composite
+/// sources: [`pqhybridsign::error::Error`], from the stateless composite
 /// layer H1-H4 share, and [`StatefulSignError`], from the stateful signing
 /// path H5 and H6 use. Every current variant of both maps to a distinct
 /// code here. Both sources are `#[non_exhaustive]`, and each conversion

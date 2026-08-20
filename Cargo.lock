@@ -747,37 +747,39 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign"
-version = "0.0.0-rc2"
+version = "0.0.0-rc3"
 dependencies = [
  "curve25519-dalek",
  "ed25519-zebra",
  "fips204",
  "fn-dsa",
+ "hashsigs-rs",
  "hex",
- "pqhybridsign-core",
+ "hkdf",
+ "proptest",
  "rand_core 0.6.4",
  "schnorrkel",
  "serde",
  "serde_json",
  "sha2",
+ "sha3",
  "subtle",
+ "trybuild",
  "zeroize",
 ]
 
 [[package]]
 name = "pqhybridsign-abi"
-version = "0.0.0-rc2"
+version = "0.0.0-rc3"
 dependencies = [
  "pqhybridsign",
- "pqhybridsign-core",
- "pqhybridsign-shrincs",
  "rand_core 0.6.4",
  "zeroize",
 ]
 
 [[package]]
 name = "pqhybridsign-cffi"
-version = "0.0.0-rc2"
+version = "0.0.0-rc3"
 dependencies = [
  "cbindgen",
  "pqhybridsign-abi",
@@ -785,20 +787,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "pqhybridsign-core"
-version = "0.0.0-rc2"
-dependencies = [
- "hkdf",
- "proptest",
- "rand_core 0.6.4",
- "sha2",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "pqhybridsign-py"
-version = "0.0.0-rc2"
+version = "0.0.0-rc3"
 dependencies = [
  "pqhybridsign-abi",
  "pyo3",
@@ -807,24 +797,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "pqhybridsign-shrincs"
-version = "0.0.0-rc2"
-dependencies = [
- "hashsigs-rs",
- "hex",
- "pqhybridsign",
- "pqhybridsign-core",
- "serde",
- "serde_json",
- "sha3",
- "subtle",
- "trybuild",
- "zeroize",
-]
-
-[[package]]
 name = "pqhybridsign-wasm"
-version = "0.0.0-rc2"
+version = "0.0.0-rc3"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",

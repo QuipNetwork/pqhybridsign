@@ -24,7 +24,7 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | # | Decision | Reason |
 |---|----------|--------|
 | 1 | Standalone crates, no Substrate dependency | Keeps the composite layer testable and reusable from WASM, Python and TypeScript bindings |
-| 2 | Three crates: `pqhybridsign-core`, `pqhybridsign`, `pqhybridsign-shrincs` | Isolates the AGPL git dependency on `hashsigs-rs` and keeps each crate small |
+| 2 | One crate, `pqhybridsign`, with the stateful suites behind the `stateful` feature | Feature unification is the reason: a separate crate is the only way to guarantee a lattice-only consumer never links `hashsigs-rs`, but that guarantee is worth a feature, not three crates |
 | 3 | AGPL-3.0-or-later for every crate | Matches the `hashsigs-rs` license and the wider Quip repositories |
 | 4 | Generic composition over component traits | Section 7 of the specification is a matrix of classical times post-quantum. Only names and sizes vary |
 | 5 | Noise-style combinatorial suite naming | The label registry regenerates exactly from a name grammar. See Finding 1 |
@@ -36,10 +36,8 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 
 | Crate | Contents | Dependencies |
 |-------|----------|--------------|
-| `pqhybridsign-core` | Component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port | `subtle`, `zeroize`, `hkdf`, `sha2` |
-| `pqhybridsign` | H1 through H4 | core, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa` |
-| `pqhybridsign-shrincs` | H5 and H6 | core, `pqhybridsign`, `hashsigs-rs` from crates.io |
-| `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter. Not published: the bindings reach it by path | core, `pqhybridsign`, `pqhybridsign-shrincs` |
+| `pqhybridsign` | All six suites. Top-level modules are the composite foundation (component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port) and the lattice suites H1 through H4. H5 and H6 live under `pqhybridsign::shrincs`, behind the `stateful` feature | `subtle`, `zeroize`, `hkdf`, `sha2`, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa`, and `hashsigs-rs` under `stateful` |
+| `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter. Not published: the bindings reach it by path | `pqhybridsign` |
 | `pqhybridsign-cffi` | C ABI, with a checked-in header. Ships as a release-asset C library | abi |
 | `pqhybridsign-wasm` | WebAssembly, shipped as an npm package. Signing is H1 through H4 only. H5 and H6 are verify-side only | abi |
 | `pqhybridsign-py` | Python bindings on the `abi3-py39` stable ABI, shipped as a PyPI wheel | abi |
@@ -69,7 +67,7 @@ reach it by path. No published crate depends on it, so a crates.io release
 and its trusted-publisher registration would serve nothing.
 
 The workspace denies `unsafe_code` for every crate through
-`[workspace.lints.rust]`. The five pure-Rust crates also set
+`[workspace.lints.rust]`. The three pure-Rust crates also set
 `#![forbid(unsafe_code)]`, which no downstream attribute can relax. The two
 foreign-ABI crates cannot: `pqhybridsign-cffi` is the raw-pointer boundary, and
 `pqhybridsign-py` links the `unsafe` that pyo3's macros generate. Each of the
@@ -77,7 +75,7 @@ two carries a crate-root allow naming its reason.
 
 ### Platform requirement: Core builds where there is no `std`
 
-`pqhybridsign-core` must compile for a target that provides no `std`. Both
+`pqhybridsign` must compile for a target that provides no `std`. Both
 of these feature sets must build:
 
 | Feature set | What it gives the caller |
@@ -118,15 +116,15 @@ Run the same commands before you push:
 
 ```bash
 rustup target add thumbv7em-none-eabi
-cargo build -p pqhybridsign-core --no-default-features --target thumbv7em-none-eabi
-cargo build -p pqhybridsign-core --no-default-features --features alloc --target thumbv7em-none-eabi
-cargo test -p pqhybridsign-core --no-default-features
-cargo test -p pqhybridsign-core --no-default-features --features alloc
+cargo build -p pqhybridsign --no-default-features --target thumbv7em-none-eabi
+cargo build -p pqhybridsign --no-default-features --features alloc --target thumbv7em-none-eabi
+cargo test -p pqhybridsign --no-default-features
+cargo test -p pqhybridsign --no-default-features --features alloc
 ```
 
 #### What the tests do in each feature set
 
-The tests follow the requirement. `cargo test -p pqhybridsign-core` passes
+The tests follow the requirement. `cargo test -p pqhybridsign` passes
 in all three feature sets, so the preceding checks run real assertions and
 not an empty suite.
 
@@ -142,7 +140,7 @@ hides the no-allocator half of the same module from the no-allocator run.
 #### Limits of the requirement
 
 `pqhybridsign` builds for `wasm32-unknown-unknown` without an allocator.
-`pqhybridsign-shrincs` needs `std`, because the reference signer needs `std`
+The `stateful` suites need `std`, because the reference signer needs `std`
 today.
 
 ### ed25519 verification: ZIP-215 acceptance is stated, not mandated
@@ -646,7 +644,7 @@ Recorded here because it was reconstructed twice from timings and should not
 have to be reconstructed a third time.
 
 Measured in release, one H5 key with four leaves, by
-`crates/pqhybridsign-shrincs/tests/profile_timing.rs`:
+`crates/pqhybridsign/tests/profile_timing.rs`:
 
 | Profile | keygen | sign_stateful | sign_stateless | Stateless signature |
 |---|---|---|---|---|
@@ -825,7 +823,7 @@ them apart handles all of them wrongly.
 
 Library code holds no `unwrap` or `expect` outside tests.
 
-`pqhybridsign-core` and `pqhybridsign-abi` write `fmt::Display` and
+`pqhybridsign` and `pqhybridsign-abi` write `fmt::Display` and
 `Error` by hand. They do not depend on `thiserror`. Core builds with no
 `std` and no allocator, and decision 2 keeps the dependency surface small.
 Do not add the proc-macro crate to "fix" this.
@@ -864,7 +862,7 @@ which is what made one test binary take 184.80 seconds. Cargo still passes
 exists to exercise still run.
 
 **Per-profile fixtures replace live signing.** Each profile has a fixture in
-`crates/pqhybridsign-shrincs/tests/vectors/` holding the exported secret key,
+`crates/pqhybridsign/tests/vectors/` holding the exported secret key,
 the public key, and one signature of each kind. Tests verify stored
 signatures instead of producing them, and verification costs under 0.01
 seconds at every profile. `tests/generate_fixtures.rs` regenerates them and
