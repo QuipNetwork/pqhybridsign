@@ -45,6 +45,73 @@ those schemes again. Those components come from `ed25519-zebra` and
 `schnorrkel` through `pqhybridsign`. A license or dependency audit that
 reads only this table misses those crates.
 
+## Install
+
+Each binding ships from its own registry.
+
+### Rust
+
+```toml
+[dependencies]
+pqhybridsign = "0.0.0-rc1"
+
+# H5 and H6 need the SHRINCS crate too.
+pqhybridsign-shrincs = "0.0.0-rc1"
+```
+
+`pqhybridsign-abi` is the type-erased layer that the C, Python, and
+WebAssembly bindings share. A Rust consumer does not need it.
+
+### JavaScript and TypeScript
+
+The package is prerelease, so install the `next` tag.
+
+```sh
+npm install @quip.network/pqhybridsign@next
+```
+
+The module loads a WebAssembly binary before it can sign or verify. Every
+function is async. The loader caches one load per process. Only the first
+call pays that cost.
+
+```typescript
+import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";
+
+const seed = new Uint8Array(32).fill(7);
+const msg = new TextEncoder().encode("message");
+const ctx = new TextEncoder().encode("context");
+
+const { publicKey, secretKey } = await keygenFromSeed("H1", seed);
+const sig = await sign("H1", secretKey, msg, ctx);
+const valid = await verify("H1", publicKey, msg, ctx, sig);
+```
+
+H5 and H6 signing is not available in JavaScript. Verification and the
+length accessors work for every suite.
+
+### Python
+
+```sh
+pip install --pre pqhybridsign
+```
+
+PEP 440 spells the prerelease version `0.0.0rc1`, not `0.0.0-rc1`. Without
+`--pre`, pip does not find it.
+
+### C and C++
+
+Download `pqhybridsign-clib-<tag>-linux-amd64.tar.gz` and its `.sha256` file
+from the release page on GitLab. The archive holds
+`libpqhybridsign_cffi.so`, `libpqhybridsign_cffi.a`, `include/pqhybridsign.h`,
+and `LICENSE`.
+
+## Examples
+
+`examples/` holds a roundtrip program written in Rust, TypeScript, Python,
+and C. Each program installs the packaged artifact, not the crate or module
+from this source tree. Continuous integration runs all four as smoke jobs
+against the published packages.
+
 ## Stateless signing, H1 and H3
 
 ```rust

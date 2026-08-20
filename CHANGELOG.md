@@ -76,4 +76,14 @@ made for one suite cannot verify under another.
 - **Key generation under the 128s profiles takes about 47 seconds**, and a
   stateless signature about three minutes, because those profiles use a
   single-layer height-18 hypertree. See the performance table in the README.
-- The minimum supported Rust version is 1.82, set by `fn-dsa`.
+
+### Packaging
+
+- Four distribution channels. crates.io holds `pqhybridsign-core`,
+  `pqhybridsign`, `pqhybridsign-shrincs`, and `pqhybridsign-abi`. npm holds
+  `@quip.network/pqhybridsign`. PyPI holds `pqhybridsign`. GitLab holds the
+  C library as a release asset.
+- `hashsigs-rs` now comes from crates.io instead of a pinned git revision.
+  Version 0.2.1-rc2 carries the same feature set as the revision it
+  replaces.
+- The minimum supported Rust version moved to 1.95, set by `hashsigs-rs`.
