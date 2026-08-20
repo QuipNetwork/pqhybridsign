@@ -68,3 +68,16 @@ expect-used    = "deny"
 # ever appears.
 indexing-slicing = "allow"
 allow-attributes = "deny"
+
+# arrayref is a transitive dependency of schnorrkel (sr25519, suites H3, H4,
+# H6), pulled by schnorrkel's alloc-gated batch-verification code. On
+# 2026-08-20 the arrayref crates.io account was compromised: every prior
+# version was yanked and a malicious 0.3.10 was published whose transitive
+# build script ran a credential stealer. This patch replaces the crates.io
+# source with a vendored copy of the benign 0.3.9, verified against the
+# checksum this project's Cargo.lock already pinned
+# (76a2e8124351fda1ef8aaaa3bbd7ebbcb486bbcd4225aca0aa0d84bb2db8fecb). The
+# vendored crate has no build script and no dependencies. Remove this patch
+# once a trustworthy arrayref release is available on crates.io.
+[patch.crates-io]
+arrayref = { path = "vendor/arrayref" }
