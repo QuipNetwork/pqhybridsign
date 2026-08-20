@@ -629,7 +629,7 @@ int pqhs_sign(uint8_t suite,
  * and the number of bytes written into `*sig_written`.
  *
  * Not every component honours `nonce`; see
- * `pqhybridsign_core::composite::sign_deterministic`'s documentation for
+ * `pqhybridsign::composite::sign_deterministic`'s documentation for
  * which do.
  *
  * # Errors
