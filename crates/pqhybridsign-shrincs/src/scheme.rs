@@ -658,15 +658,23 @@ fn read_hashes(bytes: &[u8], at: &mut usize, count: usize) -> Option<Vec<[u8; HA
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only `MemoryBudget` (gated below) touches the budget traits.
+    #[cfg(feature = "profile-256s")]
     use pqhybridsign_core::budget::{BudgetKey, StatelessBudgetStore};
 
     /// An in-memory `StatelessBudgetStore`. Not durable, which is fine
     /// here: `sign_stateless` requires a store to be callable at all, and
     /// these tests are about what the component signs, not about
     /// persistence.
+    ///
+    /// Gated to the one profile whose tests construct it. Under the other
+    /// three profiles the fixture would be dead code, and the per-profile
+    /// clippy run holds `--all-targets` to `-D warnings`.
+    #[cfg(feature = "profile-256s")]
     #[derive(Default)]
     struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
 
+    #[cfg(feature = "profile-256s")]
     impl StatelessBudgetStore for MemoryBudget {
         type Error = core::convert::Infallible;
 
