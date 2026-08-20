@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Builds crates/pqhybridsign-wasm for both npm targets and assembles the
-# publishable package under npm/. Requires `wasm-pack` on PATH.
+# Builds crates/pqhybridsign-wasm for both npm targets, compiles the
+# TypeScript Promise API over them, and assembles the publishable package
+# under npm/. Requires `wasm-pack` and `npm` on PATH. This one script is
+# the whole build: it ends with npm/dist/ populated, so nothing downstream
+# needs to run `npm run build` again before `npm test` or `npm pack`.
 #
-# The web and nodejs builds land in separate subdirectories because their
-# glue code differs (async `init()` versus a synchronous `require`), and
-# npm/package.json's `exports` map picks between them by environment.
+# The web and nodejs wasm builds land in separate subdirectories because
+# their glue code differs (async `init()` versus a synchronous `require`),
+# and npm/src/index.{node.cts,web.mts} -- and npm/package.json's `exports`
+# map -- pick between them by environment.
 set -euo pipefail
 
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,5 +42,12 @@ printf '{"type": "module"}\n' > npm/web/package.json
 printf '{"type": "commonjs"}\n' > npm/node/package.json
 
 echo "Built npm/web/ and npm/node/ (both gitignored build output)."
-echo "Run scripts/check-types.sh to diff their .d.ts files against the checked-in"
-echo "copies under npm/types/ before publishing."
+
+# npm/src/index.node.cts and npm/src/index.web.mts both import the wasm
+# glue's checked-in .d.ts surface (see npm/types/ and scripts/check-types.sh),
+# so this step must run after the wasm-pack builds above, not before.
+( cd npm && npm install --no-audit --no-fund && npx tsc -p . )
+
+echo "Compiled npm/src/ to npm/dist/ (gitignored build output)."
+echo "Run scripts/check-types.sh to diff npm/web/ and npm/node/'s .d.ts files"
+echo "against the checked-in copies under npm/types/ before publishing."

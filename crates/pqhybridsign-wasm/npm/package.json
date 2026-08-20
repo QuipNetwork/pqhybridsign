@@ -1,31 +1,55 @@
 {
-  "name": "pqhybridsign",
+  "name": "@quip.network/pqhybridsign",
   "version": "0.0.0-rc1",
-  "description": "Hybrid classical/post-quantum signing (H1-H4) compiled to WebAssembly",
+  "description": "Hybrid classical/post-quantum signing (H1-H6) compiled to WebAssembly, with a Promise-based API for Node.js and browsers",
   "license": "AGPL-3.0-or-later",
+  "homepage": "https://quip.network",
   "repository": {
     "type": "git",
-    "url": "https://gitlab.com/quip.network/pqhybridsign"
+    "url": "git+https://gitlab.com/quip.network/pqhybridsign.git"
   },
-  "sideEffects": [
-    "./web/pqhybridsign_wasm.js"
+  "keywords": [
+    "post-quantum",
+    "signature",
+    "hybrid",
+    "cryptography",
+    "wasm"
   ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
-    "web/",
-    "node/"
+    "dist",
+    "web",
+    "node",
+    "LICENSE",
+    "README.md"
   ],
-  "main": "./node/pqhybridsign_wasm.js",
-  "types": "./node/pqhybridsign_wasm.d.ts",
+  "main": "./dist/index.node.cjs",
+  "types": "./dist/index.node.d.cts",
   "exports": {
     ".": {
       "node": {
-        "types": "./node/pqhybridsign_wasm.d.ts",
-        "default": "./node/pqhybridsign_wasm.js"
+        "types": "./dist/index.node.d.cts",
+        "require": "./dist/index.node.cjs",
+        "default": "./dist/index.node.cjs"
       },
       "default": {
-        "types": "./web/pqhybridsign_wasm.d.ts",
-        "default": "./web/pqhybridsign_wasm.js"
+        "types": "./dist/index.web.d.mts",
+        "default": "./dist/index.web.mjs"
       }
     }
+  },
+  "scripts": {
+    "build": "../scripts/build-npm.sh && tsc -p .",
+    "prepack": "npm run build && cp ../../../LICENSE ./LICENSE",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^7.0.2"
   }
 }
