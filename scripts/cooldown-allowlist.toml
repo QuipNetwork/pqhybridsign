@@ -1,0 +1,15 @@
+# Crates exempt from the dependency cooldown (check-dependency-cooldown.py).
+#
+# The cooldown refuses any crates.io dependency published within the last
+# seven days, because that is the window a supply-chain attack lives in. An
+# entry here waives that check for one exact name-and-version pair.
+#
+# The only correct reason to add an entry is a first-party crate this
+# project controls, or a version a human has read and vetted. The version is
+# exact on purpose: a later release of the same crate must be vetted again.
+# Remove an entry once the version has aged past the cooldown on its own.
+
+[[allow]]
+name = "hashsigs-rs"
+version = "0.2.1-rc2"
+reason = "First-party crate (quip.network), published and vetted by the maintainer."

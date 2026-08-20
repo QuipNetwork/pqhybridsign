@@ -1,0 +1,15 @@
+# Pre-commit hooks. Install once with `prek install` (or `pre-commit install`).
+#
+# The cooldown hook runs only when Cargo.lock is staged, and checks only the
+# versions that changed against HEAD, so a normal commit pays nothing and a
+# lockfile bump is checked against crates.io before it can land. CI runs the
+# same script over the whole lockfile as a backstop.
+repos:
+  - repo: local
+    hooks:
+      - id: dependency-cooldown
+        name: Refuse crates.io dependencies newer than seven days
+        entry: python3 scripts/check-dependency-cooldown.py --changed-only
+        language: system
+        files: ^Cargo\.lock$
+        pass_filenames: false

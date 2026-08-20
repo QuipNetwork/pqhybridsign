@@ -75,6 +75,19 @@ deps:
       fi
       echo "rand_core outside dev-dependencies: $versions"
 
+# Refuses any crates.io dependency whose locked version was published within
+# the last seven days. A supply-chain attack on a crate is loudest in the
+# hours after publication, and the classic trigger is a yanked prior version
+# that bait a `cargo update` onto the malicious replacement. The cooldown
+# turns that window into a wall. scripts/cooldown-allowlist.toml carries the
+# reviewed exemptions for first-party crates. See the incident notes for the
+# arrayref 0.3.10 attack this was built in response to.
+cooldown:
+  stage: check
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates
+    - python3 scripts/check-dependency-cooldown.py
+
 # `pqhybridsign-core` is required to compile where there is no `std`, both
 # with and without an allocator. `wasm32-unknown-unknown` cannot prove that
 # on its own: rustup ships a `std` for it, so a dependency that reached for
@@ -375,6 +388,7 @@ release:validate:
     - job: fmt
     - job: clippy
     - job: deps
+    - job: cooldown
     - job: no-std
     - job: wasm
     - job: cross-profile
