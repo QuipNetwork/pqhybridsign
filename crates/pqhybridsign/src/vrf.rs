@@ -94,6 +94,17 @@
 //!
 //! So use H6 for a low-frequency VRF, such as epoch randomness. Per-slot
 //! leader election belongs on H3 or H4.
+//!
+//! # A failed evaluation may leave bytes in the buffer
+//!
+//! Every evaluation entry point writes the pre-output and the classical proof
+//! before the post-quantum binding exists, so an error raised after that point
+//! leaves those bytes in `proof_out` with no binding after them. **Discard the
+//! buffer on `Err`.** Nothing secret is exposed by it -- a pre-output and its
+//! proof are public, and no post-quantum signature was produced -- but the
+//! partial contents are not a proof and no verifier will accept them. For H6
+//! in particular, a budget spend that did not land means no SHRINCS signature
+//! was released, which is the property that matters there.
 
 use crate::component::{ClassicalScheme, PqScheme};
 use crate::encoding_delta;
