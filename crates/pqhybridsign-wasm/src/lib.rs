@@ -158,14 +158,18 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
     }
 }
 
-/// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`],
-/// restricted to the two stateful suites [`verify_with_stored_public_key`]
-/// and [`stored_public_key_len`] serve.
+/// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], restricted
+/// to the two stateful suites.
 ///
-/// Deliberately separate from [`stateless_suite`]: that function's H5/H6
-/// refusal is about the structured-clone hazard a stateful *secret key*
-/// carries, which these two functions never touch (see the crate
-/// documentation).
+/// Every stateful-only entry point routes through this:
+/// [`keygenStatefulFromSeed`](keygen_stateful_from_seed),
+/// [`signStateful`](sign_stateful), [`signStateless`](sign_stateless),
+/// [`keyIdentity`](key_identity),
+/// [`keyIdentityFromSecretKey`](key_identity_from_secret_key) and
+/// [`verifyWithStoredPublicKey`](verify_with_stored_public_key). It is the
+/// counterpart of [`stateless_suite`], which rejects H5/H6, and of
+/// [`any_suite`], which accepts all six for the length accessors and
+/// [`verify`].
 ///
 /// # Errors
 ///
