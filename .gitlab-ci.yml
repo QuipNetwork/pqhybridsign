@@ -45,6 +45,9 @@ clippy:
   stage: check
   script:
     - cargo clippy --locked --workspace --all-targets -- -D warnings
+    # `vrf` is off by default, so the workspace run above never compiles the
+    # hybrid VRF or its schnorrkel VRF bindings.
+    - cargo clippy --locked -p pqhybridsign --all-targets --features vrf -- -D warnings
 
 deps:
   stage: check
@@ -105,6 +108,11 @@ no-std:
     - rustup target add thumbv7em-none-eabi
     - cargo build --locked -p pqhybridsign --no-default-features --target thumbv7em-none-eabi
     - cargo build --locked -p pqhybridsign --no-default-features --features alloc --target thumbv7em-none-eabi
+    # The hybrid VRF has to hold this line too. schnorrkel's own `vrf_sign`
+    # draws the DLEQ proof's witness through `getrandom_or_panic`, which
+    # panics on a target with no `getrandom`; `vrf` attaches the caller's RNG
+    # instead, and this build is what proves it.
+    - cargo build --locked -p pqhybridsign --no-default-features --features vrf --target thumbv7em-none-eabi
     - cargo test --locked -p pqhybridsign --no-default-features
     - cargo test --locked -p pqhybridsign --no-default-features --features alloc
 
@@ -199,6 +207,9 @@ test-debug:
   stage: test
   script:
     - cargo test --locked --workspace
+    # `vrf` is not a default feature, so the workspace run above skips the
+    # hybrid VRF entirely, including its compile-fail guarantee.
+    - cargo test --locked -p pqhybridsign --features vrf
 
 test-release:
   stage: test
@@ -206,6 +217,7 @@ test-release:
     # subtle uses debug_assert with secret-dependent branches, so release
     # mode exercises different code than the debug build above.
     - cargo test --locked --workspace --release
+    - cargo test --locked -p pqhybridsign --release --features vrf
 
 # Full suite under each of the four profiles. Proves the tiering holds: a
 # test that generates a key under a 128s profile slows this job and is the
