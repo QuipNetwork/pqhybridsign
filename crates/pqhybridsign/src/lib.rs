@@ -54,6 +54,8 @@ pub mod encoding_delta;
 pub mod encoding_path;
 pub mod error;
 pub mod message;
+#[cfg(feature = "mnemonic")]
+pub mod mnemonic;
 pub mod policy;
 pub mod rotation;
 pub mod stateful;

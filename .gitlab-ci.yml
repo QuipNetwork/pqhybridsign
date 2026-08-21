@@ -108,6 +108,7 @@ no-std:
     - rustup target add thumbv7em-none-eabi
     - cargo build --locked -p pqhybridsign --no-default-features --target thumbv7em-none-eabi
     - cargo build --locked -p pqhybridsign --no-default-features --features alloc --target thumbv7em-none-eabi
+    - cargo build --locked -p pqhybridsign --no-default-features --features mnemonic --target thumbv7em-none-eabi
     # The hybrid VRF has to hold this line too. schnorrkel's own `vrf_sign`
     # draws the DLEQ proof's witness through `getrandom_or_panic`, which
     # panics on a target with no `getrandom`; `vrf` attaches the caller's RNG
@@ -115,12 +116,14 @@ no-std:
     - cargo build --locked -p pqhybridsign --no-default-features --features vrf --target thumbv7em-none-eabi
     - cargo test --locked -p pqhybridsign --no-default-features
     - cargo test --locked -p pqhybridsign --no-default-features --features alloc
+    - cargo test --locked -p pqhybridsign --no-default-features --features mnemonic
 
 wasm:
   stage: check
   script:
     - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
     - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features --features alloc
+    - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features --features mnemonic
     # The lattice crate must also build without an allocator: it is the
     # crate that pulls in ed25519-zebra, schnorrkel and fips204, any of
     # which could introduce a std or getrandom dependency.
