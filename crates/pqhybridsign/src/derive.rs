@@ -79,6 +79,98 @@ pub fn derive_component_seeds(
     result
 }
 
+/// Info prefix for hard-junction derivation. Distinct from `classical/` and
+/// `pq/` above so a junction child can never collide with a component seed.
+const JUNCTION_INFO_PREFIX: &[u8] = b"junction/hard/";
+/// `JUNCTION_INFO_PREFIX` followed by a 32-byte chain code, with no length
+/// prefix on either field: both are fixed-width, so unlike the
+/// `classical/`/`pq/` labels above (which are caller-supplied and need the
+/// `write_info` length check) there is no variable-length input here for a
+/// length-prefix omission to make ambiguous.
+const JUNCTION_INFO_LEN: usize = JUNCTION_INFO_PREFIX.len() + 32;
+
+/// Derives a new master seed from a parent master seed and a hard-derivation
+/// chain code, specification section 10.
+///
+/// # What this is for, and what it is not
+///
+/// Specification section 10 derives a junction from the whole hybrid suite
+/// at once: a new *master seed*, from which [`derive_component_seeds`] then
+/// re-derives both the classical and post-quantum components exactly as it
+/// would for any other master seed. Soft junctions are rejected suite-wide
+/// -- including for sr25519 constructions, which support soft derivation on
+/// their own -- because no derived master seed exists for a soft junction:
+/// soft derivation only ever produces a child public key, not a child
+/// secret. That is why this module offers hard derivation only and has no
+/// soft-derivation entry point.
+///
+/// The chain code is a raw 32 bytes. Mapping a junction string such as
+/// `//alice` to a chain code is SCALE encoding and secret-URI parsing, and
+/// stays in the Substrate integration that consumes this crate; this
+/// function does not parse junction syntax.
+///
+/// # The re-keygen hazard this inherits from section 9
+///
+/// A hard-derived child for a stateful suite (H5, H6) is a **fresh SHRINCS
+/// tree that starts at leaf 1**. Derivation is a deterministic function of
+/// `(parent seed, chain code)`: deriving "the same child" a second time --
+/// on a second host that also holds the parent seed, or by re-running
+/// derivation after a restore -- reaches the identical child seed and
+/// therefore the identical tree, again starting at leaf 1. That is the
+/// section 9 re-keygen hazard, reached through derivation instead of through
+/// re-import. A derived child MUST be derived once, then persisted and
+/// restored through the validating import path; it MUST NOT be re-derived on
+/// a second host. A key pool spanning multiple nodes MUST give each node its
+/// own distinct junction, never the same junction re-derived on two hosts.
+pub fn derive_hard_junction(parent_master: &[u8; 32], chain_code: &[u8; 32]) -> Result<[u8; 32]> {
+    let (mut prk, hk) = Hkdf::<Sha256>::extract(Some(SALT), parent_master);
+    prk.as_mut_slice().zeroize();
+
+    let mut info = [0u8; JUNCTION_INFO_LEN];
+    info[..JUNCTION_INFO_PREFIX.len()].copy_from_slice(JUNCTION_INFO_PREFIX);
+    info[JUNCTION_INFO_PREFIX.len()..].copy_from_slice(chain_code);
+
+    let mut child = [0u8; 32];
+    hk.expand(&info, &mut child)
+        .map_err(|_| Error::ComponentFailure)?;
+    Ok(child)
+}
+
+/// Holds a master seed so its wipe happens on drop, exactly as
+/// `classical::sr25519::Wiped` does and for the same reason: a bare
+/// `zeroize()` call stops covering the value the moment an early return is
+/// added above it, so the wipe needs to be structural instead.
+struct Wiped<T: Zeroize>(T);
+
+impl<T: Zeroize> Drop for Wiped<T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// Applies a sequence of hard-derivation chain codes in order, each child
+/// becoming the next parent, and returns the final master seed.
+///
+/// `[a, b]` derives `derive_hard_junction(derive_hard_junction(parent, a),
+/// b)`, not the other order: path order is part of the derivation, the same
+/// way a filesystem path's components are ordered. Every intermediate
+/// master seed is wiped once the next one is derived from it; only the
+/// final seed is returned, and wiping that one is the caller's
+/// responsibility. See [`derive_hard_junction`] for the re-keygen hazard
+/// that applies to every seed this function returns.
+pub fn derive_hard_junction_path(
+    parent_master: &[u8; 32],
+    chain_codes: &[[u8; 32]],
+) -> Result<[u8; 32]> {
+    let mut current = Wiped(*parent_master);
+    for chain_code in chain_codes {
+        let next = derive_hard_junction(&current.0, chain_code)?;
+        current.0.zeroize();
+        current.0 = next;
+    }
+    Ok(current.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +212,65 @@ mod tests {
         let (mut c, mut p) = ([0u8; 32], [0u8; 48]);
         derive_component_seeds(&[3u8; 32], H1, &mut c, &mut p).expect("48-byte pq seed");
         assert!(p.iter().any(|b| *b != 0));
+    }
+
+    #[test]
+    fn hard_junction_derivation_is_deterministic() {
+        let first = derive_hard_junction(&[9u8; 32], &[7u8; 32]).expect("derive");
+        let second = derive_hard_junction(&[9u8; 32], &[7u8; 32]).expect("derive");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn different_chain_codes_give_different_children() {
+        let a = derive_hard_junction(&[9u8; 32], &[7u8; 32]).expect("derive");
+        let b = derive_hard_junction(&[9u8; 32], &[8u8; 32]).expect("derive");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_hard_junction_child_differs_from_its_parent() {
+        let parent = [9u8; 32];
+        let child = derive_hard_junction(&parent, &[7u8; 32]).expect("derive");
+        assert_ne!(child, parent);
+    }
+
+    #[test]
+    fn hard_junction_path_order_matters() {
+        let a = [7u8; 32];
+        let b = [8u8; 32];
+        let parent = [9u8; 32];
+
+        let ab = derive_hard_junction_path(&parent, &[a, b]).expect("derive");
+        let ba = derive_hard_junction_path(&parent, &[b, a]).expect("derive");
+
+        assert_ne!(ab, ba, "[a, b] must differ from [b, a]");
+    }
+
+    #[test]
+    fn hard_junction_path_matches_sequential_single_step_derivation() {
+        let a = [7u8; 32];
+        let b = [8u8; 32];
+        let parent = [9u8; 32];
+
+        let via_path = derive_hard_junction_path(&parent, &[a, b]).expect("derive");
+        let via_steps =
+            derive_hard_junction(&derive_hard_junction(&parent, &a).expect("derive"), &b)
+                .expect("derive");
+
+        assert_eq!(via_path, via_steps);
+    }
+
+    /// Known-answer vector computed independently of this code (a standalone
+    /// HKDF-SHA256 extract/expand over `hkdf` 0.12, not this crate). Pins the
+    /// domain string and the info layout so a change to either fails here,
+    /// not just in a determinism test that could not tell them apart.
+    #[test]
+    fn the_hard_junction_layout_is_pinned() {
+        let child = derive_hard_junction(&[9u8; 32], &[7u8; 32]).expect("derive");
+        assert_eq!(
+            hex::encode(child),
+            "949e575e305f4aca84004570a6e023634ad491b113e280ee6fabe2cb72d06331"
+        );
     }
 }

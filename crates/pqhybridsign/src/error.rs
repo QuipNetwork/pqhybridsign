@@ -81,6 +81,11 @@ pub enum Error {
     /// Nothing was recorded, so the same unit of budget is still available
     /// once the storage fault is repaired.
     BudgetStoreFailed,
+    /// A phrase passed to `mnemonic::master_seed_from_mnemonic` was not a
+    /// valid English BIP39 mnemonic: wrong word count, an unknown word, or a
+    /// bad checksum.
+    #[cfg(feature = "mnemonic")]
+    InvalidMnemonic,
 }
 
 impl fmt::Display for Error {
@@ -133,6 +138,8 @@ impl fmt::Display for Error {
                 f,
                 "stateless budget store could not durably record; nothing consumed"
             ),
+            #[cfg(feature = "mnemonic")]
+            Self::InvalidMnemonic => write!(f, "not a valid English BIP39 mnemonic phrase"),
         }
     }
 }

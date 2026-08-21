@@ -25,6 +25,17 @@ fn-dsa.workspace = true
 # or downloads it or `sha3`.
 hashsigs-rs = { workspace = true, optional = true }
 sha3 = { version = "0.10", default-features = false, optional = true }
+# BIP39 mnemonic-to-master-seed derivation, behind the `mnemonic` feature.
+# Pinned to the same 2.x line quip-protocol-rs uses so entropy extraction is
+# bit-identical; `default-features = false` keeps English-only, no
+# unicode-normalization.
+bip39 = { version = "2.2", default-features = false, optional = true }
+# PBKDF2-HMAC-SHA512 for the Substrate seed derivation. Pinned to the 0.12
+# line (matching `substrate-bip39`'s own dependency) rather than the newer
+# 0.13, which depends on `digest` 0.11 and would pull a second `digest`
+# major version alongside the `sha2` 0.10 already in this workspace.
+pbkdf2 = { version = "0.12", default-features = false, optional = true }
+hmac = { version = "0.12", default-features = false, optional = true }
 
 [dev-dependencies]
 subtle.workspace = true
@@ -50,6 +61,12 @@ curve25519-dalek = { version = "4.1", default-features = false, features = [
 default = ["std", "stateful"]
 std = ["alloc", "schnorrkel/std", "ed25519-zebra/std"]
 alloc = []
+# Chain-neutral BIP39 mnemonic-to-master-seed derivation. Off by default: it
+# is the one feature that pulls in `bip39`, `pbkdf2` and `hmac`, none of
+# which any suite needs. `zeroize/alloc` is enabled here, not by `alloc`
+# itself, because only this feature wipes a heap-allocated buffer (the
+# PBKDF2 salt); the plain `alloc` feature never touches `zeroize` at all.
+mnemonic = ["alloc", "dep:bip39", "dep:pbkdf2", "dep:hmac", "zeroize/alloc"]
 # H5/H6 stateful hash-based suites, on by default. This is the friendly
 # on-switch: it selects the 256s profile. To use another profile, disable
 # default features and name it (each profile turns the suites on by itself).
