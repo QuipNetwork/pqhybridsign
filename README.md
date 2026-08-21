@@ -1,48 +1,280 @@
 # pqhybridsign
 
-Hybrid post-quantum signatures in Rust. Each suite pairs a classical
-signature with a post-quantum signature. A composite signature verifies only
-when both halves verify, so the composite stays unforgeable while either
-component survives.
+Hybrid post-quantum signatures in Rust. Each suite pairs a classical signature
+with a post-quantum signature and AND-composes them. A composite signature
+verifies only when both halves verify, so the composite stays unforgeable while
+either component survives a break.
 
 This crate is a standalone reference implementation. It does not depend on
 Substrate.
 
 **Status: pre-release.** The wire format is not frozen, and no
-cross-implementation test vectors exist yet. See
-[Limitations](#limitations).
+cross-implementation test vectors exist yet. See [Limitations](#limitations).
+
+## Features
+
+- **Unforgeable while either half survives.** The security goal is EUF-CMA if
+  at least one component scheme is secure. A break of the classical half or the
+  post-quantum half alone does not forge a composite signature. For the
+  stateful suites the post-quantum guarantee is conditional on state discipline
+  (see [Stateful signing](#stateful-signing)).
+- **Constant-time composite verify.** Verification combines the two component
+  results with a bitwise `Choice` conjunction, never a short-circuiting `&&`.
+  Neither the result nor the running time reveals which half failed.
+- **Canonical and hedged signing.** `sign` hedges with fresh randomness by
+  default. `sign_deterministic` produces a reproducible signature for uses that
+  need verifiers to agree byte for byte, such as finality votes and light-client
+  justifications.
+- **Single master seed.** One 32-byte seed derives both the classical and the
+  post-quantum half through HKDF-SHA256, so one backup covers the whole suite.
+- **Noise-style suite names.** Each suite name is a generated label such as
+  `hybrid-ed25519-mldsa44-v1`. The name doubles as the domain-separation label,
+  and the crate checks it against a registry literal at compile time, so a
+  signature made for one suite cannot verify under another.
+- **Two families, one composition layer.** Stateless lattice suites and
+  stateful hash-based suites share one generic composite layer. Only names and
+  sizes vary between them.
+- **Compile only what you use.** The stateful hash-based suites sit behind the
+  `stateful` feature, on by default. Turn it off and the SHRINCS code and the
+  `hashsigs-rs` dependency are neither compiled nor downloaded.
+- **`no_std` and no-allocator capable.** The library builds for a target with
+  no `std` prelude, both with and without an allocator. The pure-Rust crate
+  sets `#![forbid(unsafe_code)]`.
+- **Four language bindings.** Rust, C, Python, and WebAssembly, each shipped
+  from its own registry.
+- **Stateful misuse resistance built into the types.** The stateful secret key
+  is not `Clone`. Signing commits the spent leaf through a journal before it
+  returns a signature. The stateless budget is a required parameter. Rotation
+  needs both components. See [Stateful signing](#stateful-signing).
 
 ## Suites
 
-| Suite | Classical | Post-quantum | State |
+Suites follow the Noise Protocol Framework style: a suite combines a classical
+component with a post-quantum component, and that combination is its name. The
+name is also the domain-separation label. The crate checks it against a registry
+literal when it compiles. Every name follows one grammar:
+
+```
+label = "hybrid-" classical "-" pq [ "-rotate" ] "-v1" NUL
+```
+
+The label carries a trailing null byte. A signature made for one suite cannot
+verify under another.
+
+**Stateless lattice suites.** Four variations, always built.
+
+| Variation | Classical | Post-quantum |
+|---|---|---|
+| `hybrid-ed25519-mldsa44-v1` | ed25519 | ML-DSA-44 |
+| `hybrid-sr25519-mldsa44-v1` | sr25519 | ML-DSA-44 |
+| `hybrid-ed25519-falcon512-v1` | ed25519 | Falcon-512 |
+| `hybrid-sr25519-falcon512-v1` | sr25519 | Falcon-512 |
+
+**Stateful hash-based suites.** Eight variations: each classical key crossed
+with each of the four SHRINCS profiles. The profile is part of the name.
+
+| Variation | Classical | Profile |
+|---|---|---|
+| `hybrid-ed25519-shrincs-256s-v1` | ed25519 | 256s |
+| `hybrid-ed25519-shrincs-256s-sha2-v1` | ed25519 | 256s-sha2 |
+| `hybrid-ed25519-shrincs-128s-q18-v1` | ed25519 | 128s-q18 |
+| `hybrid-ed25519-shrincs-128s-q20-v1` | ed25519 | 128s-q20 |
+| `hybrid-sr25519-shrincs-256s-v1` | sr25519 | 256s |
+| `hybrid-sr25519-shrincs-256s-sha2-v1` | sr25519 | 256s-sha2 |
+| `hybrid-sr25519-shrincs-128s-q18-v1` | sr25519 | 128s-q18 |
+| `hybrid-sr25519-shrincs-128s-q20-v1` | sr25519 | 128s-q20 |
+
+Each stateful suite also carries a companion `...-rotate-v1` label for key
+rotation, so the wire cannot confuse a rotation co-signature with an ordinary
+one.
+
+The Falcon-512 suites ship against the `fn-dsa` crate rather than waiting for a
+final FIPS 206. Read the caveat under [Limitations](#limitations) before you
+use them.
+
+### Selecting a suite in the code
+
+The Rust API names each lattice suite with a short type (`H1` through `H4`), and
+the C, Python, and WebAssembly bindings take the same identifiers as strings.
+The two SHRINCS types are `H5` (ed25519) and `H6` (sr25519). The profile is a
+compile-time build feature, not a runtime argument, so one binary carries one
+profile.
+
+| Type / string handle | Variation |
+|---|---|
+| `H1` | `hybrid-ed25519-mldsa44-v1` |
+| `H2` | `hybrid-ed25519-falcon512-v1` |
+| `H3` | `hybrid-sr25519-mldsa44-v1` |
+| `H4` | `hybrid-sr25519-falcon512-v1` |
+| `H5` under the active profile | `hybrid-ed25519-shrincs-<profile>-v1` |
+| `H6` under the active profile | `hybrid-sr25519-shrincs-<profile>-v1` |
+
+## Sizes
+
+Component primitives, in bytes:
+
+| Primitive | Public key | Secret key | Signature |
 |---|---|---|---|
-| H1 | ed25519 | ML-DSA-44 | stateless |
-| H2 | ed25519 | FN-DSA-512 | stateless |
-| H3 | sr25519 | ML-DSA-44 | stateless |
-| H4 | sr25519 | FN-DSA-512 | stateless |
-| H5 | ed25519 | SHRINCS | stateful |
-| H6 | sr25519 | SHRINCS | stateful |
+| ed25519 | 32 | 64 | 64 |
+| sr25519 | 32 | 64 | 64 |
+| ML-DSA-44 (FIPS 204) | 1,312 | 2,560 | 2,420 |
+| Falcon-512 (`fn-dsa` 0.4.0) | 897 | 1,345 | 666 |
+| SHRINCS | 32 commitment / 164 bundle | 264 | variable |
 
-H2 and H4 ship against the `fn-dsa` crate rather than waiting for a final
-FIPS 206. Read the caveat under [Limitations](#limitations) before you use
-them.
+Composite suites, in bytes. The classical choice does not change the size.
+Each lattice row covers its ed25519 and sr25519 variation, and each SHRINCS row
+covers both classical variations at that profile.
 
-The suite name is the domain separator. `H1` signs under the label
-`hybrid-ed25519-mldsa44-v1`, plus a trailing null byte, and the label is
-checked against a registry literal when the crate compiles. A signature made
-for one suite cannot verify under another.
+| Variation | Public key | Secret key | Signature |
+|---|---|---|---|
+| `hybrid-*-mldsa44-v1` | 1,344 | 2,624 | 2,484 (fixed) |
+| `hybrid-*-falcon512-v1` | 929 | 1,409 | 731 (see note) |
+| `hybrid-*-shrincs-256s-v1` | 64 stored / 196 verify | 328 | stateful 2,185 at leaf 1 / stateless 29,157 |
+| `hybrid-*-shrincs-256s-sha2-v1` | 64 stored / 196 verify | 328 | stateful 2,185 at leaf 1 / stateless 29,157 |
+| `hybrid-*-shrincs-128s-q18-v1` | 64 stored / 196 verify | 328 | stateful 1,161 at leaf 1 / stateless 5,769 |
+| `hybrid-*-shrincs-128s-q20-v1` | 64 stored / 196 verify | 328 | stateful 1,161 at leaf 1 / stateless 5,769 |
+
+- **The Falcon-512 secret key is 1,409 B**: 64 B classical plus the 1,345 B
+  signing key that `fn-dsa` 0.4.0 emits. That signing key is larger than the
+  1,281 B FN-DSA nominal value.
+- **The Falcon-512 signature is 731 B today.** `fn-dsa` 0.4.0 emits a fixed
+  666 B signature, so the composite is `64 + 1 delta byte + 666`. The wire
+  format carries a length field and admits a shorter signature, down to 476 B,
+  if a future component emits one.
+- **The SHRINCS suites store 64 B but verify against 196 B.** Storage keeps the
+  32 B classical key and a 32 B commitment. Verification needs the 164 B SHRINCS
+  bundle the signature travels with, so its input is 32 + 164.
+- **The SHRINCS signature is variable-length.** A stateful signature grows 32 B per
+  leaf, from 2,185 B at leaf 1 to 133,225 B at leaf 4,096 under the 256s
+  profiles. A stateless signature is fixed per profile.
+
+## Performance
+
+Measured on one machine in release mode. Reproduce the lattice figures with a
+timing loop over `pqhybridsign::composite` and `pqhybridsign::composite_delta`,
+and the SHRINCS figures with `crates/pqhybridsign/tests/profile_timing.rs`.
+
+### Lattice suites
+
+Wall-clock cost of one operation, averaged. These suites allocate nothing, and
+their cost does not depend on any stored state.
+
+| Variation | keygen | sign | verify |
+|---|---|---|---|
+| `hybrid-ed25519-mldsa44-v1` | 160 µs | 380 µs | 121 µs |
+| `hybrid-sr25519-mldsa44-v1` | 159 µs | 385 µs | 120 µs |
+| `hybrid-ed25519-falcon512-v1` | 1,634 µs | 221 µs | 43 µs |
+| `hybrid-sr25519-falcon512-v1` | 1,546 µs | 221 µs | 45 µs |
+
+Falcon-512 key generation is the slow operation. Falcon verification is faster
+than ML-DSA verification, so the Falcon suites verify faster than the ML-DSA
+suites.
+
+### Hash-based suites
+
+Timings depend on the SHRINCS profile, not on the classical half. Each row
+covers two variations: `hybrid-ed25519-shrincs-<profile>-v1` and
+`hybrid-sr25519-shrincs-<profile>-v1`. The figures below come from the ed25519
+variant. The sr25519 classical half moves them by tens of microseconds, below
+the resolution here. Each row reports one key at the 4,096-leaf capacity
+limit (`maxSignatures = 4096`).
+
+| Profile | keygen | sign (stateful) | verify | sign (stateless) |
+|---|---|---|---|---|
+| 256s | 1.46 s | 1.37 s | 0.19 ms | 1.15 s |
+| 256s-sha2 | 0.39 s | 0.37 s | 0.08 ms | 0.32 s |
+| 128s-q18 | ~47 s | ~0.7 s | 0.12 ms | 176.6 s |
+| 128s-q20 | ~47 s | ~0.7 s | 0.12 ms | 166.5 s |
+
+Four properties drive these numbers.
+
+- **Key generation and stateful signing scale with the tree size.** The
+  reference signer rebuilds the authentication path on each signature, so both
+  cost about one hash per leaf of the chosen `maxSignatures`. The measured
+  per-leaf rate is 0.33 ms under 256s, 0.089 ms under 256s-sha2, and 0.168 ms
+  under 128s. A small tree costs proportionally less: a 4-leaf key generates in
+  about 0.09 s and signs in about 1.4 ms under 256s. `DESIGN.md` reports the
+  same operations at `maxSignatures = 4`, which isolates each profile's fixed
+  cost.
+- **Verification does not scale with the tree.** It checks the supplied
+  authentication path and stays near a fifth of a millisecond at every profile.
+- **The 128s key generation is dominated by the stateless hypertree.** It
+  builds all 262,144 leaves of a single-layer height-18 tree, so `maxSignatures`
+  barely changes it. The gain is a stateless signature five times smaller.
+- **Stateless signing is the rotation and recovery path.** It is fixed per
+  profile and reaches about three minutes under 128s, so a 128s recovery
+  runbook must budget minutes, not milliseconds.
+
+**The bindings re-import the stateful key on every signature.** A C or Python
+SHRINCS signer under a 128s profile pays the key-generation cost, about 47
+seconds, on every signature. The in-process Rust API does not. The table
+measures the Rust API. Tracked as `pqhs-bf1`.
+
+On-chain verification cost is a property of a downstream verifier, not of this
+chain-agnostic library. The SHRINCS component has a Solidity verifier with
+measured EVM gas and a Solana verify program, both in
+[`hashsigs-rs`](https://gitlab.com/quip.network/hashsigs-rs). The lattice suites
+have no on-chain verifier in this project.
 
 ## Crate
 
-One crate, `pqhybridsign`, holds all six suites. H1 through H4 (lattice, over
-`ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`) are always built. H5
-and H6 (stateful hash-based, over `hashsigs-rs`) live behind the `stateful`
-feature, which is on by default.
+One crate, `pqhybridsign`, holds every suite. The lattice suites (over
+`ed25519-zebra`, `schnorrkel`, `fips204`, and `fn-dsa`) are always built. The
+SHRINCS suites (over `hashsigs-rs`) live behind the `stateful` feature, which
+is on by default.
 
 Turn the `stateful` feature off and the SHRINCS code and the `hashsigs-rs`
-dependency are not compiled or downloaded, so a lattice-only consumer never
-links them. The stateful suites reuse the H1 through H4 classical components
-rather than reimplementing them.
+dependency are neither compiled nor downloaded, so a lattice-only consumer never
+links them. The SHRINCS suites reuse the lattice classical components rather
+than reimplementing them.
+
+## Relationship to Substrate
+
+This crate is Substrate-independent. It provides the composite signature layer:
+the suites, canonical and hedged signing, key rotation, single-master-seed
+derivation, the stateful safety machinery, and the hybrid VRF.
+
+The Polkadot-SDK integration is a separate codebase: the QuipNetwork
+`polkadot-sdk` fork and `quip-protocol-rs`. It implements the same hybrid
+constructions and adds the pieces that need Substrate: the `Pair`, `Public`, and
+`Signature` types, keystore and host functions, 32-byte account-ID derivation,
+session keys, SCALE envelopes, and the BABE and GRANDPA wiring. That code does
+not live here.
+
+### Hybrid VRF
+
+A verifiable random function (VRF) for the sr25519 suites, behind the
+non-default `vrf` feature. The sr25519 VRF supplies the output. A post-quantum
+binding signature over the same input proves post-quantum key possession.
+
+Every consensus-decisive byte derives from the classical pre-output alone. That
+pre-output is unique per key and input. A verifier checks the binding but never
+feeds it into that derivation. Post-quantum signatures are not unique for a
+fixed message, so a signer able to read one into the output could grind it.
+
+The feature covers all three sr25519 suites. `hybrid-sr25519-shrincs-*-v1` binds
+through the SHRINCS stateless path, spending one unit of the few-time budget
+rather than a one-time leaf. That suits a low-frequency VRF such as epoch
+randomness, not per-slot leader election.
+
+### Mnemonic and junction derivation
+
+Behind the non-default `mnemonic` feature, `master_seed_from_mnemonic` turns an
+English BIP39 phrase into the 32-byte master seed. It reproduces Substrate's
+derivation, which runs PBKDF2-HMAC-SHA512 over the mnemonic's entropy bytes
+rather than over the phrase text. The same phrase therefore yields the same key
+here and on chain. Golden vectors taken from the chain's own code hold that.
+
+`derive_hard_junction` derives a child master seed from a parent seed and a
+32-byte chain code, and both components are then re-derived from the child.
+Hard derivation only: a soft junction produces a child public key and no child
+secret, so no derived master seed exists for one. Parsing junction strings such
+as `//alice` into chain codes stays in the Substrate integration.
+
+A hard-derived child of a SHRINCS suite is a fresh tree starting at leaf 1.
+Derive such a child once, persist it, and restore it through the validating
+import path. Deriving the same child again on a second host produces a second
+tree at leaf 1 and reissues every leaf the first one spends.
 
 ## Install
 
@@ -52,11 +284,11 @@ Each binding ships from its own registry.
 
 ```toml
 [dependencies]
-# All six suites, stateful (H5/H6) on by default.
-pqhybridsign = "0.0.0-rc3"
+# Every suite, stateful (SHRINCS) on by default.
+pqhybridsign = "0.0.0-rc4"
 
-# Lattice suites H1 through H4 only, no hashsigs-rs:
-# pqhybridsign = { version = "0.0.0-rc3", default-features = false, features = ["std"] }
+# Lattice suites only, no hashsigs-rs:
+# pqhybridsign = { version = "0.0.0-rc4", default-features = false, features = ["std"] }
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -78,6 +310,7 @@ call pays that cost.
 ```typescript
 import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";
 
+// "H1" is the handle for hybrid-ed25519-mldsa44-v1.
 const seed = new Uint8Array(32).fill(7);
 const msg = new TextEncoder().encode("message");
 const ctx = new TextEncoder().encode("context");
@@ -87,8 +320,8 @@ const sig = await sign("H1", secretKey, msg, ctx);
 const valid = await verify("H1", publicKey, msg, ctx, sig);
 ```
 
-H5 and H6 signing is not available in JavaScript. Verification and the
-length accessors work for every suite.
+The SHRINCS suites cannot sign in JavaScript. Verification and the length
+accessors work for every suite.
 
 ### Python
 
@@ -96,7 +329,7 @@ length accessors work for every suite.
 pip install --pre pqhybridsign
 ```
 
-PEP 440 spells the prerelease version `0.0.0rc3`, not `0.0.0-rc3`. Without
+PEP 440 spells the prerelease version `0.0.0rc4`, not `0.0.0-rc4`. Without
 `--pre`, pip does not find it.
 
 ### C and C++
@@ -106,16 +339,10 @@ from the release page on GitLab. The archive holds
 `libpqhybridsign_cffi.so`, `libpqhybridsign_cffi.a`, `include/pqhybridsign.h`,
 and `LICENSE`.
 
-## Examples
+## Stateless signing
 
-No `examples/` directory exists in this repository yet. Separate work
-tracks the plan: a roundtrip program for each of Rust, TypeScript, Python,
-and C, each one installing the packaged artifact instead of the crate or
-module from this source tree, then running as a continuous integration
-smoke job against the published packages once merged. The issue tracker
-holds its current status.
-
-## Stateless signing, H1 and H3
+The lattice suites need no stored state. This example signs under
+`hybrid-ed25519-mldsa44-v1`, whose Rust type is `H1`.
 
 ```rust
 use pqhybridsign::composite::{keypair_from_seed, sign, verify};
@@ -140,25 +367,30 @@ fn demo() -> Result<(), Error> {
 `getrandom` feature on `rand_core`.
 
 `verify` returns `bool`, not `Result`. It combines the two component results
-with a bitwise `&`, so it evaluates both halves whatever the first one
-decides.
+with a bitwise `&`, so it evaluates both halves whatever the first one decides.
+
+The Falcon-512 suites use a delta-length wire format, so they call
+`pqhybridsign::composite_delta` rather than `pqhybridsign::composite`. Their
+`sign` returns the encoded length, because a Falcon signature is variable in
+the format even where `fn-dsa` 0.4.0 emits a fixed size.
 
 `sign_deterministic` takes a nonce, but not every component uses it. ed25519
 and ML-DSA-44 are deterministic by their own specifications and ignore it.
-sr25519 binds it. The function documentation states the consequence for each
-suite.
+sr25519 binds it. FN-DSA-512 does not sign deterministically by specification,
+so the Falcon suites always vary their post-quantum half with the nonce. The
+function documentation states the consequence for each suite.
 
-## Stateful signing, H5 and H6
+## Stateful signing
 
-Read this section before using H5 or H6.
+Read this section before you use a SHRINCS suite.
 
-**Stateful suites suit transactional systems only** — systems that already
-keep durable, ordered, per-key state. Every signature consumes one one-time
-leaf, a key has at most 4096 of them, and signing the same leaf twice
-destroys the security of the post-quantum half. A signer restored from a seed
-backup restarts at leaf 1 and reissues spent leaves. Any deployment that
-restores from seed, replicates the signer, or runs it statelessly must use H1
-or H3 instead.
+**Use a SHRINCS suite only in a transactional system** that already keeps
+durable, ordered, per-key state. Every signature consumes a one-time leaf, and a
+key has at most 4,096 of them. Signing the same leaf twice destroys the security
+of the post-quantum half. A signer restored from a seed backup
+restarts at leaf 1 and reissues spent leaves. Any deployment that restores from
+seed, replicates the signer, or runs it statelessly must use a lattice suite
+instead.
 
 Two rules follow, and the API enforces both:
 
@@ -167,45 +399,44 @@ Two rules follow, and the API enforces both:
   leaf index through it before it returns a signature. A caller cannot hold a
   signature whose leaf is not already durable.
 
-Every signing attempt spends its leaf, including an attempt the component
-refuses. A signing path that can return without advancing the counter is a
-reuse hazard, and reuse is total security failure, while a spent leaf costs
-availability alone. Authenticate and rate-limit requests before they reach
-the signer.
+Every signing call spends its leaf, including a call the component refuses. A
+signing path that can return without advancing the counter is a reuse hazard.
+Reuse is total security failure. A spent leaf costs availability alone.
+Authenticate and rate-limit requests before they reach the signer.
 
 ### Profiles
 
 The `stateful` feature selects one SHRINCS parameter set at compile time.
-Exactly one profile feature may be active. `stateful` selects `profile-256s`;
-to pick another, disable default features and name it.
+Exactly one profile feature may be active. `stateful` selects `profile-256s`.
+To pick another, turn off default features and name it.
 
-| Feature | Default | Stateful signature at leaf 1 |
-|---|---|---|
-| `profile-256s` | yes | 2185 bytes |
-| `profile-256s-sha2` | no | 2185 bytes |
-| `profile-128s-q18` | no | 1161 bytes |
-| `profile-128s-q20` | no | 1161 bytes |
+| Feature | Default | Stateful signature at leaf 1 | Stateless signature |
+|---|---|---|---|
+| `profile-256s` | yes | 2,185 B | 29,157 B |
+| `profile-256s-sha2` | no | 2,185 B | 29,157 B |
+| `profile-128s-q18` | no | 1,161 B | 5,769 B |
+| `profile-128s-q20` | no | 1,161 B | 5,769 B |
 
 The `q18` and `q20` profiles are identical except for the stateless budget
 (2^18 against 2^20). The SHRINCS parameter-set overview records that the
 `q20` budget wants profile security analysis before production use. That
 caveat travels with this crate, which exposes both.
 
-The profile name goes into the suite label, so `H5` under `profile-256s`
-signs under `hybrid-ed25519-shrincs-256s-v1` and cannot be confused with the
-same suite under another parameter set.
+The profile name goes into the suite label, so a SHRINCS suite under
+`profile-256s` signs under `hybrid-ed25519-shrincs-256s-v1` or
+`hybrid-sr25519-shrincs-256s-v1` and never collides with the same classical
+key under another parameter set.
 
 ## Platforms
 
 `pqhybridsign` must build for a target that provides no `std`, both with and
-without the `alloc` feature. Treat a failure there as a defect.
-`DESIGN.md` states the requirement in full, with the rule it puts on authors:
-core has no `std` prelude, so every `alloc` type needs an import by its full
-path.
+without the `alloc` feature. Treat a failure there as a defect. `DESIGN.md`
+states it in full, with the rule it puts on authors: core has no `std`
+prelude, so every `alloc` type needs an import by its full path.
 
 Continuous integration builds core for `thumbv7em-none-eabi`, which has no
 `std` to link against, and for `wasm32-unknown-unknown`, which the workspace
-ships to.
+ships to. The SHRINCS suites need `std`.
 
 The minimum supported Rust version is 1.95, set by `hashsigs-rs`.
 
@@ -219,81 +450,20 @@ cargo test -p pqhybridsign --no-default-features --features profile-128s-q20
 cargo test -p pqhybridsign --no-default-features --features profile-128s-q18
 ```
 
-`cargo test --workspace` finishes in about 16.5 seconds under the default
-profile (292 tests across 36 binaries on this machine). Any one profile
-suite takes 0.24 s to 7.4 s. All four profiles together take about 8.2 s.
+Tests read per-profile fixtures from `crates/pqhybridsign/tests/vectors/`
+instead of generating keys and signatures. Regenerate a fixture with the
+command in `generate_fixtures.rs`.
 
-The default suite is fast because the workspace `Cargo.toml` builds
-dependencies at `opt-level = 3` while workspace crates stay unoptimized.
-Before that change, one binary took 184.80 seconds.
-
-Tests read per-profile fixtures from
-`crates/pqhybridsign/tests/vectors/` instead of generating keys and
-signatures. Regenerate a fixture with the command in `generate_fixtures.rs`.
-
-One real 128s key generation still runs per commit, in `smoke_128s.rs`. It
-carries `#[ignore]`, so run it explicitly:
+One real 128s key generation runs per commit, in `smoke_128s.rs`. It carries
+`#[ignore]`, so run it explicitly:
 
 ```bash
 cargo test -p pqhybridsign --release --no-default-features \
     --features profile-128s-q18 --test smoke_128s -- --ignored
 ```
 
-That ignored smoke takes about 46 seconds in release. Debug builds run
-roughly 67 times slower than release for this code, so measure in release.
-
-## Performance
-
-Measured on one machine in release mode, for one H5 key with four leaves.
-Reproduce with:
-
-```bash
-cargo test -p pqhybridsign --release --no-default-features \
-    --features profile-128s-q18 --test profile_timing -- --ignored --nocapture
-```
-
-| Profile | keygen | sign_stateful | sign_stateless | Stateless signature |
-|---|---|---|---|---|
-| `profile-256s` | 0.09 s | under 0.01 s | 1.16 s | 29,157 B |
-| `profile-256s-sha2` | 0.03 s | under 0.01 s | 0.33 s | 29,157 B |
-| `profile-128s-q18` | 46.85 s | under 0.01 s | 176.60 s | 5,769 B |
-| `profile-128s-q20` | 47.47 s | under 0.01 s | 166.51 s | 5,769 B |
-
-Stateful signing and verification are too fast to measure at this
-resolution under every profile. Two consequences are worth planning around.
-
-**The 128s profiles cost about 47 seconds to generate a key.** They set
-`NUM_HYPERTREE_LAYERS = 1` over a height-18 tree, so key generation
-materialises all 262,144 leaves, where the 256s profiles build one 256-leaf
-subtree of an eight-layer hypertree. The gain is a stateless signature five
-times smaller. Nothing about it is a defect; it is the parameter set doing
-what it was chosen to do.
-
-**A stateless signature takes about three minutes at 128s.** The stateless
-path is the rotation and recovery path, so a recovery runbook for a 128s
-deployment must budget minutes, not milliseconds.
-
-**A 128s stateless signature is tree building, not grinding.** Of about 176
-seconds, roughly 117 seconds builds the five FORS trees of 2^24 leaves each,
-about 47 seconds builds the 262,144-leaf hypertree subtree, and 11.3 seconds
-is the FORS-C counter grind. No message avoids the tree work, so the time is
-stable rather than variable. Plan for the measured figure.
-
-**About 1 stateless signature in 9 million fails at 128s.** The FORS-C
-counter search gives up at 2^28 attempts and returns an error. The outcome is
-deterministic for one key, message and context, so retrying the same message
-does not help. Changing the message does. The failure is loud and
-carries no security consequence. `DESIGN.md` records the analysis.
-
-**Restoring a signer from a stored key is not a fast path.**
-`SecretKey::import` costs about the same as `keygen` at 128s, because it
-re-derives the hypertree root to validate the blob.
-
-The C and Python bindings call `import` on every stateful signature.
-A C or Python H5 signer under a 128s profile spends about 47 seconds
-per signature. The in-process Rust API signs in under 0.01 seconds.
-The performance table measures the Rust API. It does not measure the
-bindings.
+That ignored smoke takes about 46 seconds in release. Debug builds run about
+67 times slower than release for this code, so measure in release.
 
 ## Limitations
 
@@ -301,30 +471,31 @@ Stated plainly, because a release candidate should not imply more than it
 delivers.
 
 - **The golden vectors pin this implementation against itself.** They catch
-  wire-format drift. They cannot catch an error that was present when they
-  were generated, and no vectors are shared with another conforming
+  wire-format drift. They cannot catch an error that was present when they were
+  generated, and this crate shares no vectors with another conforming
   implementation.
 - **No external known-answer tests exist for the composition layer.** The
   component crates carry their own tests for the underlying primitives.
-- **H2 and H4 predate the standard.** FIPS 206 is not final. A signature
-  made under H2 or H4 today may not verify against a later, conforming
-  implementation. Use them where you control both sides, or use H1 or H3.
-- **The H2/H4 length field is wider than it needs to be.** `fn-dsa` 0.4.0
-  emits a fixed 666-byte signature, so the one-byte `FalconLen` delta always
-  carries the same value. The field stays because the format specifies it.
-- **The WebAssembly binding signs under H1 through H4 only.** A JavaScript
-  object holding a stateful secret key can be structured-cloned, which forks
-  the leaf counter. H5 and H6 verification is available through
-  `verifyWithStoredPublicKey`. To sign under H5 or H6, use the C ABI or the
-  Python binding.
+- **The Falcon-512 suites predate the standard.** FIPS 206 is not final. A
+  signature made under a Falcon-512 suite today may not verify against a later,
+  conforming implementation. Use them where you control both sides, or use an
+  ML-DSA-44 suite.
+- **The Falcon-512 length field is wider than it needs to be.** `fn-dsa` 0.4.0
+  emits a fixed 666-byte signature, so the one-byte delta always carries the
+  same value. The field stays because the format specifies it.
+- **The WebAssembly binding signs under the lattice suites only.** JavaScript
+  can structured-clone an object holding a stateful secret key, which forks
+  the leaf counter. SHRINCS verification is available through
+  `verifyWithStoredPublicKey`. To sign under a SHRINCS suite, use the C ABI or
+  the Python binding.
 - **The Python binding accepts `bytes` and `bytearray`, not arbitrary buffer
   objects.** The `abi3-py39` stable ABI cannot reach the buffer-protocol C API
   below CPython 3.11.
-- **Golden vectors pin every profile, but only against this implementation.**
-  All four profiles carry verify-only vectors in
-  `crates/pqhybridsign/tests/vectors/`. Live re-signing runs under
-  `profile-256s` alone, because obtaining a secret key at 128s costs about 47
-  seconds.
+- **About 1 stateless signature in 9 million fails at 128s.** The FORS-C
+  counter search gives up at 2^28 attempts and returns an error. The outcome is
+  deterministic for one key, message, and context, so retrying the same message
+  does not help. Changing the message does. The failure is loud and carries no
+  security consequence.
 
 ## License
 

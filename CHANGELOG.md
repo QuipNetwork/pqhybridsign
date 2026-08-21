@@ -2,6 +2,58 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc4
+
+rc4 adds three optional capabilities and changes nothing in the signature
+suites or the wire format. A build that enables no new feature is unchanged
+from rc3.
+
+### Added
+
+- A hybrid VRF for the sr25519 suites, behind the new non-default `vrf`
+  feature (specification section 15). The sr25519 VRF supplies the output and
+  a post-quantum binding signature over the same input proves post-quantum key
+  possession. Every consensus-decisive byte derives from the classical
+  pre-output alone, which is unique per key and input, and the binding is
+  verified but never enters that derivation. Post-quantum signatures are not
+  unique for a fixed message, so an output that read the binding could be
+  ground by the signer that produced it. `hybrid-sr25519-mldsa44-v1` and
+  `hybrid-sr25519-falcon512-v1` bind with a deterministic signature.
+  `hybrid-sr25519-shrincs-*-v1` binds through the SHRINCS stateless path,
+  spending one unit of the few-time budget and no one-time leaf, which suits a
+  low-frequency VRF rather than per-slot leader election. The entry points are
+  bounded on a new `ClassicalVrf` trait that only sr25519 implements, so
+  naming an ed25519 suite does not compile.
+- BIP39 master-seed derivation, behind the new non-default `mnemonic` feature.
+  `master_seed_from_mnemonic` reproduces Substrate's derivation, which runs
+  PBKDF2-HMAC-SHA512 over the mnemonic's entropy bytes rather than over the
+  phrase text, so one phrase yields one key both here and on chain. Golden
+  vectors taken from the chain's own derivation hold that parity.
+- Hard-junction derivation, `derive_hard_junction` and
+  `derive_hard_junction_path` (specification section 10). A junction derives a
+  new master seed from a parent seed and a 32-byte chain code, and both
+  components are re-derived from it. Hard derivation only: a soft junction
+  yields a child public key and no child secret, so no derived master seed
+  exists for one. Parsing junction strings into chain codes stays with the
+  Substrate integration. A hard-derived child of a stateful suite is a fresh
+  SHRINCS tree at leaf 1, so derive such a child once, persist it, and restore
+  it through the validating import path.
+- Stateful signing (H5 and H6) in the WebAssembly binding. Secret keys cross
+  the boundary only as exported byte blobs, so the binding holds no key object
+  a `structuredClone` could fork. `signStateful` takes the blob and a
+  caller-supplied synchronous `LeafJournal` and returns the signature with the
+  advanced key. The journal records the spent leaf durably before a signature
+  exists and binds to the key's identity, so a stale or forked blob is refused
+  rather than reissuing a one-time leaf. `signStateless` covers the few-time
+  path with a `StatelessBudgetStore` of the same shape. This is the safety
+  model the C and Python bindings already shipped.
+
+### Changed
+
+- `verify` and the length accessors in the WebAssembly binding are now total
+  over all six suites. The stateless entry points still refuse H5 and H6, and
+  the refusal now names `signStateful`.
+
 ## 0.0.0-rc3
 
 The workspace collapses to a single published crate, `pqhybridsign`. This is

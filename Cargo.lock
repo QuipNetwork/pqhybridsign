@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign"
-version = "0.0.0-rc3"
+version = "0.0.0-rc4"
 dependencies = [
  "bip39",
  "curve25519-dalek",
@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-abi"
-version = "0.0.0-rc3"
+version = "0.0.0-rc4"
 dependencies = [
  "pqhybridsign",
  "rand_core 0.6.4",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-cffi"
-version = "0.0.0-rc3"
+version = "0.0.0-rc4"
 dependencies = [
  "cbindgen",
  "pqhybridsign-abi",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-py"
-version = "0.0.0-rc3"
+version = "0.0.0-rc4"
 dependencies = [
  "pqhybridsign-abi",
  "pyo3",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-wasm"
-version = "0.0.0-rc3"
+version = "0.0.0-rc4"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",
