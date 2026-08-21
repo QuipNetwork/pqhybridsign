@@ -119,7 +119,9 @@
 use std::cell::RefCell;
 
 use js_sys::{Function, Reflect, Uint8Array};
-use pqhybridsign_abi::{BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, KEY_IDENTITY_LEN};
+use pqhybridsign_abi::{
+    BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, KEY_IDENTITY_LEN,
+};
 use rand_core::OsRng;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
