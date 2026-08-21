@@ -795,6 +795,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "merlin",
  "pbkdf2",
  "proptest",
  "rand_core 0.6.4",
