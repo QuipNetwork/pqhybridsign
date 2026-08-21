@@ -300,7 +300,17 @@ fn make_bytes_inner<C: ClassicalVrf, B: Default + AsMut<[u8]>>(
     proof: &[u8],
     context: &[u8],
 ) -> Result<B> {
-    if composite_pk.len() < C::PUBLIC_KEY_LEN || proof.len() < HEADER_LEN {
+    // Two checks rather than one disjunction, so the error names the field
+    // that was actually wrong. A caller who passed a short public key and read
+    // back a complaint about the proof length would go looking in the wrong
+    // place.
+    if composite_pk.len() < C::PUBLIC_KEY_LEN {
+        return Err(Error::BadLength {
+            expected: C::PUBLIC_KEY_LEN,
+            actual: composite_pk.len(),
+        });
+    }
+    if proof.len() < HEADER_LEN {
         return Err(Error::BadLength {
             expected: HEADER_LEN,
             actual: proof.len(),
