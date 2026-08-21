@@ -240,10 +240,20 @@ fn sign_with_rng(
 
 /// The sr25519 verifiable random function, specification section 15.
 ///
-/// The VRF is schnorrkel's own, unchanged, so a pre-output and proof produced
-/// here verify under `sp_core::sr25519`'s `vrf_verify` and vice versa. That
-/// compatibility is the point: specification section 15 calls the hybrid VRF a
-/// drop-in replacement for BABE's, and a private variant would not be one.
+/// The VRF itself is schnorrkel's own, called unmodified: `vrf_create_hash`
+/// for the pre-output and `dleq_proove` under `KUSAMA_VRF` for the proof, with
+/// the same `b"VRF"` extra transcript `Keypair::vrf_sign` uses. So the wire
+/// values are schnorrkel's, and `PublicKey::vrf_verify` -- the same function
+/// `sp_core::sr25519` calls -- is what verifies them below.
+///
+/// Be precise about what that buys, because section 15 calls the hybrid VRF a
+/// drop-in replacement for BABE's and it is only half of one. The **proof
+/// format and the DLEQ transcript** are schnorrkel's, so no private variant is
+/// introduced. The **input transcript** is this crate's:
+/// `signing_context(suite_label).bytes(input)`, which binds the suite the way
+/// every other signature here is bound. BABE builds its input transcript its
+/// own way, so an integration has to feed the same bytes through this
+/// `input` parameter rather than assume the two transcripts already agree.
 #[cfg(feature = "vrf")]
 mod vrf_impl {
     use super::{
