@@ -79,6 +79,11 @@ pub fn master_seed_from_mnemonic(
     phrase: &str,
     password: Option<&str>,
 ) -> Result<[u8; MASTER_SEED_LEN]> {
+    // `Mnemonic` needs no `Wiped` of its own: `bip39`'s `zeroize` feature,
+    // enabled in this crate's manifest, makes it `ZeroizeOnDrop`. That is not
+    // decoration. The parsed value holds the word indices, the entropy is
+    // recoverable from them, and the master seed is recoverable from the
+    // entropy, so an unwiped `Mnemonic` is an unwiped copy of the key.
     let mnemonic = Mnemonic::parse_in_normalized(Language::English, phrase)
         .map_err(|_| Error::InvalidMnemonic)?;
     let (entropy_bytes, entropy_len) = mnemonic.to_entropy_array();

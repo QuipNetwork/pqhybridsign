@@ -158,6 +158,13 @@ impl<T: Zeroize> Drop for Wiped<T> {
 /// final seed is returned, and wiping that one is the caller's
 /// responsibility. See [`derive_hard_junction`] for the re-keygen hazard
 /// that applies to every seed this function returns.
+///
+/// An empty `chain_codes` returns the parent master seed unchanged, which is
+/// the identity a path of no junctions should have. Note what that means for
+/// a caller that builds the path from parsed input: an empty path is not an
+/// error here, so a parse that silently yielded no junctions hands back the
+/// parent key rather than a child. Callers that require at least one junction
+/// must check for that themselves.
 pub fn derive_hard_junction_path(
     parent_master: &[u8; 32],
     chain_codes: &[[u8; 32]],
@@ -259,6 +266,31 @@ mod tests {
                 .expect("derive");
 
         assert_eq!(via_path, via_steps);
+    }
+
+    /// An empty path is the identity. Pinned because a caller that builds a
+    /// path from parsed input and gets an empty one back receives its parent
+    /// key, not a child, and that has to be a documented behaviour rather
+    /// than an accident of the loop.
+    #[test]
+    fn an_empty_hard_junction_path_returns_the_parent() {
+        let parent = [9u8; 32];
+        assert_eq!(
+            derive_hard_junction_path(&parent, &[]).expect("derive"),
+            parent
+        );
+    }
+
+    /// The `junction/hard/` info prefix exists so a junction child can never
+    /// be the same value as a component seed derived from the same parent.
+    /// Without a test the claim rests on reading two constants.
+    #[test]
+    fn a_junction_child_cannot_collide_with_a_component_seed() {
+        let parent = [9u8; 32];
+        let child = derive_hard_junction(&parent, &[7u8; 32]).expect("derive");
+        let (classical, pq) = seeds(&parent, H1);
+        assert_ne!(child, classical);
+        assert_ne!(child, pq);
     }
 
     /// Known-answer vector computed independently of this code (a standalone
