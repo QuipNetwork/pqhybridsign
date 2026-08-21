@@ -19,7 +19,17 @@
 
 import { createApi, type RawModule } from "./api.js";
 
-export type { KeyPair, PqHybridSignApi, RawKeyPair, RawModule, Suite } from "./api.js";
+export type {
+  KeyPair,
+  LeafJournal,
+  PqHybridSignApi,
+  RawKeyPair,
+  RawModule,
+  RawSignStatefulResult,
+  SignStatefulResult,
+  StatelessBudgetStore,
+  Suite,
+} from "./api.js";
 
 async function load(): Promise<RawModule> {
   const mod = await import("../web/pqhybridsign_wasm.js");
@@ -33,6 +43,12 @@ export const {
   keygenFromSeed,
   sign,
   signDeterministic,
+  keygenStatefulFromSeed,
+  keyIdentity,
+  keyIdentityFromSecretKey,
+  adoptKey,
+  signStateful,
+  signStateless,
   verify,
   verifyWithStoredPublicKey,
   publicKeyLen,

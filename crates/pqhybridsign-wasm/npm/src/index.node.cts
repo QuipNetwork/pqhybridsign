@@ -15,7 +15,17 @@
 
 import { createApi, type RawModule } from "./api.js";
 
-export type { KeyPair, PqHybridSignApi, RawKeyPair, RawModule, Suite } from "./api.js";
+export type {
+  KeyPair,
+  LeafJournal,
+  PqHybridSignApi,
+  RawKeyPair,
+  RawModule,
+  RawSignStatefulResult,
+  SignStatefulResult,
+  StatelessBudgetStore,
+  Suite,
+} from "./api.js";
 
 function load(): Promise<RawModule> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -28,6 +38,12 @@ export const {
   keygenFromSeed,
   sign,
   signDeterministic,
+  keygenStatefulFromSeed,
+  keyIdentity,
+  keyIdentityFromSecretKey,
+  adoptKey,
+  signStateful,
+  signStateless,
   verify,
   verifyWithStoredPublicKey,
   publicKeyLen,

@@ -15,20 +15,92 @@
 /** One of the six SHRINCS suites this package's build links against. */
 export type Suite = "H1" | "H2" | "H3" | "H4" | "H5" | "H6";
 
-/** A stateless keypair: a secret key and its matching public key. */
+/**
+ * A keypair: a secret key and its matching public key. `keygenFromSeed`
+ * returns it for H1 through H4; `keygenStatefulFromSeed` returns it for H5
+ * and H6, where `secretKey` is the exported stateful blob.
+ */
 export interface KeyPair {
   publicKey: Uint8Array;
   secretKey: Uint8Array;
 }
 
 /**
- * The wasm-bindgen `KeyPair` class as `keygenFromSeed` on the raw module
- * returns it: a disposable handle over wasm-owned memory, not a plain
- * object. See `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
+ * A durable record of a stateful key's consumed one-time leaves and of the
+ * one key those leaves belong to. The caller implements it over storage that
+ * survives a restart; `signStateful` drives it.
+ *
+ * Every method is **synchronous**, because `signStateful` calls `commit` and
+ * must see it return before it builds the signature (the
+ * persist-before-release ordering). `commit` MUST NOT return until the leaf
+ * is durably recorded -- under Node, `fs.writeFileSync` then `fs.fsyncSync`.
+ * A method that resolves a promise later cannot honour that ordering and MUST
+ * NOT be used. This is the same contract the C and Python bindings' journals
+ * carry; see the crate documentation.
+ */
+export interface LeafJournal {
+  /**
+   * Durably record that `leaf` is consumed. Throw to report the write did
+   * not happen; the leaf may then be treated as still unused.
+   */
+  commit(leaf: number): void;
+  /** The next unused leaf, as last committed. `0` for a fresh journal. */
+  nextLeaf(): number;
+  /**
+   * The 32-byte identity of the key this journal belongs to, or `null` if it
+   * has never been bound. MUST survive a restart, and MUST NOT report `null`
+   * when the durable read failed (fail the read instead): `null` is what
+   * `adoptKey` treats as an invitation to bind.
+   */
+  boundKey(): Uint8Array | null;
+  /** Durably record that this journal belongs to `identity`. Throw on failure. */
+  bindKey(identity: Uint8Array): void;
+}
+
+/**
+ * A durable record of a stateful key's few-time stateless budget
+ * (`signStateless`, SHRINCS specification section 21). Keyed by the 32-byte
+ * budget key `signStateless` derives from the secret key, so one store serves
+ * every key a process holds. Synchronous, on the same terms as
+ * {@link LeafJournal}: `record` must be durable before it returns.
+ */
+export interface StatelessBudgetStore {
+  /** Units already spent for `key`, or `null` if this key was never tracked. */
+  consumed(key: Uint8Array): number | null;
+  /** Durably record `count` units spent for `key`. Throw on failure. */
+  record(key: Uint8Array, count: number): void;
+}
+
+/**
+ * The result of `signStateful`: the signature and the advanced secret key
+ * blob the caller MUST persist in place of the blob passed in, before relying
+ * on `signature`.
+ */
+export interface SignStatefulResult {
+  signature: Uint8Array;
+  nextSecretKey: Uint8Array;
+}
+
+/**
+ * The wasm-bindgen `KeyPair` class as `keygenFromSeed` and
+ * `keygenStatefulFromSeed` on the raw module return it: a disposable handle
+ * over wasm-owned memory, not a plain object. See
+ * `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
  */
 export interface RawKeyPair {
   readonly publicKey: Uint8Array;
   readonly secretKey: Uint8Array;
+  free(): void;
+}
+
+/**
+ * The wasm-bindgen `SignStatefulResult` class as `signStateful` on the raw
+ * module returns it: a disposable handle over wasm-owned memory, freed after
+ * its two fields are copied out. See `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
+ */
+export interface RawSignStatefulResult {
+  readonly signature: Uint8Array;
+  readonly nextSecretKey: Uint8Array;
   free(): void;
 }
 
@@ -42,6 +114,28 @@ export interface RawKeyPair {
  */
 export interface RawModule {
   keygenFromSeed(suite: string, seed: Uint8Array): RawKeyPair;
+  keygenStatefulFromSeed(
+    suite: string,
+    seed: Uint8Array,
+    maxStatefulSignatures: number,
+  ): RawKeyPair;
+  keyIdentity(suite: string, publicKey: Uint8Array): Uint8Array;
+  keyIdentityFromSecretKey(suite: string, secretKey: Uint8Array): Uint8Array;
+  adoptKey(journal: LeafJournal, identity: Uint8Array): void;
+  signStateful(
+    suite: string,
+    secretKey: Uint8Array,
+    journal: LeafJournal,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): RawSignStatefulResult;
+  signStateless(
+    suite: string,
+    secretKey: Uint8Array,
+    budget: StatelessBudgetStore,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): Uint8Array;
   profileName(): string;
   publicKeyLen(suite: string): number;
   secretKeyLen(suite: string): number;
@@ -77,13 +171,18 @@ export interface RawModule {
  * above, promisified so a caller never has to load the wasm module
  * itself.
  *
- * H5 and H6 are stateful suites; `crates/pqhybridsign-wasm` exposes no
- * signing entry point for them (see that crate's documentation for why),
- * so `keygenFromSeed`, `sign` and `signDeterministic` reject for those
- * two suite names -- the wasm layer throws, and the rejection carries its
- * message. `verify`, `verifyWithStoredPublicKey` and the four length
- * accessors are unrestricted by suite here; each resolves or rejects
- * exactly as the underlying wasm-bindgen export would throw or return.
+ * H1 through H4 are stateless: `keygenFromSeed`, `sign` and
+ * `signDeterministic` handle them, and reject H5 and H6, because a
+ * stateless-looking call must never silently spend a one-time leaf. H5 and
+ * H6 are stateful: `keygenStatefulFromSeed`, `signStateful`, `signStateless`,
+ * `adoptKey`, `keyIdentity` and `keyIdentityFromSecretKey` handle them, and
+ * reject H1 through H4. `verify`, `verifyWithStoredPublicKey` and the four
+ * length accessors span all six suites. Each method resolves or rejects
+ * exactly as the underlying wasm-bindgen export would return or throw.
+ *
+ * The stateful signing methods are `async` only because loading the wasm
+ * module is; the {@link LeafJournal} and {@link StatelessBudgetStore} a
+ * caller passes have synchronous methods (see those types).
  */
 export interface PqHybridSignApi {
   keygenFromSeed(suite: Suite, seed: Uint8Array): Promise<KeyPair>;
@@ -94,6 +193,28 @@ export interface PqHybridSignApi {
     msg: Uint8Array,
     ctx: Uint8Array,
     nonce: Uint8Array,
+  ): Promise<Uint8Array>;
+  keygenStatefulFromSeed(
+    suite: Suite,
+    seed: Uint8Array,
+    maxStatefulSignatures: number,
+  ): Promise<KeyPair>;
+  keyIdentity(suite: Suite, publicKey: Uint8Array): Promise<Uint8Array>;
+  keyIdentityFromSecretKey(suite: Suite, secretKey: Uint8Array): Promise<Uint8Array>;
+  adoptKey(journal: LeafJournal, identity: Uint8Array): Promise<void>;
+  signStateful(
+    suite: Suite,
+    secretKey: Uint8Array,
+    journal: LeafJournal,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): Promise<SignStatefulResult>;
+  signStateless(
+    suite: Suite,
+    secretKey: Uint8Array,
+    budget: StatelessBudgetStore,
+    msg: Uint8Array,
+    ctx: Uint8Array,
   ): Promise<Uint8Array>;
   verify(
     suite: Suite,
@@ -162,6 +283,55 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
     async signDeterministic(suite, secretKey, msg, ctx, nonce) {
       const raw = await loadOnce();
       return raw.signDeterministic(suite, secretKey, msg, ctx, nonce);
+    },
+
+    async keygenStatefulFromSeed(suite, seed, maxStatefulSignatures) {
+      const raw = await loadOnce();
+      const pair = raw.keygenStatefulFromSeed(suite, seed, maxStatefulSignatures);
+      try {
+        // Copy both fields out before free(), as keygenFromSeed does.
+        return {
+          publicKey: pair.publicKey.slice(),
+          secretKey: pair.secretKey.slice(),
+        };
+      } finally {
+        pair.free();
+      }
+    },
+
+    async keyIdentity(suite, publicKey) {
+      const raw = await loadOnce();
+      return raw.keyIdentity(suite, publicKey);
+    },
+
+    async keyIdentityFromSecretKey(suite, secretKey) {
+      const raw = await loadOnce();
+      return raw.keyIdentityFromSecretKey(suite, secretKey);
+    },
+
+    async adoptKey(journal, identity) {
+      const raw = await loadOnce();
+      raw.adoptKey(journal, identity);
+    },
+
+    async signStateful(suite, secretKey, journal, msg, ctx) {
+      const raw = await loadOnce();
+      const result = raw.signStateful(suite, secretKey, journal, msg, ctx);
+      try {
+        // Copy both fields out before free(): nextSecretKey especially must
+        // outlive the wasm handle so the caller can persist it.
+        return {
+          signature: result.signature.slice(),
+          nextSecretKey: result.nextSecretKey.slice(),
+        };
+      } finally {
+        result.free();
+      }
+    },
+
+    async signStateless(suite, secretKey, budget, msg, ctx) {
+      const raw = await loadOnce();
+      return raw.signStateless(suite, secretKey, budget, msg, ctx);
     },
 
     async verify(suite, publicKey, msg, ctx, sig) {
