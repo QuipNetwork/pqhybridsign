@@ -193,8 +193,14 @@ fn check_len(buf: &[u8], want: usize) -> Result<()> {
 /// that depended on the pointer width of the machine that computed it
 /// would not survive being written down.
 fn nonce_seed(sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
+    nonce_seed_in(NONCE_SEED_DOMAIN, sk, nonce, msg)
+}
+
+/// [`nonce_seed`] with the domain separator as a parameter, so the VRF path
+/// below can reach the same layout under a domain of its own.
+fn nonce_seed_in(domain: &[u8], sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
     let mut hasher = Sha512::new();
-    hasher.update(NONCE_SEED_DOMAIN);
+    hasher.update(domain);
     hasher.update((sk.len() as u64).to_be_bytes());
     hasher.update(sk);
     hasher.update((nonce.len() as u64).to_be_bytes());
@@ -230,6 +236,172 @@ fn sign_with_rng(
     let sig = secret.0.sign(attach_rng(ctx.bytes(msg), rng), &public);
     sig_out.copy_from_slice(&sig.to_bytes());
     Ok(())
+}
+
+/// The sr25519 verifiable random function, specification section 15.
+///
+/// The VRF is schnorrkel's own, unchanged, so a pre-output and proof produced
+/// here verify under `sp_core::sr25519`'s `vrf_verify` and vice versa. That
+/// compatibility is the point: specification section 15 calls the hybrid VRF a
+/// drop-in replacement for BABE's, and a private variant would not be one.
+#[cfg(feature = "vrf")]
+mod vrf_impl {
+    use super::{
+        check_len, nonce_seed_in, SeededRng, Sr25519, Wiped, {Error, Result},
+    };
+    use crate::component::ClassicalScheme;
+    use crate::vrf::{ClassicalVrf, CLASSICAL_PROOF_LEN, PRE_OUTPUT_LEN};
+    use merlin::Transcript;
+    use schnorrkel::context::attach_rng;
+    use schnorrkel::vrf::{VRFPreOut, VRFProof, KUSAMA_VRF};
+    use schnorrkel::{signing_context, PublicKey, SecretKey};
+    use subtle::Choice;
+    use zeroize::Zeroize;
+
+    /// Domain separator for the VRF proof's deterministic nonce seed.
+    ///
+    /// Distinct from the signing path's `NONCE_SEED_DOMAIN` so that a caller
+    /// who signs a message deterministically and evaluates the VRF over the
+    /// same bytes cannot reach one seed by two routes. schnorrkel mixes the
+    /// transcript into the nonce as well as this seed, and a signature
+    /// transcript and a DLEQ transcript never agree, so the separation here is
+    /// a second layer rather than the only one.
+    const VRF_NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/sr25519-vrf/v1\0";
+
+    /// The extra-transcript label schnorrkel's own `vrf_sign` and `vrf_verify`
+    /// use. Matching it is what keeps proofs interoperable.
+    const EXTRA_TRANSCRIPT_LABEL: &[u8] = b"VRF";
+
+    impl ClassicalVrf for Sr25519 {
+        fn vrf_evaluate(
+            sk: &[u8],
+            label: &'static [u8],
+            input: &[u8],
+            rng: &mut impl rand_core::CryptoRngCore,
+            pre_output_out: &mut [u8],
+            proof_out: &mut [u8],
+        ) -> Result<()> {
+            let mut seed = [0u8; 32];
+            rng.fill_bytes(&mut seed);
+            let result = evaluate_with_rng(
+                sk,
+                label,
+                input,
+                &mut SeededRng::new(seed),
+                pre_output_out,
+                proof_out,
+            );
+            seed.zeroize();
+            result
+        }
+
+        fn vrf_evaluate_deterministic(
+            sk: &[u8],
+            label: &'static [u8],
+            input: &[u8],
+            pre_output_out: &mut [u8],
+            proof_out: &mut [u8],
+        ) -> Result<()> {
+            check_len(sk, Self::SECRET_KEY_LEN)?;
+            let mut seed = nonce_seed_in(VRF_NONCE_SEED_DOMAIN, sk, label, input);
+            let result = evaluate_with_rng(
+                sk,
+                label,
+                input,
+                &mut SeededRng::new(seed),
+                pre_output_out,
+                proof_out,
+            );
+            seed.zeroize();
+            result
+        }
+
+        fn vrf_verify(
+            pk: &[u8],
+            label: &'static [u8],
+            input: &[u8],
+            pre_output: &[u8],
+            proof: &[u8],
+        ) -> Choice {
+            let Ok(public) = PublicKey::from_bytes(pk) else {
+                return Choice::from(0u8);
+            };
+            let Ok(pre_out) = VRFPreOut::from_bytes(pre_output) else {
+                return Choice::from(0u8);
+            };
+            let Ok(vrf_proof) = VRFProof::from_bytes(proof) else {
+                return Choice::from(0u8);
+            };
+            let ctx = signing_context(label);
+            Choice::from(u8::from(
+                public
+                    .vrf_verify(ctx.bytes(input), &pre_out, &vrf_proof)
+                    .is_ok(),
+            ))
+        }
+
+        fn vrf_make_bytes<B: Default + AsMut<[u8]>>(
+            pk: &[u8],
+            label: &'static [u8],
+            input: &[u8],
+            pre_output: &[u8],
+            context: &[u8],
+        ) -> Result<B> {
+            let public = PublicKey::from_bytes(pk).map_err(|_| Error::ComponentFailure)?;
+            let pre_out = VRFPreOut::from_bytes(pre_output).map_err(|_| Error::ComponentFailure)?;
+            let ctx = signing_context(label);
+            let inout = pre_out
+                .attach_input_hash(&public, ctx.bytes(input))
+                .map_err(|_| Error::ComponentFailure)?;
+            Ok(inout.make_bytes(context))
+        }
+    }
+
+    /// Evaluate the VRF, drawing the DLEQ proof's Schnorr nonce from `rng`.
+    ///
+    /// The pre-output is `sk * H(input)` and does not read `rng` at all, so
+    /// every caller reaches the same pre-output over one `(key, input)` pair
+    /// no matter what `rng` yields. That is the uniqueness the construction
+    /// rests on: a prover who re-runs this a million times moves the proof and
+    /// never the output.
+    fn evaluate_with_rng(
+        sk: &[u8],
+        label: &'static [u8],
+        input: &[u8],
+        rng: &mut SeededRng,
+        pre_output_out: &mut [u8],
+        proof_out: &mut [u8],
+    ) -> Result<()> {
+        check_len(sk, Sr25519::SECRET_KEY_LEN)?;
+        check_len(pre_output_out, PRE_OUTPUT_LEN)?;
+        check_len(proof_out, CLASSICAL_PROOF_LEN)?;
+
+        // `to_keypair` consumes the `SecretKey`, and `Keypair` is the one
+        // schnorrkel type with a `Drop` that wipes, so the expanded secret
+        // leaves no unwiped copy behind. `Wiped` still guards the pre-expansion
+        // value for the window before the move.
+        let secret = Wiped(SecretKey::from_bytes(sk).map_err(|_| Error::ComponentFailure)?);
+        let keypair = secret.0.clone().to_keypair();
+        let ctx = signing_context(label);
+        let inout = keypair.vrf_create_hash(ctx.bytes(input));
+
+        // schnorrkel's own `vrf_sign` passes a bare `Transcript` here, whose
+        // `witness_scalar` draws through `getrandom_or_panic`. That panics on a
+        // `no_std` target without `getrandom`, so the caller's RNG is attached
+        // instead, exactly as `sign_with_rng` does for ordinary signatures.
+        // `attach_rng` only redirects witness generation: the committed
+        // transcript is unchanged, so the proof still verifies against the bare
+        // `Transcript` that `vrf_verify` builds.
+        let (proof, _batchable) = keypair.dleq_proove(
+            attach_rng(Transcript::new(EXTRA_TRANSCRIPT_LABEL), rng),
+            &inout,
+            KUSAMA_VRF,
+        );
+
+        pre_output_out.copy_from_slice(&inout.to_preout().to_bytes());
+        proof_out.copy_from_slice(&proof.to_bytes());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

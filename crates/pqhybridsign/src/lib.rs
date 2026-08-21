@@ -60,6 +60,11 @@ pub mod stateful;
 #[cfg(feature = "alloc")]
 pub mod stateful_composite;
 pub mod suite;
+// Hybrid VRF for the sr25519 suites, specification section 15. Behind the
+// `vrf` feature: a signing-only build has no use for it and should not carry
+// schnorrkel's VRF code.
+#[cfg(feature = "vrf")]
+pub mod vrf;
 
 // Lattice suites H1 through H4, over `ed25519-zebra`, `schnorrkel`,
 // `fips204`, and `fn-dsa`. Always compiled.

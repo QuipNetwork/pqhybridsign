@@ -756,6 +756,7 @@ dependencies = [
  "hashsigs-rs",
  "hex",
  "hkdf",
+ "merlin",
  "proptest",
  "rand_core 0.6.4",
  "schnorrkel",
