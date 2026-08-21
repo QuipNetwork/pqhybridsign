@@ -23,12 +23,35 @@ const require = createRequire(import.meta.url);
 const pqhs = require(join(here, "..", "dist", "index.node.cjs"));
 
 const STATELESS_SUITES = ["H1", "H2", "H3", "H4"];
+const STATEFUL_SUITES = ["H5", "H6"];
 const MSG = new TextEncoder().encode("the message the npm roundtrip test signs");
+const MSG2 = new TextEncoder().encode("a second npm roundtrip message");
 const CTX = new TextEncoder().encode("npm-roundtrip-test");
 const NONCE = new TextEncoder().encode("fixed-npm-roundtrip-nonce");
 
 function seed(byte) {
   return new Uint8Array(32).fill(byte);
+}
+
+// A synchronous in-memory LeafJournal, the shape signStateful drives. Not
+// durable -- a real integrator persists commit()/bindKey() to storage that
+// survives a restart -- but it exercises the identity binding and lockstep
+// counter checks within a session exactly as a durable one would.
+class MemoryLeafJournal {
+  #next = 0;
+  #bound = null;
+  commit(leaf) {
+    if (leaf + 1 > this.#next) this.#next = leaf + 1;
+  }
+  nextLeaf() {
+    return this.#next;
+  }
+  boundKey() {
+    return this.#bound === null ? null : this.#bound.slice();
+  }
+  bindKey(identity) {
+    this.#bound = identity.slice();
+  }
 }
 
 for (const [i, suite] of STATELESS_SUITES.entries()) {
@@ -53,23 +76,51 @@ for (const [i, suite] of STATELESS_SUITES.entries()) {
   });
 }
 
-test("H5: keygenFromSeed rejects (no stateful signing entry point)", async () => {
-  await assert.rejects(() => pqhs.keygenFromSeed("H5", seed(1)));
-});
+for (const suite of STATEFUL_SUITES) {
+  test(`${suite}: the stateless entry points reject and name the stateful ones`, async () => {
+    // keygenFromSeed/sign/signDeterministic are the stateless path; each must
+    // reject H5/H6 rather than silently spend a one-time leaf. sign() rejects
+    // before it inspects the placeholder key's length.
+    for (const call of [
+      () => pqhs.keygenFromSeed(suite, seed(1)),
+      () => pqhs.sign(suite, new Uint8Array(32), MSG, CTX),
+      () => pqhs.signDeterministic(suite, new Uint8Array(32), MSG, CTX, NONCE),
+    ]) {
+      await assert.rejects(call, /signStateful/);
+    }
+  });
 
-test("H5: sign rejects (no stateful signing entry point)", async () => {
-  // sign() needs a secret key; keygenFromSeed already rejects for H5, so
-  // this exercises sign's own rejection independently with an
-  // arbitrarily-sized placeholder key -- sign must reject before it ever
-  // inspects the key's length.
-  await assert.rejects(() => pqhs.sign("H5", new Uint8Array(32), MSG, CTX));
-});
+  test(`${suite}: stateful round trip -- keygen, adopt, sign, verify`, async () => {
+    const { secretKey, publicKey } = await pqhs.keygenStatefulFromSeed(suite, seed(0x50), 4);
+    const journal = new MemoryLeafJournal();
+    await pqhs.adoptKey(journal, await pqhs.keyIdentity(suite, publicKey));
 
-test("H5: signDeterministic rejects (no stateful signing entry point)", async () => {
-  await assert.rejects(() =>
-    pqhs.signDeterministic("H5", new Uint8Array(32), MSG, CTX, NONCE),
-  );
-});
+    const { signature, nextSecretKey } = await pqhs.signStateful(
+      suite,
+      secretKey,
+      journal,
+      MSG,
+      CTX,
+    );
+    assert.equal(nextSecretKey.length, await pqhs.secretKeyLen(suite));
+    assert.equal(journal.nextLeaf(), 1);
+    assert.equal(await pqhs.verify(suite, publicKey, MSG, CTX, signature), true);
+  });
+
+  test(`${suite}: reusing a stale blob is rejected, not signed`, async () => {
+    const { secretKey, publicKey } = await pqhs.keygenStatefulFromSeed(suite, seed(0x70), 4);
+    const journal = new MemoryLeafJournal();
+    await pqhs.adoptKey(journal, await pqhs.keyIdentity(suite, publicKey));
+
+    await pqhs.signStateful(suite, secretKey, journal, MSG, CTX);
+    // The original blob is now stale; signing with it again is refused rather
+    // than reissuing the spent leaf.
+    await assert.rejects(
+      () => pqhs.signStateful(suite, secretKey, journal, MSG2, CTX),
+      /diverged/,
+    );
+  });
+}
 
 test('storedPublicKeyLen("H5") resolves to a positive length', async () => {
   const len = await pqhs.storedPublicKeyLen("H5");

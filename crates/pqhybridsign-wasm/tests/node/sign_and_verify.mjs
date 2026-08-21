@@ -22,11 +22,56 @@ import { fileURLToPath } from "node:url";
 import * as pqhs from "../../npm/node/pqhybridsign_wasm.js";
 
 const SUITES = ["H1", "H2", "H3", "H4"];
+const STATEFUL_SUITES = ["H5", "H6"];
 const MSG = new TextEncoder().encode("the message the node test signs");
+const MSG2 = new TextEncoder().encode("a second, different message");
 const CTX = new TextEncoder().encode("node-sign-and-verify-test");
 
 function seed(byte) {
     return new Uint8Array(32).fill(byte);
+}
+
+// A synchronous in-memory LeafJournal, the shape signStateful drives. It is
+// NOT durable -- a real integrator persists commit() and bindKey() to storage
+// that survives a restart -- but within a session it exercises the identity
+// binding and the lockstep counter check exactly as a durable journal would.
+// Mirrors the native MemoryJournal in
+// ../generate_verify_with_stored_public_key_fixture.rs.
+class MemoryLeafJournal {
+    #next = 0;
+    #bound = null;
+    commit(leaf) {
+        // next_leaf() must report leaf + 1 after a commit(leaf); the abi only
+        // ever commits the leaf it just read, so this stays monotone.
+        if (leaf + 1 > this.#next) this.#next = leaf + 1;
+    }
+    nextLeaf() {
+        return this.#next;
+    }
+    boundKey() {
+        return this.#bound === null ? null : this.#bound.slice();
+    }
+    bindKey(identity) {
+        this.#bound = identity.slice();
+    }
+}
+
+// A synchronous in-memory StatelessBudgetStore, the counterpart of
+// MemoryLeafJournal for signStateless. Not durable, on the same terms.
+class MemoryStatelessBudget {
+    #counts = new Map();
+    static #hex(bytes) {
+        let s = "";
+        for (const b of bytes) s += b.toString(16).padStart(2, "0");
+        return s;
+    }
+    consumed(key) {
+        const v = this.#counts.get(MemoryStatelessBudget.#hex(key));
+        return v === undefined ? null : v;
+    }
+    record(key, count) {
+        this.#counts.set(MemoryStatelessBudget.#hex(key), count);
+    }
 }
 
 let failures = 0;
@@ -117,19 +162,29 @@ check("a signature from one suite fails to verify under another", () => {
 });
 
 for (const suite of ["H5", "H6"]) {
-    check(`${suite} is refused with an explanatory error, not silently accepted`, () => {
-        assert.throws(
+    check(`${suite}: the stateless entry points are refused and name the stateful ones`, () => {
+        // keygenFromSeed/sign/signDeterministic are the stateless path and
+        // must never silently spend a one-time leaf; each rejects H5/H6 with
+        // a message that points at keygenStatefulFromSeed/signStateful.
+        for (const call of [
             () => pqhs.keygenFromSeed(suite, seed(1)),
-            (err) => {
+            () => pqhs.sign(suite, new Uint8Array(32), MSG, CTX),
+            () => pqhs.signDeterministic(suite, new Uint8Array(32), MSG, CTX, seed(9)),
+        ]) {
+            assert.throws(call, (err) => {
                 assert.ok(err instanceof Error);
                 assert.match(err.message, /stateful suite/);
-                assert.match(err.message, /structured-cloned/);
+                assert.match(err.message, /signStateful/);
                 return true;
-            },
-        );
-        assert.throws(() => pqhs.publicKeyLen(suite));
-        assert.throws(() => pqhs.secretKeyLen(suite));
-        assert.throws(() => pqhs.signatureLen(suite));
+            });
+        }
+    });
+
+    check(`${suite}: the length accessors are total, like the C and Python bindings`, () => {
+        assert.ok(pqhs.publicKeyLen(suite) > 0);
+        assert.ok(pqhs.secretKeyLen(suite) > 0);
+        assert.ok(pqhs.signatureLen(suite) > 0);
+        assert.ok(pqhs.storedPublicKeyLen(suite) > 0);
     });
 }
 
@@ -245,6 +300,111 @@ check("verifyWithStoredPublicKey returns false and does not throw for malformed 
         );
     }
 });
+
+// ---- Stateful signing (H5, H6) through the functional journal API ----
+
+for (const [i, suite] of STATEFUL_SUITES.entries()) {
+    check(`${suite}: keygenStatefulFromSeed -> adoptKey -> signStateful -> verify`, () => {
+        const { secretKey, publicKey } = pqhs.keygenStatefulFromSeed(suite, seed(0x50 + i), 4);
+        assert.equal(secretKey.length, pqhs.secretKeyLen(suite));
+        assert.equal(publicKey.length, pqhs.publicKeyLen(suite));
+
+        const journal = new MemoryLeafJournal();
+        pqhs.adoptKey(journal, pqhs.keyIdentity(suite, publicKey));
+
+        const { signature, nextSecretKey } = pqhs.signStateful(suite, secretKey, journal, MSG, CTX);
+        assert.ok(signature.length <= pqhs.signatureLen(suite));
+        assert.equal(nextSecretKey.length, pqhs.secretKeyLen(suite));
+        // The returned blob is advanced past the leaf just spent, and the
+        // journal moved with it.
+        assert.notDeepEqual(nextSecretKey, secretKey);
+        assert.equal(journal.nextLeaf(), 1);
+        assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, signature), true);
+        // A tampered message must not verify against a real stateful signature.
+        assert.equal(pqhs.verify(suite, publicKey, MSG2, CTX, signature), false);
+    });
+
+    check(`${suite}: keyIdentity and keyIdentityFromSecretKey name the same key`, () => {
+        const { secretKey, publicKey } = pqhs.keygenStatefulFromSeed(suite, seed(0x60 + i), 4);
+        assert.deepEqual(
+            pqhs.keyIdentity(suite, publicKey),
+            pqhs.keyIdentityFromSecretKey(suite, secretKey),
+        );
+    });
+
+    check(`${suite}: reusing a stale blob is refused, never a reissued leaf`, () => {
+        const { secretKey, publicKey } = pqhs.keygenStatefulFromSeed(suite, seed(0x70 + i), 4);
+        const journal = new MemoryLeafJournal();
+        pqhs.adoptKey(journal, pqhs.keyIdentity(suite, publicKey));
+
+        // First signature spends leaf 0 and advances the journal to 1.
+        const first = pqhs.signStateful(suite, secretKey, journal, MSG, CTX);
+        assert.equal(journal.nextLeaf(), 1);
+
+        // Reusing the ORIGINAL blob (still leaf 0) against the now-advanced
+        // journal is the stale-blob hazard. The lockstep check refuses it
+        // (CountersDiverged) rather than reissuing leaf 0 under a new message.
+        assert.throws(
+            () => pqhs.signStateful(suite, secretKey, journal, MSG2, CTX),
+            (err) => {
+                assert.match(err.message, /diverged/);
+                return true;
+            },
+        );
+
+        // The advanced blob keeps signing (leaf 1), so the refusal above was
+        // the stale blob and not a stuck key.
+        const second = pqhs.signStateful(suite, first.nextSecretKey, journal, MSG2, CTX);
+        assert.equal(journal.nextLeaf(), 2);
+        assert.equal(pqhs.verify(suite, publicKey, MSG2, CTX, second.signature), true);
+    });
+
+    check(`${suite}: a journal that is not the key's is refused before any spend`, () => {
+        const { secretKey } = pqhs.keygenStatefulFromSeed(suite, seed(0x80 + i), 4);
+        // A fresh journal, never adopted for this key: it honestly reports
+        // leaf 0, exactly as the key's own unspent journal would, which is why
+        // only the identity binding can tell them apart.
+        const stranger = new MemoryLeafJournal();
+        assert.throws(
+            () => pqhs.signStateful(suite, secretKey, stranger, MSG, CTX),
+            (err) => {
+                assert.match(err.message, /does not belong to this key/);
+                return true;
+            },
+        );
+        assert.equal(stranger.nextLeaf(), 0, "the refusal must land before any commit");
+    });
+
+    check(`${suite}: the one-time leaf budget exhausts and fails closed`, () => {
+        // Two leaves, spent in order, then the third attempt is refused.
+        const { secretKey, publicKey } = pqhs.keygenStatefulFromSeed(suite, seed(0x90 + i), 2);
+        const journal = new MemoryLeafJournal();
+        pqhs.adoptKey(journal, pqhs.keyIdentity(suite, publicKey));
+
+        let blob = secretKey;
+        for (let n = 0; n < 2; n++) {
+            const out = pqhs.signStateful(suite, blob, journal, MSG, CTX);
+            assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, out.signature), true);
+            blob = out.nextSecretKey;
+        }
+        assert.equal(journal.nextLeaf(), 2);
+        assert.throws(
+            () => pqhs.signStateful(suite, blob, journal, MSG, CTX),
+            (err) => {
+                assert.match(err.message, /leaf budget is spent/);
+                return true;
+            },
+        );
+    });
+
+    check(`${suite}: signStateless spends the few-time budget, not a leaf`, () => {
+        const { secretKey, publicKey } = pqhs.keygenStatefulFromSeed(suite, seed(0xa0 + i), 4);
+        const budget = new MemoryStatelessBudget();
+        const sig = pqhs.signStateless(suite, secretKey, budget, MSG, CTX);
+        assert.ok(sig.length <= pqhs.signatureLen(suite));
+        assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, sig), true);
+    });
+}
 
 if (failures > 0) {
     console.error(`${failures} check(s) failed`);
