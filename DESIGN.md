@@ -611,23 +611,24 @@ either alone. A single-component rotation path would let one compromised
 component redirect all future authority, which drops the composite below its
 own guarantee at the worst possible moment.
 
-Rotation is offered for the stateful suites only. Every entry point in
-`rotation` is bounded on `StatefulSuite`, so the four lattice variations
-(`hybrid-{ed25519,sr25519}-{mldsa44,falcon512}-v1`) have no rotation label,
-no `M'_rotation`, and no authorization signature.
+Rotation is offered for the stateful suites only. Every signing and
+`M'_rotation` entry point in `rotation` is bounded on `StatefulSuite`, so the
+four lattice variations (`hybrid-{ed25519,sr25519}-{mldsa44,falcon512}-v1`)
+have no rotation label, no `M'_rotation`, and no authorization signature.
 
-This is a decision about what the mechanism is. The exclusion is
-deliberate. Leaf exhaustion forces a stateful key to hand over its
-authority, and the mechanism follows that shape: `RotationPayload` names
-the next classical public key and the kind of swap, and `sign_rotation`
-charges the pre-rotation stateless material because the budget is what the
-rotation is resolving. A suite with no leaf budget has none of that. Its
-key is replaced by installing a new public key, which is a deployment step
-rather than a construction this library authorizes.
+This is an exception the maintainer recorded on 2026-08-22. Completeness
+does not require rotation on a suite with no leaf budget. Leaf exhaustion
+forces a stateful key to hand over its authority.
+`RotationKind::StatefulGraft` grafts a fresh stateful tree onto the
+unchanged stateless-verify half. A suite with no tree has no target for
+that graft. `RotationKind::FullSwap` replaces the stateless material as
+well, and a lattice suite has no stateless half apart from its whole key.
+Swapping the whole key is what installing a new public key already does,
+a deployment step rather than a construction this library authorizes.
 
-The label grammar reserves the space for a future decision to widen this:
-the registry defines `"hybrid-" classical "-" pq ["-rotate"] "-v1"`, and the
-`-rotate` form is declared for the SHRINCS suites only.
+The label grammar allows an optional `-rotate` suffix on any suite. In
+code, only the eight SHRINCS suites set `rotate_label`
+(`crates/pqhybridsign/src/shrincs/suites.rs`). No lattice suite does.
 
 Each suite carries a second compile-time label, `ROTATE_LABEL`, composed as
 `"hybrid-" classical "-" pq "-rotate-v1"` plus the null byte and checked
