@@ -132,8 +132,12 @@ def test_stateless_path_on_a_stateful_suite_spends_no_leaf(suite):
 
     sig_a = sk.sign_stateless(b"message", b"context")
     sig_b = sk.sign_stateless(b"message", b"context")
-    assert phs.verify(suite, pk, b"message", b"context", sig_a)
-    assert phs.verify(suite, pk, b"message", b"context", sig_b)
+    # Plain `verify` accepts only the stateful path for H5/H6
+    # (specification section 20.2): a stateless-path signature verifies
+    # only through `verify_stateless`.
+    assert phs.verify(suite, pk, b"message", b"context", sig_a) is False
+    assert phs.verify_stateless(suite, pk, b"message", b"context", sig_a)
+    assert phs.verify_stateless(suite, pk, b"message", b"context", sig_b)
     assert journal.committed == [], "the stateless path must spend no leaf"
 
 
@@ -250,9 +254,9 @@ def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
     """The stored form binds a bundle to the key the verifier installed.
 
     An attacker's own freshly generated key verifies its own signatures
-    perfectly well through the unchecked whole-key path (`phs.verify`).
-    This entry point is what ties the key on the wire to the key on the
-    account.
+    perfectly well through the unchecked whole-key path
+    (`phs.verify_stateless`). This entry point is what ties the key on the
+    wire to the key on the account.
     """
     seed = bytes(range(32))
     journal, budget = MemoryJournal(), MemoryBudget()
@@ -262,20 +266,34 @@ def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
     assert len(stored) == phs.stored_public_key_len(suite)
 
     # Whole-key verification accepts the honest signature: the key and the
-    # signature agree with each other, and nothing else is consulted.
-    assert phs.verify(suite, pk, b"message", b"ctx", sig)
+    # signature agree with each other, and nothing else is consulted. Plain
+    # `phs.verify` accepts only the stateful path for H5/H6 (specification
+    # section 20.2), so a stateless-path signature verifies only through
+    # `verify_stateless`.
+    assert phs.verify(suite, pk, b"message", b"ctx", sig) is False
+    assert phs.verify_stateless(suite, pk, b"message", b"ctx", sig)
 
-    assert phs.verify_with_stored_public_key(
+    assert phs.verify_with_stored_public_key_stateless(
+        suite, stored, _bundle(suite, pk), b"message", b"ctx", sig
+    )
+    # The stateful-path entry point must refuse this same stateless-path
+    # signature, by selector, before either component signature is checked.
+    assert not phs.verify_with_stored_public_key_stateful(
         suite, stored, _bundle(suite, pk), b"message", b"ctx", sig
     )
 
-    # The path selector this entry point sees differs by which of the two
-    # SHRINCS paths signed: 0x02 (stateless) above, 0x01 (stateful, one
-    # leaf spent) here. The commitment check does not branch on it, but
-    # nothing else in this test suite exercises the stateful selector
-    # through verify_with_stored_public_key.
+    # The mirror image: a stateful-path signature verifies only through the
+    # stateful entry points, and is refused by the stateless ones.
     stateful_sig = sk.sign_stateful(b"stateful message", b"ctx")
-    assert phs.verify_with_stored_public_key(
+    assert phs.verify(suite, pk, b"stateful message", b"ctx", stateful_sig)
+    assert phs.verify_stateful(suite, pk, b"stateful message", b"ctx", stateful_sig)
+    assert not phs.verify_stateless(
+        suite, pk, b"stateful message", b"ctx", stateful_sig
+    )
+    assert phs.verify_with_stored_public_key_stateful(
+        suite, stored, _bundle(suite, pk), b"stateful message", b"ctx", stateful_sig
+    )
+    assert not phs.verify_with_stored_public_key_stateless(
         suite, stored, _bundle(suite, pk), b"stateful message", b"ctx", stateful_sig
     )
 
@@ -283,11 +301,11 @@ def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
     _, attacker_pk = phs.keygen_stateful_from_seed(
         suite, bytes(range(1, 33)), 4, other_journal, other_budget
     )
-    assert phs.verify(suite, attacker_pk, b"message", b"ctx", sig) is False
+    assert phs.verify_stateless(suite, attacker_pk, b"message", b"ctx", sig) is False
 
     # Against the victim's installed commitment, the attacker's own bundle
     # is refused even though it is a perfectly well-formed key of its own.
-    assert not phs.verify_with_stored_public_key(
+    assert not phs.verify_with_stored_public_key_stateless(
         suite, stored, _bundle(suite, attacker_pk), b"message", b"ctx", sig
     )
 
@@ -295,7 +313,11 @@ def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
 def test_verify_with_stored_public_key_rejects_stateless_suites(suite):
     with pytest.raises(phs.WrongEntryPointForSuiteError):
-        phs.verify_with_stored_public_key(
+        phs.verify_with_stored_public_key_stateful(
+            suite, b"\x00" * 64, b"\x00" * 164, b"m", b"", b"\x00"
+        )
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.verify_with_stored_public_key_stateless(
             suite, b"\x00" * 64, b"\x00" * 164, b"m", b"", b"\x00"
         )
 
@@ -325,7 +347,7 @@ def test_stateful_export_and_load_round_trips(suite):
     assert reloaded.export() == blob
 
     sig = reloaded.sign_stateless(b"message", b"context")
-    assert phs.verify(suite, pk, b"message", b"context", sig)
+    assert phs.verify_stateless(suite, pk, b"message", b"context", sig)
 
     # Signing through the reload spends leaf 1, not leaf 0 again.
     sig_2 = reloaded.sign_stateful(b"message two", b"context")

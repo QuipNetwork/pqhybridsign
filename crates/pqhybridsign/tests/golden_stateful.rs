@@ -232,7 +232,7 @@ where
                 "{} leaf {leaf} signature drifted",
                 v.suite
             );
-            assert!(S::verify(pk, &msg, &ctx, &sig));
+            assert!(S::verify_stateful(pk, &msg, &ctx, &sig));
         } else {
             // Unrecorded leaf: signed only to advance the state to the
             // next recorded leaf.
@@ -260,7 +260,7 @@ where
     let stateless_msg = hex::decode(&v.stateless_msg_hex).expect("stateless msg");
     let sig = hex::decode(&v.stateless_signature_hex).expect("stateless signature");
     assert!(
-        S::verify(pk, &stateless_msg, &stateless_ctx, &sig),
+        S::verify_stateless(pk, &stateless_msg, &stateless_ctx, &sig),
         "{} stateless vector must verify",
         v.suite
     );

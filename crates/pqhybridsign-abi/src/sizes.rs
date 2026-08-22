@@ -29,7 +29,8 @@ pub fn public_key_len(suite: Suite) -> usize {
 }
 
 /// Stored public key length for `suite`, in bytes: the form a verifier
-/// keeps, which is what [`crate::verify_with_stored_public_key`] takes as
+/// keeps, which is what [`crate::verify_with_stored_public_key_stateful`]
+/// and [`crate::verify_with_stored_public_key_stateless`] take as
 /// `stored_public_key`.
 ///
 /// For H5 and H6 this is [`StatefulSuite::STORED_PUBLIC_KEY_LEN`]: the

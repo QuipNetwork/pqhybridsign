@@ -299,20 +299,18 @@ fn h5_stateless_signing_spends_no_leaf() {
     let n_b = pqhybridsign_abi::sign_stateless(Suite::H5, &sk, &mut budget, MSG, CTX, &mut sig_b)
         .unwrap();
 
-    assert!(pqhybridsign_abi::verify(
+    // Plain `verify` accepts only the stateful path for H5/H6
+    // (specification section 20.2): a stateless-path signature verifies
+    // only through `verify_stateless`.
+    assert!(!pqhybridsign_abi::verify(
         Suite::H5,
         &pk,
         MSG,
         CTX,
         &sig_a[..n_a]
     ));
-    assert!(pqhybridsign_abi::verify(
-        Suite::H5,
-        &pk,
-        MSG,
-        CTX,
-        &sig_b[..n_b]
-    ));
+    assert!(pqhybridsign_abi::verify_stateless(Suite::H5, &pk, MSG, CTX, &sig_a[..n_a]).unwrap());
+    assert!(pqhybridsign_abi::verify_stateless(Suite::H5, &pk, MSG, CTX, &sig_b[..n_b]).unwrap());
 }
 
 /// H3/H4/H6: the second suite in each family round-trips end to end

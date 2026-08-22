@@ -859,7 +859,7 @@ mod tests {
         let unchecked = PublicKey::<H5>::from_bytes(attacker_pk.as_ref())
             .expect("from_bytes checks only the length");
         assert!(
-            <H5 as StatefulHybridSignatureScheme>::verify(
+            <H5 as StatefulHybridSignatureScheme>::verify_stateless(
                 &unchecked,
                 b"transfer everything",
                 b"",

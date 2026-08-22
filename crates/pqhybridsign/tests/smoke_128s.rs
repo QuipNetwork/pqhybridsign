@@ -144,7 +144,7 @@ fn keygen_matches_h5_fixture_and_stateful_leaf_1_is_reproducible() {
     );
 
     assert!(
-        H5::verify(&pk, &f.stateful_msg, &f.stateful_ctx, &sig),
+        H5::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &sig),
         "stateful leaf-1 signature must verify against the keygen public key"
     );
 }

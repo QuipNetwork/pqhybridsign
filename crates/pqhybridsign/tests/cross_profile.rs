@@ -145,7 +145,7 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
     // everything.
     let honest = PublicKey::<H5>::from_bytes(&f.public_key).expect("public key from fixture");
     assert!(
-        H5::verify(
+        H5::verify_stateful(
             &honest,
             &f.stateful_msg,
             &f.stateful_ctx,
@@ -154,7 +154,7 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
         "the fixture's own stateful signature must verify under its own key"
     );
     assert!(
-        H5::verify(
+        H5::verify_stateless(
             &honest,
             &f.stateless_msg,
             &f.stateless_ctx,
@@ -182,13 +182,13 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
 
         let pk = PublicKey::<H5>::from_bytes(&spliced).expect("spliced public key");
         assert!(
-            !H5::verify(&pk, &f.stateful_msg, &f.stateful_ctx, &f.stateful_signature),
+            !H5::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &f.stateful_signature),
             "a stateful signature must not verify once the commitment comes \
              from profile {}",
             other.profile_name
         );
         assert!(
-            !H5::verify(
+            !H5::verify_stateless(
                 &pk,
                 &f.stateless_msg,
                 &f.stateless_ctx,

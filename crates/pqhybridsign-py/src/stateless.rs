@@ -111,9 +111,16 @@ pub(crate) fn sign_deterministic(
 
 /// Verify `sig` over `msg` under `ctx` for `suite`, against `pk`.
 ///
-/// Covers all six suites. Returns `False`, never raises, for a malformed
-/// `pk` or `sig`: see `pqhybridsign_abi::verify` for why a verify failure
-/// is never distinguished by cause.
+/// Covers all six suites. For H5 and H6 this accepts only a signature
+/// produced by `sign_stateful`, the same behaviour `verify_stateful` gives
+/// directly: specification section 20.2 reserves the primary stateless
+/// path for rotation and recovery, and an ordinary application message must
+/// not verify through it. Call `verify_stateless` for a message
+/// deliberately signed on that path.
+///
+/// Returns `False`, never raises, for a malformed `pk` or `sig`: see
+/// `pqhybridsign_abi::verify` for why a verify failure is never
+/// distinguished by cause.
 #[pyfunction]
 pub(crate) fn verify(
     py: Python<'_>,

@@ -127,7 +127,12 @@ where
         stateless_a, stateless_b,
         "the generator itself must observe the byte-identical resign it is pinning"
     );
-    assert!(S::verify(&pk, STATELESS_MSG, STATELESS_CTX, &stateless_a));
+    assert!(S::verify_stateless(
+        &pk,
+        STATELESS_MSG,
+        STATELESS_CTX,
+        &stateless_a
+    ));
 
     let classical_pk_len = pk.classical().len();
     let commitment = &pk.pq_verify_key()[68..100];

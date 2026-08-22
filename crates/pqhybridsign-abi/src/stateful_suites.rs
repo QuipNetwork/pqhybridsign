@@ -344,9 +344,9 @@ fn sign_stateless_suite<S: StatefulSuite>(
     write_sig(sig_out, sig.as_ref())
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
-/// signer-supplied verify key that must be the one `stored_public_key`
-/// commits to.
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`sign_stateful`], against a signer-supplied
+/// verify key that must be the one `stored_public_key` commits to.
 ///
 /// This is the entry point for the deployment H5 and H6 are built for: the
 /// verifier stores the small form (`ClassicalPK || commitment`,
@@ -360,10 +360,14 @@ fn sign_stateless_suite<S: StatefulSuite>(
 /// `stored_public_key`, so nothing the signer supplied can substitute a key
 /// of their own.
 ///
-/// [`crate::verify`] is the other shape: it takes one whole verify-form
-/// public key ([`crate::public_key_len`] bytes) and checks no commitment,
-/// because it has nothing to check one against. Use it only where the
-/// verify key itself came from a trusted place.
+/// A signature whose wire `PathSelector` names the stateless path is
+/// refused before either component signature is checked -- see
+/// [`pqhybridsign::stateful::StatefulHybridSignatureScheme::verify_stateful`].
+/// Specification section 20.2 requires this for ordinary application
+/// messages: the primary stateless path is reserved for rotation and
+/// recovery. A caller that genuinely needs to accept a stateless-path
+/// signature under a stored commitment calls
+/// [`verify_with_stored_public_key_stateless`] instead.
 ///
 /// Returns `false`, never an error, for a commitment that does not match, a
 /// malformed key or a malformed signature, on the same grounds as
@@ -375,7 +379,7 @@ fn sign_stateless_suite<S: StatefulSuite>(
 /// [`AbiError::WrongEntryPointForSuite`] for H1-H4. Their public key is a
 /// single form with no commitment in it, so there is nothing for this
 /// function to bind; use [`crate::verify`].
-pub fn verify_with_stored_public_key(
+pub fn verify_with_stored_public_key_stateful(
     suite: Suite,
     stored_public_key: &[u8],
     pq_verify_key: &[u8],
@@ -390,6 +394,7 @@ pub fn verify_with_stored_public_key(
             msg,
             ctx,
             sig,
+            <H5 as StatefulHybridSignatureScheme>::verify_stateful,
         )),
         Suite::H6 => Ok(verify_stored::<H6>(
             stored_public_key,
@@ -397,6 +402,49 @@ pub fn verify_with_stored_public_key(
             msg,
             ctx,
             sig,
+            <H6 as StatefulHybridSignatureScheme>::verify_stateful,
+        )),
+        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+    }
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`sign_stateless`], against a stored
+/// commitment.
+///
+/// The mirror image of [`verify_with_stored_public_key_stateful`): a
+/// signature whose wire `PathSelector` names the stateful path is refused
+/// before either component signature is checked. Use this for rotation and
+/// recovery authorizations, and for any other message an application has
+/// deliberately chosen to sign on the few-time stateless path.
+///
+/// # Errors
+///
+/// The same as [`verify_with_stored_public_key_stateful`].
+pub fn verify_with_stored_public_key_stateless(
+    suite: Suite,
+    stored_public_key: &[u8],
+    pq_verify_key: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, AbiError> {
+    match suite {
+        Suite::H5 => Ok(verify_stored::<H5>(
+            stored_public_key,
+            pq_verify_key,
+            msg,
+            ctx,
+            sig,
+            <H5 as StatefulHybridSignatureScheme>::verify_stateless,
+        )),
+        Suite::H6 => Ok(verify_stored::<H6>(
+            stored_public_key,
+            pq_verify_key,
+            msg,
+            ctx,
+            sig,
+            <H6 as StatefulHybridSignatureScheme>::verify_stateless,
         )),
         Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
     }
@@ -408,6 +456,7 @@ fn verify_stored<S: StatefulSuite>(
     msg: &[u8],
     ctx: &[u8],
     sig: &[u8],
+    verify: impl FnOnce(&PublicKey<S>, &[u8], &[u8], &Vec<u8>) -> bool,
 ) -> bool
 where
     S::Pq: CommittedVerifyKey,
@@ -417,7 +466,89 @@ where
     else {
         return false;
     };
-    <S as StatefulHybridSignatureScheme>::verify(&pk, msg, ctx, &sig.to_vec())
+    verify(&pk, msg, ctx, &sig.to_vec())
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`sign_stateful`], against one whole
+/// verify-form public key.
+///
+/// The other shape from [`verify_with_stored_public_key_stateful`]: this
+/// takes one whole verify-form public key ([`crate::public_key_len`] bytes)
+/// and checks no commitment, because it has nothing to check one against.
+/// Use it only where the verify key itself came from a trusted place.
+///
+/// A signature whose wire `PathSelector` names the stateless path is
+/// refused before either component signature is checked -- see
+/// [`pqhybridsign::stateful::StatefulHybridSignatureScheme::verify_stateful`].
+/// [`crate::verify`] is the total dispatcher across all six suites and, for
+/// H5 and H6, behaves exactly as this function does; call this one directly
+/// only where the suite is already known to be H5 or H6.
+///
+/// # Errors
+///
+/// [`AbiError::WrongEntryPointForSuite`] for H1-H4; use [`crate::verify`]
+/// instead.
+pub fn verify_stateful(
+    suite: Suite,
+    pk: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, AbiError> {
+    match suite {
+        Suite::H5 => Ok(verify_stateful_pk::<H5>(pk, msg, ctx, sig)),
+        Suite::H6 => Ok(verify_stateful_pk::<H6>(pk, msg, ctx, sig)),
+        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+    }
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`sign_stateless`], against one whole
+/// verify-form public key.
+///
+/// The mirror image of [`verify_stateful`]. Use this for rotation and
+/// recovery authorizations, and for any other message an application has
+/// deliberately chosen to sign on the few-time stateless path.
+///
+/// # Errors
+///
+/// The same as [`verify_stateful`].
+pub fn verify_stateless(
+    suite: Suite,
+    pk: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, AbiError> {
+    match suite {
+        Suite::H5 => Ok(verify_stateless_pk::<H5>(pk, msg, ctx, sig)),
+        Suite::H6 => Ok(verify_stateless_pk::<H6>(pk, msg, ctx, sig)),
+        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+    }
+}
+
+/// Shared tail of [`verify_stateful`] and, through [`crate::verify`]'s H5/H6
+/// arms, the total dispatcher: parse `pk` as a whole verify-form key and
+/// accept only a signature on the stateful path.
+pub(crate) fn verify_stateful_pk<S: StatefulSuite>(
+    pk: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> bool {
+    let Ok(pk) = PublicKey::<S>::from_bytes(pk) else {
+        return false;
+    };
+    <S as StatefulHybridSignatureScheme>::verify_stateful(&pk, msg, ctx, &sig.to_vec())
+}
+
+/// The stateless-path counterpart of [`verify_stateful_pk`].
+fn verify_stateless_pk<S: StatefulSuite>(pk: &[u8], msg: &[u8], ctx: &[u8], sig: &[u8]) -> bool {
+    let Ok(pk) = PublicKey::<S>::from_bytes(pk) else {
+        return false;
+    };
+    <S as StatefulHybridSignatureScheme>::verify_stateless(&pk, msg, ctx, &sig.to_vec())
 }
 
 fn write_exact(out: &mut [u8], src: &[u8]) -> Result<(), AbiError> {
@@ -522,9 +653,9 @@ mod tests {
     }
 
     /// A bundle an attacker generated verifies their own signature perfectly
-    /// well through [`crate::verify`], which has no stored key to compare it
-    /// against. Binding the two is what
-    /// [`verify_with_stored_public_key`] adds.
+    /// well through [`crate::verify_stateless`], which has no stored key to
+    /// compare it against. Binding the two is what
+    /// [`verify_with_stored_public_key_stateless`] adds.
     #[test]
     fn verify_with_stored_public_key_refuses_a_bundle_the_stored_key_does_not_name() {
         const MSG: &[u8] = b"transfer everything";
@@ -560,12 +691,16 @@ mod tests {
         let forged = &sig[..n];
 
         // Whole-key verification accepts it: the key and the signature agree
-        // with each other, and nothing else is consulted.
-        assert!(crate::verify(Suite::H5, &attacker_pk, MSG, b"", forged));
+        // with each other, and nothing else is consulted. `forged` is
+        // stateless-signed, and plain `crate::verify` accepts only the
+        // stateful path for H5/H6, so this goes through `verify_stateless`.
+        assert!(
+            verify_stateless(Suite::H5, &attacker_pk, MSG, b"", forged).expect("h5 is stateful")
+        );
 
         // Against the victim's installed commitment it is refused.
         assert_eq!(
-            verify_with_stored_public_key(
+            verify_with_stored_public_key_stateless(
                 Suite::H5,
                 &victim_stored,
                 bundle_of(&attacker_pk),
@@ -590,7 +725,7 @@ mod tests {
         )
         .expect("victim signs");
         assert_eq!(
-            verify_with_stored_public_key(
+            verify_with_stored_public_key_stateless(
                 Suite::H5,
                 &victim_stored,
                 bundle_of(&victim_pk),
@@ -604,7 +739,7 @@ mod tests {
         // A wrong-length stored key or bundle is a failed verification, not
         // an error: same rule as `crate::verify`.
         assert_eq!(
-            verify_with_stored_public_key(
+            verify_with_stored_public_key_stateless(
                 Suite::H5,
                 &victim_stored[..1],
                 bundle_of(&victim_pk),
@@ -615,7 +750,14 @@ mod tests {
             Ok(false)
         );
         assert_eq!(
-            verify_with_stored_public_key(Suite::H5, &victim_stored, &[], MSG, b"", &honest[..n]),
+            verify_with_stored_public_key_stateless(
+                Suite::H5,
+                &victim_stored,
+                &[],
+                MSG,
+                b"",
+                &honest[..n]
+            ),
             Ok(false)
         );
     }
@@ -838,7 +980,7 @@ mod tests {
                 Err(AbiError::WrongEntryPointForSuite)
             );
             assert_eq!(
-                verify_with_stored_public_key(
+                verify_with_stored_public_key_stateful(
                     suite,
                     &[0u8; 64],
                     &[0u8; 164],

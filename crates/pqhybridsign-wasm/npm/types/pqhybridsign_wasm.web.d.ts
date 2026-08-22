@@ -295,8 +295,11 @@ export function signatureLen(suite: string): number;
 
 /**
  * Stored public key length, in bytes, for `suite`: the form a verifier
- * keeps, which is what [`verify_with_stored_public_key`] takes as
- * `stored_public_key`.
+ * keeps, which is what
+ * [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful)
+ * and
+ * [`verifyWithStoredPublicKeyStateless`](verify_with_stored_public_key_stateless)
+ * take as `stored_public_key`.
  *
  * Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
  * the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
@@ -325,8 +328,17 @@ export function storedPublicKeyLen(suite: string): number;
  * [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returns, and no
  * commitment is checked because there is nothing to check one against; use
  * this only where that verify key came from a trusted place, and
- * [`verifyWithStoredPublicKey`](verify_with_stored_public_key) -- which
- * binds a signer-supplied bundle to a stored commitment -- otherwise.
+ * [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful)
+ * -- which binds a signer-supplied bundle to a stored commitment --
+ * otherwise.
+ *
+ * For H5 and H6 this accepts only a signature produced by
+ * [`signStateful`](sign_stateful), the same behaviour
+ * [`verifyStateful`](verify_stateful) gives directly: specification section
+ * 20.2 reserves the primary stateless path for rotation and recovery, and
+ * an ordinary application message must not verify through it. Call
+ * [`verifyStateless`](verify_stateless) for a message deliberately signed
+ * on that path.
  *
  * Returns `false`, never throws, for a malformed `public_key` or `sig`;
  * see [`pqhybridsign_abi::verify`] for why a verification failure is
@@ -340,8 +352,49 @@ export function verify(suite: string, public_key: Uint8Array, msg: Uint8Array, c
 
 /**
  * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
- * `"H6"`), against a signer-supplied verify key that must be the one
- * `stored_public_key` commits to.
+ * `"H6"`), accepting only a signature produced by
+ * [`signStateful`](sign_stateful), against one whole verify-form
+ * `public_key`.
+ *
+ * [`verify`] is the total dispatcher across all six suites and, for H5 and
+ * H6, behaves exactly as this function does; call this one directly only
+ * where the suite is already known to be H5 or H6. A signature whose wire
+ * `PathSelector` names the stateless path is refused before either
+ * component signature is checked. Call
+ * [`verifyStateless`](verify_stateless) for a message deliberately signed
+ * on the stateless path.
+ *
+ * Returns `false`, never throws, for a malformed `public_key` or `sig`, on
+ * the same terms as [`verify`].
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+ */
+export function verifyStateful(suite: string, public_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+ * `"H6"`), accepting only a signature produced by
+ * [`signStateless`](sign_stateless), against one whole verify-form
+ * `public_key`.
+ *
+ * The mirror image of [`verifyStateful`](verify_stateful). Use this for
+ * rotation and recovery authorizations, and for any other message an
+ * application has deliberately chosen to sign on the few-time stateless
+ * path.
+ *
+ * # Errors
+ *
+ * The same as [`verifyStateful`](verify_stateful).
+ */
+export function verifyStateless(suite: string, public_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+ * `"H6"`), accepting only a signature produced by
+ * [`signStateful`](sign_stateful), against a signer-supplied verify key
+ * that must be the one `stored_public_key` commits to.
  *
  * This is the entry point the H5/H6 deployment is built for: the
  * verifier stores the small form (`ClassicalPK || commitment`,
@@ -356,10 +409,15 @@ export function verify(suite: string, public_key: Uint8Array, msg: Uint8Array, c
  * taken from `stored_public_key`, so nothing the signer supplied can
  * substitute a key of their own.
  *
- * [`verify`] is the other shape: it takes one whole verify-form public
- * key and checks no commitment, because it has nothing to check one
- * against. Use it only where the verify key itself came from a trusted
- * place.
+ * [`verifyStateful`](verify_stateful) is the other shape: it takes one
+ * whole verify-form public key and checks no commitment, because it has
+ * nothing to check one against. Use it only where the verify key itself
+ * came from a trusted place.
+ *
+ * A signature whose wire `PathSelector` names the stateless path is
+ * refused before either component signature is checked. Call
+ * [`verifyWithStoredPublicKeyStateless`](verify_with_stored_public_key_stateless)
+ * for a message deliberately signed on that path.
  *
  * Returns `false`, never throws, for a commitment that does not match, a
  * malformed key or a malformed signature -- the same design [`verify`]
@@ -369,7 +427,26 @@ export function verify(suite: string, public_key: Uint8Array, msg: Uint8Array, c
  *
  * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
  */
-export function verifyWithStoredPublicKey(suite: string, stored_public_key: Uint8Array, pq_verify_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
+export function verifyWithStoredPublicKeyStateful(suite: string, stored_public_key: Uint8Array, pq_verify_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+ * `"H6"`), accepting only a signature produced by
+ * [`signStateless`](sign_stateless), against a signer-supplied verify key
+ * that must be the one `stored_public_key` commits to.
+ *
+ * The mirror image of
+ * [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful).
+ * Use this for rotation and recovery authorizations, and for any other
+ * message an application has deliberately chosen to sign on the few-time
+ * stateless path.
+ *
+ * # Errors
+ *
+ * The same as
+ * [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful).
+ */
+export function verifyWithStoredPublicKeyStateless(suite: string, stored_public_key: Uint8Array, pq_verify_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -396,7 +473,10 @@ export interface InitOutput {
     readonly signatureLen: (a: number, b: number) => [number, number, number];
     readonly storedPublicKeyLen: (a: number, b: number) => [number, number, number];
     readonly verify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
-    readonly verifyWithStoredPublicKey: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number];
+    readonly verifyStateful: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
+    readonly verifyStateless: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
+    readonly verifyWithStoredPublicKeyStateful: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number];
+    readonly verifyWithStoredPublicKeyStateless: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number];
     readonly __wbg_set_signstatefulresult_nextSecretKey: (a: number, b: any) => void;
     readonly __wbg_set_signstatefulresult_signature: (a: number, b: any) => void;
     readonly __wbg_get_signstatefulresult_nextSecretKey: (a: number) => any;
