@@ -87,6 +87,17 @@ use crate::suite::PySuite;
 /// place to land; two independent calls into the same Python method would
 /// give it two, and a fault that lands on the second would go unnoticed by
 /// a guard checked after the first.
+///
+/// `bind_key` clears `bound_key_cache` on success, so a `bound_key` read
+/// after a `bind_key` write on the same instance sees the new binding rather
+/// than a `None` cached from before it. No current caller reads
+/// `bound_key` again after `bind_key` on one `PyJournal` -- `adopt_key`
+/// reads it once, before its own single call to `bind_key`, and
+/// `sign_stateful` never calls `bind_key` at all -- but the type does not
+/// enforce that ordering, and a future entry point that adopts and then
+/// re-reads must not see a stale `None`: that is exactly the never-bound
+/// condition `JournalKeyMismatch` exists to catch. Any method added to this
+/// `impl` that writes through to Python must maintain this invariant.
 struct PyJournal<'py> {
     journal: Bound<'py, PyAny>,
     error: RefCell<Option<PyErr>>,
@@ -150,8 +161,10 @@ impl LeafJournal for PyJournal<'_> {
     /// the recorded exception in preference to whatever the ABI reported.
     ///
     /// Memoized (see `bound_key_cache` on the struct): `journal.bound_key`
-    /// is called at most once per `PyJournal`, however many times this
-    /// method is called.
+    /// is called at most once per `PyJournal` between calls to `bind_key`,
+    /// however many times this method is called. `bind_key` clears the
+    /// cache on success, so a call after a successful bind reaches
+    /// `journal.bound_key` again rather than returning a stale answer.
     fn bound_key(&self) -> Option<KeyIdentity> {
         if let Some(cached) = *self.bound_key_cache.borrow() {
             return cached;
@@ -177,7 +190,15 @@ impl LeafJournal for PyJournal<'_> {
     fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
         let bytes = PyBytes::new(self.journal.py(), key.as_bytes());
         match self.journal.call_method1("bind_key", (bytes,)) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Invalidate `bound_key_cache`: a stale `None` cached from a
+                // read before this write would read back as never-bound,
+                // which is the exact condition `JournalKeyMismatch` exists
+                // to catch. The next `bound_key()` call re-reads
+                // `journal.bound_key`.
+                *self.bound_key_cache.borrow_mut() = None;
+                Ok(())
+            }
             Err(err) => {
                 self.record(err);
                 Err(JournalCallFailed)

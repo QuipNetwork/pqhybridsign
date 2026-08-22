@@ -2416,7 +2416,12 @@ mod tests {
 
     /// Offset of the 32-byte commitment inside a SHRINCS bundle
     /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`),
-    /// mirroring `pqhybridsign_abi::stateful_suites::tests::COMMITMENT_AT`.
+    /// matching the private `BUNDLE_COMMITMENT_OFFSET` constant at
+    /// `crates/pqhybridsign/src/shrincs/scheme.rs:48`. `pqhybridsign_abi`'s
+    /// own unit tests no longer extract this by offset -- they call
+    /// `stateful_composite::PublicKey::stored_form` instead -- but this
+    /// crate still lifts it directly, deliberately parked for separate
+    /// bindings work (`pqhs-0d2`).
     const COMMITMENT_AT: usize = 68;
 
     /// The small form a verifier installs: the classical public key and the

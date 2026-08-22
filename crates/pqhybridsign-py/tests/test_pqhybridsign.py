@@ -218,18 +218,22 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
 
 # Offset of the 32-byte commitment inside a SHRINCS bundle
 # (statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot),
-# mirroring the private BUNDLE_COMMITMENT_OFFSET constant at
-# crates/pqhybridsign-shrincs/src/scheme.rs:45 and
-# pqhybridsign_abi::stateful_suites::tests::COMMITMENT_AT. This is
-# spec-fixed layout shared by every SHRINCS instance (H5 and H6 alike), not
-# a per-profile detail.
+# matching the private BUNDLE_COMMITMENT_OFFSET constant at
+# crates/pqhybridsign/src/shrincs/scheme.rs:48. This is spec-fixed layout
+# shared by every SHRINCS instance (H5 and H6 alike), not a per-profile
+# detail.
 #
 # No binding exposes an accessor that derives the small stored form from a
 # verify-form public key -- see the task-4 report for why -- so this test
-# reconstructs it the same way the ABI crate's own unit test does. A real
-# deployment installs the stored form once, at provisioning time, from
-# whatever produced the key; it does not slice it out of the verify form
-# the way this helper does for test setup.
+# reconstructs it by slicing the offset out directly. pqhybridsign_abi's own
+# unit tests no longer do this the same way: they call
+# stateful_composite::PublicKey::stored_form instead, which computes the
+# commitment rather than assuming it sits at a fixed offset in the verify
+# form. This helper still assumes the fixed offset, deliberately parked for
+# separate bindings work (pqhs-0d2). A real deployment installs the stored
+# form once, at provisioning time, from whatever produced the key; it does
+# not slice it out of the verify form the way this helper does for test
+# setup.
 _COMMITMENT_AT = 68
 
 
