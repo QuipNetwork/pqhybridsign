@@ -740,6 +740,17 @@ fn js_to_key_identity(value: &JsValue) -> Option<KeyIdentity> {
 /// land; two independent calls into the same JavaScript method would give
 /// it two, and a fault that lands on the second would go unnoticed by a
 /// guard checked after the first.
+///
+/// `bind_key` clears `bound_key_cache` on success, so a `bound_key` read
+/// after a `bind_key` write on the same instance sees the new binding rather
+/// than a `None` cached from before it. No current caller reads
+/// `bound_key` again after `bind_key` on one `JsJournal` -- `adopt_key`
+/// reads it once, before its own single call to `bind_key`, and
+/// `sign_stateful` never calls `bind_key` at all -- but the type does not
+/// enforce that ordering, and a future entry point that adopts and then
+/// re-reads must not see a stale `None`: that is exactly the never-bound
+/// condition `JournalKeyMismatch` exists to catch. Any method added to this
+/// `impl` that writes through to JavaScript must maintain this invariant.
 struct JsJournal<'a> {
     obj: &'a JsValue,
     error: RefCell<Option<JsValue>>,
@@ -793,8 +804,10 @@ impl LeafJournal for JsJournal<'_> {
     }
 
     /// Memoized (see `bound_key_cache` on the struct): `boundKey()` is
-    /// called at most once per `JsJournal`, however many times this method
-    /// is called.
+    /// called at most once per `JsJournal` between calls to `bind_key`,
+    /// however many times this method is called. `bind_key` clears the
+    /// cache on success, so a call after a successful bind reaches
+    /// `boundKey()` again rather than returning a stale answer.
     fn bound_key(&self) -> Option<KeyIdentity> {
         if let Some(cached) = *self.bound_key_cache.borrow() {
             return cached;
@@ -822,7 +835,14 @@ impl LeafJournal for JsJournal<'_> {
     fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
         let arg = Uint8Array::from(&key.as_bytes()[..]);
         match call1(self.obj, "bindKey", arg.as_ref()) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Invalidate `bound_key_cache`: a stale `None` cached from a
+                // read before this write would read back as never-bound,
+                // which is the exact condition `JournalKeyMismatch` exists
+                // to catch. The next `bound_key()` call re-reads `boundKey()`.
+                *self.bound_key_cache.borrow_mut() = None;
+                Ok(())
+            }
             Err(err) => {
                 self.record_error(err);
                 Err(CallbackFailed)
@@ -1234,5 +1254,68 @@ mod tests {
     fn any_suite_rejects_unknown_names() {
         assert!(any_suite("H7").is_err());
         assert!(any_suite("").is_err());
+    }
+}
+
+/// Tests that call into a real JavaScript object through `JsJournal`.
+///
+/// `js_sys`'s wasm-bindgen imports panic with "cannot call wasm-bindgen
+/// imported functions on non-wasm targets" outside `wasm32`, so this module
+/// only compiles for that target and only runs under `wasm-bindgen-test`,
+/// against Node by default:
+///
+/// ```text
+/// CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+///   cargo test -p pqhybridsign-wasm --target wasm32-unknown-unknown --lib
+/// ```
+///
+/// Never runs under plain `cargo test`, and the installed
+/// `wasm-bindgen-test-runner` must match this crate's `wasm-bindgen` version
+/// exactly (`cargo install wasm-bindgen-cli --version <version> --locked`).
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    /// A `bound_key()` read cached before a successful `bind_key()` must not
+    /// be handed back after it: that cached `None` reads as never-bound,
+    /// which is the exact condition `JournalKeyMismatch` exists to catch.
+    /// No current entry point re-reads `bound_key()` after `bind_key()` on
+    /// one `JsJournal` (`adopt_key` reads it once, before its own single
+    /// `bind_key` call, and `sign_stateful` never calls `bind_key` at all),
+    /// so this constructs the sequence directly against a real JavaScript
+    /// object instead of going through an entry point.
+    #[wasm_bindgen_test]
+    fn bind_key_invalidates_the_bound_key_cache() {
+        // `js_sys::eval` here runs a fixed, hardcoded source string compiled
+        // into this test binary, not any externally supplied or runtime-built
+        // text; it stands in for a JavaScript-authored journal object, which
+        // is exactly what `JsJournal` wraps in production. No untrusted input
+        // reaches it.
+        let obj = js_sys::eval(
+            "(function () {
+                let bound = null;
+                return {
+                    boundKey: function () { return bound; },
+                    bindKey: function (k) { bound = new Uint8Array(k); },
+                };
+            })()",
+        )
+        .expect("eval the fake journal object");
+
+        let mut journal = JsJournal::new(&obj);
+
+        // Populate the cache with the pre-bind answer.
+        assert_eq!(journal.bound_key(), None, "a fresh journal owns no key");
+
+        let key = KeyIdentity::from_bytes([7u8; KEY_IDENTITY_LEN]);
+        journal.bind_key(key).expect("bind_key");
+
+        assert_eq!(
+            journal.bound_key(),
+            Some(key),
+            "bound_key() after bind_key() must reflect the new binding, not \
+             the None cached from before it"
+        );
     }
 }
