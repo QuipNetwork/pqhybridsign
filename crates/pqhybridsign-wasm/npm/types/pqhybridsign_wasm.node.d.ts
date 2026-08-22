@@ -82,6 +82,9 @@ export class SignStatefulResult {
  * belongs to another key (the abi's `JournalKeyMismatch`), or if `bindKey`
  * could not durably record the binding. Any exception a journal method
  * itself threw is re-thrown unchanged.
+ *
+ * A `boundKey()` that throws prevents `bindKey` from being called at all,
+ * so a read fault can never replace an existing binding.
  */
 export function adoptKey(journal: any, identity: Uint8Array): void;
 
