@@ -785,33 +785,108 @@ mod stateless {
         header_len::<S::Classical>() + <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN
     }
 
+    /// A stateless key dedicated to VRF evaluation, disjoint from the key
+    /// that carries an identity's rotation and recovery authority.
+    ///
+    /// [`sign_stateless`] takes this rather than a bare
+    /// [`SecretKey`](stateful_composite::SecretKey) so that handing it the
+    /// identity key is a compile error instead of a silent charge against
+    /// the reserve that [`crate::rotation::sign_rotation`] and recovery
+    /// depend on. Both draw on the same stateless budget, and that budget is
+    /// a security assumption rather than a quota: spending it on ordinary
+    /// VRF evaluation is not rate limiting, it is exhausting the material a
+    /// rotation would need.
+    ///
+    /// This type does not prove disjointness, and no type could.
+    /// Disjointness is a property of where the key material came from, not
+    /// of its shape. What it does is make the claim explicit.
+    /// [`derive_stateless_key`] returns one because it derived the material
+    /// under its own HKDF label, and key material of any other provenance --
+    /// an independently generated key, or HSM-backed material this crate
+    /// never derives -- enters by name through
+    /// [`adopt_unchecked`](Self::adopt_unchecked).
+    pub struct DedicatedVrfKey<S: StatefulSuite>(SecretKey<S>);
+
+    impl<S: StatefulSuite> DedicatedVrfKey<S> {
+        /// Treat `sk` as a key dedicated to VRF evaluation.
+        ///
+        /// The caller asserts that `sk` is not the key that carries this
+        /// identity's rotation and recovery authority. Nothing here checks
+        /// that, which is why the name says so: a reviewer reading this call
+        /// is being told to verify the provenance, and a search for the name
+        /// finds every place that claim is made.
+        ///
+        /// Use [`derive_stateless_key`] instead wherever the key can be
+        /// derived from a master seed. It carries the same guarantee without
+        /// the assertion, because it derives the material under a separate
+        /// label.
+        pub fn adopt_unchecked(sk: SecretKey<S>) -> Self {
+            Self(sk)
+        }
+
+        /// The post-quantum verify key cached inside the wrapped key.
+        ///
+        /// Public data, not the secret material [`sign_stateless`] needs.
+        /// Test-only, and crate-internal even there, because no production
+        /// code needs this: [`sign_stateless`] reaches the wrapped key
+        /// directly through the tuple field, and a real caller never needs
+        /// this key's verify bytes back out of a type built specifically to
+        /// stop it handling the key material itself.
+        #[cfg(test)]
+        pub(crate) fn pq_verify_key(&self) -> &[u8] {
+            self.0.pq_verify_key()
+        }
+
+        /// The next unused leaf the wrapped key would spend under
+        /// `StatefulHybridSignatureScheme::sign_stateful`.
+        ///
+        /// A dedicated VRF key is never signed with `sign_stateful`; this
+        /// exists so crate-internal tests can confirm a stateless VRF
+        /// evaluation leaves the wrapped key's leaf counter untouched, not
+        /// as a path to anything [`sign_stateless`] itself needs.
+        #[cfg(test)]
+        pub(crate) fn next_leaf(&self) -> u32 {
+            self.0.next_leaf()
+        }
+    }
+
     /// Evaluate the hybrid VRF under a stateful suite, binding through the
     /// SHRINCS stateless path.
     ///
     /// **This spends one unit of the few-time stateless budget and no leaf.**
     /// The key's leaf counter is untouched, so a caller needs no journal here.
     ///
-    /// # `sk` MUST be a dedicated key, never the rotation/recovery identity key
+    /// # `sk` must be a dedicated key, never the rotation/recovery identity key
     ///
-    /// The budget this spends is keyed to `sk`'s own stateless material
-    /// ([`crate::budget::BudgetKey::from_material`]), and that key has no
-    /// notion of "VRF" versus "rotation" -- it only sees whatever material it
-    /// is handed. Pass the suite's rotation/recovery identity key here and
-    /// this draws on the exact same reserve
+    /// [`DedicatedVrfKey`] makes this a compile-time requirement rather than
+    /// a documented one: there is no way to pass a bare
+    /// [`SecretKey`](stateful_composite::SecretKey) here, only a key that has
+    /// been derived as dedicated ([`derive_stateless_key`]) or explicitly
+    /// asserted to be one ([`DedicatedVrfKey::adopt_unchecked`]).
+    ///
+    /// The type does not prove that assertion; it only makes it explicit and
+    /// greppable. The budget this spends is keyed to the wrapped key's own
+    /// stateless material ([`crate::budget::BudgetKey::from_material`]), and
+    /// that key has no notion of "VRF" versus "rotation" -- it only sees
+    /// whatever material it is handed. A [`DedicatedVrfKey`] adopted from the
+    /// suite's rotation/recovery identity key via
+    /// [`DedicatedVrfKey::adopt_unchecked`] draws on the exact same reserve
     /// [`crate::rotation::sign_rotation`] draws on for that key, which
     /// specification section 21 forbids ("shared across rotation and
     /// recovery; ordinary signing MUST NOT draw on it"): a validator
     /// evaluating a VRF once a minute would spend the rotation reserve in
     /// about two years and then be unable to authorize a rotation at all.
     ///
-    /// The fix is a `sk` whose stateless material is disjoint from that
-    /// identity key's, never a second [`StatelessBudgetStore`] over the same
-    /// key -- two counters over one FORS-C key permit more few-time
+    /// The fix is a wrapped key whose stateless material is disjoint from
+    /// that identity key's, never a second [`StatelessBudgetStore`] over the
+    /// same key -- two counters over one FORS-C key permit more few-time
     /// signatures than the key's own bound allows, which is a worse
     /// violation than the one this avoids. [`derive_stateless_key`] derives
     /// one such key from a master seed under its own HKDF info label;
-    /// equally valid is any other independently produced [`SecretKey<S>`]
-    /// this suite's rotation/recovery identity key had no part in deriving.
+    /// equally valid is any other independently produced
+    /// [`SecretKey`](stateful_composite::SecretKey) this suite's
+    /// rotation/recovery identity key had no part in deriving, adopted
+    /// through [`DedicatedVrfKey::adopt_unchecked`].
     ///
     /// H6 in particular belongs on a low-frequency VRF regardless of which
     /// key backs it -- see the module documentation for the latency and
@@ -833,7 +908,7 @@ mod stateless {
     /// shorter than [`proof_len_stateless`], [`Error::ComponentFailure`] if a
     /// component rejects its key or the message.
     pub fn sign_stateless<S: StatefulSuite>(
-        sk: &SecretKey<S>,
+        sk: &DedicatedVrfKey<S>,
         budget: &mut impl StatelessBudgetStore,
         input: &[u8],
         rng: &mut impl rand_core::CryptoRngCore,
@@ -847,7 +922,7 @@ mod stateless {
             split_proof_out::<S::Classical>(proof_out, binding_len)?;
 
         <S::Classical as ClassicalVrf>::vrf_evaluate(
-            sk.classical_bytes(),
+            sk.0.classical_bytes(),
             S::LABEL,
             input,
             rng,
@@ -859,7 +934,7 @@ mod stateless {
             return Err(Error::ComponentFailure);
         }
 
-        let material = <S::Pq as PqStatefulScheme>::stateless_key_material(sk.pq_verify_key())?;
+        let material = <S::Pq as PqStatefulScheme>::stateless_key_material(sk.0.pq_verify_key())?;
         spend_stateless_budget(
             budget,
             material,
@@ -867,7 +942,7 @@ mod stateless {
         )?;
 
         let written =
-            <S::Pq as PqStatefulScheme>::sign_stateless(sk.pq_secret_key(), &message, binding)?;
+            <S::Pq as PqStatefulScheme>::sign_stateless(sk.0.pq_secret_key(), &message, binding)?;
         if written != binding_len {
             return Err(Error::BadLength {
                 expected: binding_len,
@@ -969,7 +1044,16 @@ mod stateless {
     /// -- its own second master seed, an HSM-backed key, anything disjoint
     /// from the identity key's material -- does not need this helper at all:
     /// any independently produced [`SecretKey<S>`] is equally valid as `sk`
-    /// in [`sign_stateless`].
+    /// in [`sign_stateless`], once adopted through
+    /// [`DedicatedVrfKey::adopt_unchecked`].
+    ///
+    /// # Return type
+    ///
+    /// This returns a [`DedicatedVrfKey`], not a bare [`SecretKey<S>`]: the
+    /// derivation above is what makes the returned key dedicated, so the
+    /// caller needs no [`DedicatedVrfKey::adopt_unchecked`] assertion of its
+    /// own for this path. That assertion is only for key material this
+    /// function did not produce.
     ///
     /// # Not a second allowance
     ///
@@ -994,21 +1078,21 @@ mod stateless {
     /// [`crate::stateful_composite::keygen`] report.
     pub fn derive_stateless_key<S: StatefulSuite>(
         master: &[u8; 32],
-    ) -> Result<(SecretKey<S>, stateful_composite::PublicKey<S>)>
+    ) -> Result<(DedicatedVrfKey<S>, stateful_composite::PublicKey<S>)>
     where
         S::Classical: ClassicalVrf,
     {
         let mut seed = crate::derive::derive_stateless_vrf_seed(master, S::LABEL)?;
         let result = stateful_composite::keygen::<S>(&seed, 1);
         seed.zeroize();
-        result
+        result.map(|(sk, pk)| (DedicatedVrfKey(sk), pk))
     }
 }
 
 #[cfg(feature = "alloc")]
 pub use stateless::{
     derive_stateless_key, make_bytes_stateless, proof_len_stateless, sign_stateless,
-    verify_stateless,
+    verify_stateless, DedicatedVrfKey,
 };
 
 #[cfg(test)]
@@ -1543,7 +1627,7 @@ mod stateful_tests {
     use crate::classical::Ed25519;
     use crate::component::PqStatefulScheme;
     use crate::shrincs::{H5, H6};
-    use crate::stateful_composite::{keygen, SecretKey};
+    use crate::stateful_composite::keygen;
     use crate::suite::StatefulSuite;
     use alloc::vec;
     use alloc::vec::Vec;
@@ -1594,17 +1678,22 @@ mod stateful_tests {
         }
     }
 
-    fn h6_key(seed: u8) -> (SecretKey<H6>, Vec<u8>) {
+    /// A plain `keygen` key, wrapped through the escape hatch so these tests
+    /// can drive `sign_stateless` directly. These keys stand in for whatever
+    /// dedicated key a real caller manages; the suite's actual identity key
+    /// is never adopted this way outside the isolation tests below, which
+    /// exist precisely to prove what happens if it were.
+    fn h6_key(seed: u8) -> (DedicatedVrfKey<H6>, Vec<u8>) {
         let (sk, pk) = keygen::<H6>(&[seed; 32], 8).expect("keygen");
         // The verify-form composite public key: classical public key followed
         // by the post-quantum verify key, the layout `verify_stateless` reads.
         let mut verify_pk = Vec::with_capacity(<H6 as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN);
         verify_pk.extend_from_slice(pk.classical());
         verify_pk.extend_from_slice(pk.pq_verify_key());
-        (sk, verify_pk)
+        (DedicatedVrfKey::adopt_unchecked(sk), verify_pk)
     }
 
-    fn evaluate(sk: &SecretKey<H6>, budget: &mut MemoryBudget) -> Vec<u8> {
+    fn evaluate(sk: &DedicatedVrfKey<H6>, budget: &mut MemoryBudget) -> Vec<u8> {
         let mut proof = vec![0u8; proof_len_stateless::<H6>()];
         let written =
             sign_stateless::<H6>(sk, budget, INPUT, &mut OsRng, &mut proof).expect("evaluate");
@@ -1707,15 +1796,15 @@ mod stateful_tests {
         assert_eq!(a, b, "a re-evaluated binding must not move the output");
     }
 
-    fn h5_key(seed: u8) -> (SecretKey<H5>, Vec<u8>) {
+    fn h5_key(seed: u8) -> (DedicatedVrfKey<H5>, Vec<u8>) {
         let (sk, pk) = keygen::<H5>(&[seed; 32], 8).expect("keygen");
         let mut verify_pk = Vec::with_capacity(<H5 as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN);
         verify_pk.extend_from_slice(pk.classical());
         verify_pk.extend_from_slice(pk.pq_verify_key());
-        (sk, verify_pk)
+        (DedicatedVrfKey::adopt_unchecked(sk), verify_pk)
     }
 
-    fn evaluate_h5(sk: &SecretKey<H5>, budget: &mut MemoryBudget) -> Vec<u8> {
+    fn evaluate_h5(sk: &DedicatedVrfKey<H5>, budget: &mut MemoryBudget) -> Vec<u8> {
         let mut proof = vec![0u8; proof_len_stateless::<H5>()];
         let written =
             sign_stateless::<H5>(sk, budget, INPUT, &mut OsRng, &mut proof).expect("evaluate");
@@ -1815,6 +1904,13 @@ mod stateful_tests {
     /// have charged exactly the budget entry this test checks for.
     #[test]
     fn evaluating_the_vrf_through_a_dedicated_key_leaves_the_identity_keys_budget_untouched() {
+        // `identity_sk` stands in for the suite's real rotation/recovery
+        // identity key, adopted through the escape hatch (inside `h6_key`)
+        // for the sole purpose of computing its budget key below. This test
+        // is asserting the isolation property directly -- that evaluating
+        // through `dedicated_sk` never touches this key's reserve -- which
+        // is exactly the case `adopt_unchecked` exists for: proving what the
+        // type system otherwise prevents from happening by construction.
         let (identity_sk, _) = h6_key(9);
         let (dedicated_sk, dedicated_pk_bytes) =
             derive_stateless_key::<H6>(&[9u8; 32]).expect("derive dedicated key");

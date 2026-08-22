@@ -34,4 +34,11 @@
 fn compile_fail() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/compile_fail/*.rs");
+    // `tests/compile_fail_vrf/` holds cases that need `pqhybridsign::vrf`,
+    // which only exists under the non-default `vrf` feature. Globbing them
+    // in unconditionally would fail every such case for the wrong reason --
+    // an unresolved `vrf` module -- whenever this binary is built without
+    // that feature.
+    #[cfg(feature = "vrf")]
+    t.compile_fail("tests/compile_fail_vrf/*.rs");
 }

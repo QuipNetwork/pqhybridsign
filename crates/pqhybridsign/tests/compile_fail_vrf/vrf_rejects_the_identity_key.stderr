@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/compile_fail_vrf/vrf_rejects_the_identity_key.rs:34:9
+   |
+33 |     let _ = pqhybridsign::vrf::sign_stateless::<H6>(
+   |             --------------------------------------- arguments to this function are incorrect
+34 |         &identity,
+   |         ^^^^^^^^^ expected `&DedicatedVrfKey<H6>`, found `&SecretKey<H6>`
+   |
+   = note: expected reference `&DedicatedVrfKey<H6>`
+              found reference `&SecretKey<H6>`
+note: function defined here
+  --> src/vrf.rs
+   |
+   |     pub fn sign_stateless<S: StatefulSuite>(
+   |            ^^^^^^^^^^^^^^
