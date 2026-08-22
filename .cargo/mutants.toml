@@ -1,0 +1,14 @@
+# Mutation testing is scoped to the modules where a skipped check is the
+# dangerous failure, per DESIGN.md lines 485-491: encoding and domain
+# separation. Mutating the component wrappers instead would mostly time out
+# inside SHRINCS keygen and report nothing useful.
+examine_globs = [
+    "crates/pqhybridsign/src/encoding_path.rs",
+    "crates/pqhybridsign/src/encoding_delta.rs",
+    "crates/pqhybridsign/src/message.rs",
+]
+
+# A mutant that makes a test hang must fail rather than stall the pipeline.
+# The unmutated suite runs these files' tests in well under a second.
+timeout_multiplier = 5.0
+minimum_test_timeout = 60

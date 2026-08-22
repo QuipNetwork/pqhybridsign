@@ -260,6 +260,33 @@ profile-matrix:
           --features "$p"
       done
 
+# DESIGN.md lines 485-491 specify mutation testing over the encoding and
+# domain-separation modules, where a skipped check is the dangerous failure.
+# Scheduled rather than per-pipeline: a full run rebuilds and retests once
+# per mutant, which is minutes, not seconds. The scope lives in
+# .cargo/mutants.toml so a local `cargo mutants` run matches this job.
+#
+# The timeout is measured, not guessed. A full run of the 160 mutants in
+# scope took 931 seconds on a 32-core workstation with a warm cargo
+# registry. Every mutant pays for its own incremental rebuild, and that
+# rebuild is what the core count buys, so a 2-core to 4-core shared runner
+# is several times slower. The job also builds cargo-mutants from source
+# first. 3h leaves room for that spread; a job that always times out
+# teaches people to ignore a red pipeline.
+mutants:
+  stage: test
+  timeout: 3h
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  script:
+    - cargo install cargo-mutants --locked
+    - cargo mutants -- --workspace
+  artifacts:
+    when: always
+    paths:
+      - mutants.out/
+    expire_in: 30 days
+
 # Real 128s keygen against the pinned H5 fixture. This is the only real 128s
 # operation left per commit: it generates a real key and compares the public
 # key against pinned fixture bytes, which covers the 2^18 hypertree root
