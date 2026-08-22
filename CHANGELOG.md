@@ -2,7 +2,15 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.0.0-rc5
+
+rc5 completes the hybrid VRF across every suite and closes two ways the
+stateful suites let a caller spend key material the specification reserves for
+something else. It carries one silent breaking change: stateful verification
+now requires the caller to name a path, and the entry point that changed
+behaviour kept its name and signature. Read the first `Changed` entry before
+upgrading. The signature suites and the wire format do not change, and a build
+that enables no new feature is unchanged from rc4.
 
 ### Added
 
@@ -30,16 +38,6 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `vrf::sign_stateless` and `vrf::verify_stateless` (behind the `vrf`
-  feature) now document, and their known-answer test now checks, that `sk`
-  and `pk` MUST be a key dedicated to the VRF binding, never the suite's
-  rotation/recovery identity key. Both entry points already took an arbitrary
-  key; passing the identity key there charged the same few-time SHRINCS
-  budget its own rotation and recovery authorizations draw on, which
-  specification section 21 forbids. `vrf::derive_stateless_key` gives an
-  opt-in way to obtain a disjoint key for callers who do not already manage
-  one. The `2^20` (`2^18` under `profile-128s-q18`) bound is unchanged and
-  applies per key, not per role.
 - **Breaking, and a silent one.** Verification of the stateful suites now
   requires the caller to name a path, the way signing already did. The
   composite `verify` is gone, replaced by `verify_stateful` and
@@ -67,6 +65,16 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   component. Size a buffer from `vrf::proof_len`,
   `vrf::max_proof_len_delta` or `vrf::proof_len_stateless` instead. Only a
   caller of the non-default `vrf` feature is affected.
+- `vrf::sign_stateless` and `vrf::verify_stateless` (behind the `vrf`
+  feature) now document, and their known-answer test now checks, that `sk`
+  and `pk` MUST be a key dedicated to the VRF binding, never the suite's
+  rotation/recovery identity key. Both entry points already took an arbitrary
+  key; passing the identity key there charged the same few-time SHRINCS
+  budget its own rotation and recovery authorizations draw on, which
+  specification section 21 forbids. `vrf::derive_stateless_key` gives an
+  opt-in way to obtain a disjoint key for callers who do not already manage
+  one. The `2^20` (`2^18` under `profile-128s-q18`) bound is unchanged and
+  applies per key, not per role.
 - The compile-fail test asserting that an ed25519 suite cannot be used with
   the VRF is deleted, along with the claim in the `vrf` module documentation
   and the README. It pinned a missing primitive as though it were a design
