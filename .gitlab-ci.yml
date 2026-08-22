@@ -5,6 +5,24 @@
 # creates the release page only once every artifact is live.
 stages: [check, test, validate, smoke, release, pypi, crates, notes]
 
+# Without this block a job that declares no `rules:` never runs in a detached
+# merge-request pipeline, so the only job that reached one was schedule-exists
+# (its last rule is `when: always`). The merge widget then showed a green
+# pipeline that had compiled nothing, and the merge gate was vacuous. That
+# already landed one bad merge: MR !2 passed while its own branch pipeline
+# failed, and main went red until cdffad7.
+#
+# The `when: never` clause is what keeps the cost flat rather than doubling
+# it. Once a merge request is open, the branch push stops producing its own
+# pipeline and the merge-request pipeline is the only one for that commit.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
 default:
   image: rust:1.97.1
   before_script:
