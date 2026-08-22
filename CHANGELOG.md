@@ -10,20 +10,35 @@ from rc3.
 
 ### Added
 
-- A hybrid VRF for the sr25519 suites, behind the new non-default `vrf`
-  feature (specification section 15). The sr25519 VRF supplies the output and
+- A hybrid VRF for every suite, behind the new non-default `vrf` feature
+  (specification section 15). The classical component supplies the output and
   a post-quantum binding signature over the same input proves post-quantum key
   possession. Every consensus-decisive byte derives from the classical
   pre-output alone, which is unique per key and input, and the binding is
   verified but never enters that derivation. Post-quantum signatures are not
   unique for a fixed message, so an output that read the binding could be
-  ground by the signer that produced it. `hybrid-sr25519-mldsa44-v1` and
-  `hybrid-sr25519-falcon512-v1` bind with a deterministic signature.
-  `hybrid-sr25519-shrincs-*-v1` binds through the SHRINCS stateless path,
+  ground by the signer that produced it. The two lattice families bind with a
+  deterministic signature. `hybrid-ed25519-shrincs-*-v1` and
+  `hybrid-sr25519-shrincs-*-v1` bind through the SHRINCS stateless path,
   spending one unit of the few-time budget and no one-time leaf, which suits a
-  low-frequency VRF rather than per-slot leader election. The entry points are
-  bounded on a new `ClassicalVrf` trait that only sr25519 implements, so
-  naming an ed25519 suite does not compile.
+  low-frequency VRF rather than per-slot leader election.
+- An RFC 9381 `ECVRF-EDWARDS25519-SHA512-TAI` for the ed25519 component, which
+  is what gives `hybrid-ed25519-mldsa44-v1`, `hybrid-ed25519-falcon512-v1` and
+  `hybrid-ed25519-shrincs-*-v1` a hybrid VRF. The test suite runs the RFC's
+  own Appendix B.3 vectors as known answers. A pre-output followed by its
+  proof is exactly the RFC's 80-byte `pi_string`, so any other RFC 9381 code
+  can read a proof. `alpha_string` is the suite label and the caller's input,
+  each length-prefixed, which separates two suites over one classical key.
+  Key validation (RFC 9381 section 5.4.5) is always on, and point decoding
+  follows RFC 8032 section 5.1.3, unlike this component's ZIP-215 signature
+  verifier: a VRF that two honest verifiers read differently is a chain
+  split.
+- `vrf::header_len`, replacing the `vrf::HEADER_LEN` and
+  `vrf::CLASSICAL_PROOF_LEN` constants. The two classical components do not
+  share a proof width: schnorrkel's DLEQ proof is 64 bytes and the ed25519
+  ECVRF's `c || s` is 48. The width now lives on `ClassicalVrf::PROOF_LEN`.
+  Size a buffer from `vrf::proof_len`, `vrf::max_proof_len_delta` or
+  `vrf::proof_len_stateless`. These constants shipped in no released version.
 - BIP39 master-seed derivation, behind the new non-default `mnemonic` feature.
   `master_seed_from_mnemonic` reproduces Substrate's derivation, which runs
   PBKDF2-HMAC-SHA512 over the mnemonic's entropy bytes rather than over the

@@ -16,7 +16,7 @@
 //!
 //! ```text
 //! evaluate:
-//!     (pre_output, classical_proof) = sr25519_vrf(sk_classical, input)
+//!     (pre_output, classical_proof) = classical_vrf(sk_classical, input)
 //!     binding = pq_sign(sk_pq, binding_message(label, input, pre_output))
 //!     proof   = pre_output || classical_proof || binding
 //!
@@ -56,29 +56,46 @@
 //!
 //! [`sign`] takes an RNG and [`sign_deterministic`] does not, and both reach
 //! the same pre-output. The randomness reaches only the Schnorr nonce inside
-//! the classical proof. A prover who re-runs [`sign`] a million times gets a
-//! million distinct proofs that all carry one pre-output and therefore one
-//! output. `randomness_cannot_move_the_output` and
-//! `a_second_valid_binding_gives_the_same_output` hold both halves of that.
+//! the classical proof, and on the ed25519 component not even that: RFC 9381
+//! derives the nonce from the secret key and the input, so the whole ed25519
+//! proof is already reproducible and [`sign`] ignores its RNG there, exactly
+//! as [`ClassicalScheme::sign`] does for an ordinary ed25519 signature. A
+//! prover who re-runs [`sign`] a million times gets at most a million distinct
+//! proofs that all carry one pre-output and therefore one output.
+//! `randomness_cannot_move_the_output` and
+//! `a_second_valid_binding_gives_the_same_output` hold both halves of that,
+//! for both components.
 //!
 //! # Suite coverage
 //!
-//! Only the sr25519 suites have a VRF, because only the sr25519 component has
-//! one. The entry points are bounded on [`ClassicalVrf`], which
-//! [`Sr25519`](crate::classical::Sr25519) alone implements, so naming an
-//! ed25519 suite here is a compile error rather than a runtime refusal.
+//! Every suite has a hybrid VRF. The classical VRF is schnorrkel's own for the
+//! sr25519 component and an RFC 9381 `ECVRF-EDWARDS25519-SHA512-TAI` for the
+//! ed25519 component; both are reached through [`ClassicalVrf`], and the
+//! construction above is identical on either side.
 //!
-//! | Suite | Entry points | Binding |
-//! |---|---|---|
-//! | H3 | [`sign`], [`verify`], [`make_bytes`] | ML-DSA-44, deterministic |
-//! | H4 | [`sign_delta`], [`verify_delta`], [`make_bytes_delta`] | FN-DSA-512, deterministic |
-//! | H6 | [`sign_stateless`], [`verify_stateless`], [`make_bytes_stateless`] | SHRINCS, stateless path |
+//! | Suite | Entry points | Classical VRF | Binding |
+//! |---|---|---|---|
+//! | H1 | [`sign`], [`verify`], [`make_bytes`] | ECVRF-EDWARDS25519-SHA512-TAI | ML-DSA-44, deterministic |
+//! | H2 | [`sign_delta`], [`verify_delta`], [`make_bytes_delta`] | ECVRF-EDWARDS25519-SHA512-TAI | FN-DSA-512, deterministic |
+//! | H3 | [`sign`], [`verify`], [`make_bytes`] | schnorrkel, Ristretto | ML-DSA-44, deterministic |
+//! | H4 | [`sign_delta`], [`verify_delta`], [`make_bytes_delta`] | schnorrkel, Ristretto | FN-DSA-512, deterministic |
+//! | H5 | [`sign_stateless`], [`verify_stateless`], [`make_bytes_stateless`] | ECVRF-EDWARDS25519-SHA512-TAI | SHRINCS, stateless path |
+//! | H6 | [`sign_stateless`], [`verify_stateless`], [`make_bytes_stateless`] | schnorrkel, Ristretto | SHRINCS, stateless path |
 //!
-//! # H6 spends budget, never a leaf
+//! The two classical VRFs do not share a proof width, so the proof header is
+//! sized by [`header_len`] rather than by a constant: an sr25519 proof is
+//! schnorrkel's 64-byte DLEQ proof and an ed25519 proof is RFC 9381's
+//! `c || s`, 48 bytes. Size a buffer from [`proof_len`],
+//! [`max_proof_len_delta`] or [`proof_len_stateless`] rather than from an
+//! arithmetic expression of your own.
 //!
-//! H6 binds through the SHRINCS **stateless** path. The stateful path would
-//! spend one one-time leaf per evaluation and exhaust a 4,096-leaf tree in
-//! about 6.8 hours at 6-second slots, which is why specification section 15
+//! # H5 and H6 spend budget, never a leaf
+//!
+//! Both stateful suites bind through the SHRINCS **stateless** path, and
+//! everything below applies to each of them; they differ only in the classical
+//! half. The stateful path would spend one one-time leaf per evaluation and
+//! exhaust a 4,096-leaf tree in about 6.8 hours at 6-second slots, which is
+//! why specification section 15
 //! excludes H6 from BABE outright. The stateless path spends the few-time
 //! budget instead, so the exhaustion argument does not apply, but two limits
 //! replace it and neither is small:
@@ -92,8 +109,8 @@
 //!   with rotation and recovery. At one authored block a minute that is about
 //!   two years before a mandatory rotation.
 //!
-//! So use H6 for a low-frequency VRF, such as epoch randomness. Per-slot
-//! leader election belongs on H3 or H4.
+//! So use H5 or H6 for a low-frequency VRF, such as epoch randomness. Per-slot
+//! leader election belongs on H1 through H4.
 //!
 //! # A failed evaluation may leave bytes in the buffer
 //!
@@ -102,9 +119,9 @@
 //! leaves those bytes in `proof_out` with no binding after them. **Discard the
 //! buffer on `Err`.** Nothing secret is exposed by it -- a pre-output and its
 //! proof are public, and no post-quantum signature was produced -- but the
-//! partial contents are not a proof and no verifier will accept them. For H6
-//! in particular, a budget spend that did not land means no SHRINCS signature
-//! was released, which is the property that matters there.
+//! partial contents are not a proof and no verifier will accept them. For H5
+//! and H6 in particular, a budget spend that did not land means no SHRINCS
+//! signature was released, which is the property that matters there.
 
 use crate::component::{ClassicalScheme, PqScheme};
 use crate::encoding_delta;
@@ -115,14 +132,23 @@ use subtle::Choice;
 
 /// Length in bytes of a VRF pre-output, the unique value every
 /// consensus-decisive byte is derived from.
+///
+/// A constant, not an associated item, because both classical components make
+/// their pre-output one compressed curve point over a 255-bit field: a
+/// Ristretto point for sr25519, an Edwards point for ed25519. A third
+/// component with a wider point would have to move this onto [`ClassicalVrf`]
+/// the way [`ClassicalVrf::PROOF_LEN`] already is.
 pub const PRE_OUTPUT_LEN: usize = 32;
 
-/// Length in bytes of the classical VRF proof that accompanies a pre-output.
-pub const CLASSICAL_PROOF_LEN: usize = 64;
-
-/// Length in bytes of the fixed header every hybrid VRF proof opens with:
-/// the pre-output followed by the classical proof.
-pub const HEADER_LEN: usize = PRE_OUTPUT_LEN + CLASSICAL_PROOF_LEN;
+/// Length in bytes of the header every hybrid VRF proof opens with: the
+/// pre-output followed by the classical proof.
+///
+/// Not a constant, because the two classical components do not agree on
+/// [`ClassicalVrf::PROOF_LEN`].
+#[must_use]
+pub const fn header_len<C: ClassicalVrf>() -> usize {
+    PRE_OUTPUT_LEN + C::PROOF_LEN
+}
 
 /// Length in bytes of a [`binding_message`] digest.
 pub const BINDING_MESSAGE_LEN: usize = 32;
@@ -140,24 +166,36 @@ const BINDING_DOMAIN: &[u8] = b"pqhybridsign/hybrid-vrf/v1\0";
 
 /// A classical component that provides a verifiable random function.
 ///
-/// Sibling of [`ClassicalScheme`], and deliberately a separate trait rather
-/// than more methods on it: ed25519 has no VRF in this stack, so a single
-/// trait would force every ed25519 suite to carry methods that can only fail.
-/// Splitting them turns "H1 has no VRF" from a runtime error into a bound the
-/// compiler checks.
+/// Sibling of [`ClassicalScheme`], and still a separate trait now that both
+/// components implement it: the VRF is compiled only under the `vrf` feature,
+/// and folding these five items into [`ClassicalScheme`] would put a feature
+/// gate inside the trait every suite already depends on.
 ///
-/// The `label` argument is the suite label, used as the schnorrkel signing
-/// context, exactly as [`ClassicalScheme::sign`] uses it. Two suites sharing a
-/// classical key therefore evaluate to different pre-outputs over one input.
+/// The `label` argument is the suite label, and it separates suites that share
+/// one classical key: on sr25519 it is the schnorrkel signing context, exactly
+/// as [`ClassicalScheme::sign`] uses it, and on ed25519 it is length-prefixed
+/// ahead of `input` to form the RFC 9381 `alpha_string`. Either way two suites
+/// over one classical key reach different pre-outputs on one input.
 pub trait ClassicalVrf: ClassicalScheme {
+    /// Length in bytes of this component's classical VRF proof, the value
+    /// written into `proof_out` by [`Self::vrf_evaluate`].
+    ///
+    /// 64 for sr25519, schnorrkel's DLEQ proof. 48 for ed25519, RFC 9381's
+    /// `c || s` with `cLen = 16` and `qLen = 32`; the RFC's third proof field,
+    /// `Gamma`, is this construction's pre-output and is carried ahead of it.
+    const PROOF_LEN: usize;
+
     /// Evaluate the VRF, drawing the proof's Schnorr nonce from `rng`.
     ///
     /// Writes [`PRE_OUTPUT_LEN`] bytes into `pre_output_out` and
-    /// [`CLASSICAL_PROOF_LEN`] bytes into `proof_out`.
+    /// [`Self::PROOF_LEN`] bytes into `proof_out`.
     ///
-    /// `rng` reaches the proof and nothing else. The pre-output is a
-    /// deterministic function of the secret key and the input, so it is
-    /// identical to what [`Self::vrf_evaluate_deterministic`] produces.
+    /// `rng` reaches the proof and nothing else, and a component whose proof
+    /// is deterministic by specification -- the ed25519 ECVRF, whose nonce
+    /// RFC 9381 derives from the secret key and the input -- ignores it
+    /// entirely. The pre-output is a deterministic function of the secret key
+    /// and the input either way, so it is identical to what
+    /// [`Self::vrf_evaluate_deterministic`] produces.
     ///
     /// # Errors
     ///
@@ -267,25 +305,27 @@ fn split_sk(sk: &[u8], total: usize, classical_len: usize) -> Result<(&[u8], &[u
 
 /// Split a proof buffer into its pre-output, classical proof and binding
 /// slots, rejecting a buffer that cannot hold all three.
-fn split_proof_out(
+fn split_proof_out<C: ClassicalVrf>(
     proof_out: &mut [u8],
     binding_len: usize,
 ) -> Result<(&mut [u8], &mut [u8], &mut [u8])> {
-    let needed = HEADER_LEN + binding_len;
+    let header = header_len::<C>();
+    let needed = header + binding_len;
     if proof_out.len() < needed {
         return Err(Error::OutputBufferTooSmall {
             needed,
             actual: proof_out.len(),
         });
     }
-    let (header, rest) = proof_out.split_at_mut(HEADER_LEN);
-    let (pre_output, classical) = header.split_at_mut(PRE_OUTPUT_LEN);
+    let (head, rest) = proof_out.split_at_mut(header);
+    let (pre_output, classical) = head.split_at_mut(PRE_OUTPUT_LEN);
     Ok((pre_output, classical, &mut rest[..binding_len]))
 }
 
 /// Split a received proof into its pre-output, classical proof and binding.
-fn split_proof(proof: &[u8], binding_len: usize) -> Result<(&[u8], &[u8], &[u8])> {
-    let needed = HEADER_LEN + binding_len;
+fn split_proof<C: ClassicalVrf>(proof: &[u8], binding_len: usize) -> Result<(&[u8], &[u8], &[u8])> {
+    let header = header_len::<C>();
+    let needed = header + binding_len;
     if proof.len() != needed {
         return Err(Error::BadLength {
             expected: needed,
@@ -294,8 +334,8 @@ fn split_proof(proof: &[u8], binding_len: usize) -> Result<(&[u8], &[u8], &[u8])
     }
     Ok((
         &proof[..PRE_OUTPUT_LEN],
-        &proof[PRE_OUTPUT_LEN..HEADER_LEN],
-        &proof[HEADER_LEN..],
+        &proof[PRE_OUTPUT_LEN..header],
+        &proof[header..],
     ))
 }
 
@@ -321,9 +361,9 @@ fn make_bytes_inner<C: ClassicalVrf, B: Default + AsMut<[u8]>>(
             actual: composite_pk.len(),
         });
     }
-    if proof.len() < HEADER_LEN {
+    if proof.len() < header_len::<C>() {
         return Err(Error::BadLength {
-            expected: HEADER_LEN,
+            expected: header_len::<C>(),
             actual: proof.len(),
         });
     }
@@ -337,7 +377,7 @@ fn make_bytes_inner<C: ClassicalVrf, B: Default + AsMut<[u8]>>(
 }
 
 // ---------------------------------------------------------------------------
-// H3: fixed-length post-quantum binding.
+// H1 and H3: fixed-length post-quantum binding.
 // ---------------------------------------------------------------------------
 
 /// Length in bytes of a hybrid VRF proof for a fixed-length suite.
@@ -346,7 +386,7 @@ pub fn proof_len<S: Suite>() -> usize
 where
     S::Classical: ClassicalVrf,
 {
-    HEADER_LEN + <S::Pq as PqScheme>::SIGNATURE_LEN
+    header_len::<S::Classical>() + <S::Pq as PqScheme>::SIGNATURE_LEN
 }
 
 /// Evaluate the hybrid VRF, drawing the classical proof's nonce from `rng`.
@@ -377,7 +417,7 @@ where
         S::SECRET_KEY_LEN,
         <S::Classical as ClassicalScheme>::SECRET_KEY_LEN,
     )?;
-    let (pre_output, classical, binding) = split_proof_out(proof_out, binding_len)?;
+    let (pre_output, classical, binding) = split_proof_out::<S::Classical>(proof_out, binding_len)?;
 
     <S::Classical as ClassicalVrf>::vrf_evaluate(
         sk_classical,
@@ -394,7 +434,7 @@ where
     // nonce is empty because the deterministic seed each component derives is
     // already keyed to its own secret key and to this message.
     <S::Pq as PqScheme>::sign_deterministic(sk_pq, &message, &[], binding)?;
-    Ok(HEADER_LEN + binding_len)
+    Ok(header_len::<S::Classical>() + binding_len)
 }
 
 /// Evaluate the hybrid VRF with a reproducible classical proof.
@@ -412,7 +452,7 @@ where
         S::SECRET_KEY_LEN,
         <S::Classical as ClassicalScheme>::SECRET_KEY_LEN,
     )?;
-    let (pre_output, classical, binding) = split_proof_out(proof_out, binding_len)?;
+    let (pre_output, classical, binding) = split_proof_out::<S::Classical>(proof_out, binding_len)?;
 
     <S::Classical as ClassicalVrf>::vrf_evaluate_deterministic(
         sk_classical,
@@ -423,7 +463,7 @@ where
     )?;
     let message = binding_message(S::LABEL, input, pre_output);
     <S::Pq as PqScheme>::sign_deterministic(sk_pq, &message, &[], binding)?;
-    Ok(HEADER_LEN + binding_len)
+    Ok(header_len::<S::Classical>() + binding_len)
 }
 
 /// Verify a hybrid VRF proof. Both halves must accept.
@@ -441,7 +481,7 @@ where
     }
     let c_pk = <S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
     let Ok((pre_output, classical, binding)) =
-        split_proof(proof, <S::Pq as PqScheme>::SIGNATURE_LEN)
+        split_proof::<S::Classical>(proof, <S::Pq as PqScheme>::SIGNATURE_LEN)
     else {
         return false;
     };
@@ -465,7 +505,7 @@ where
 ///
 /// # Errors
 ///
-/// [`Error::BadLength`] if `proof` is shorter than [`HEADER_LEN`] or `pk`
+/// [`Error::BadLength`] if `proof` is shorter than [`header_len`] or `pk`
 /// shorter than the classical public key, [`Error::ComponentFailure`] if the
 /// public key or the pre-output does not decode.
 pub fn make_bytes<S: Suite, B: Default + AsMut<[u8]>>(
@@ -494,7 +534,7 @@ pub fn max_proof_len_delta<S: DeltaSuite>() -> usize
 where
     S::Classical: ClassicalVrf,
 {
-    HEADER_LEN + encoding_delta::DELTA_LEN + <S::Pq as PqScheme>::SIGNATURE_LEN
+    header_len::<S::Classical>() + encoding_delta::DELTA_LEN + <S::Pq as PqScheme>::SIGNATURE_LEN
 }
 
 /// Evaluate the hybrid VRF under a delta-length suite.
@@ -588,7 +628,7 @@ where
 {
     let binding_len = <S::Pq as PqScheme>::SIGNATURE_LEN;
     let (pre_output, classical, tail) =
-        split_proof_out(proof_out, encoding_delta::DELTA_LEN + binding_len)?;
+        split_proof_out::<S::Classical>(proof_out, encoding_delta::DELTA_LEN + binding_len)?;
     let (delta, binding) = tail.split_at_mut(encoding_delta::DELTA_LEN);
     Ok(DeltaSlots {
         pre_output,
@@ -607,11 +647,14 @@ fn delta_bind<S: DeltaSuite>(
     pre_output: &[u8],
     delta_slot: &mut [u8],
     binding: &mut [u8],
-) -> Result<usize> {
+) -> Result<usize>
+where
+    S::Classical: ClassicalVrf,
+{
     let message = binding_message(S::LABEL, input, pre_output);
     <S::Pq as PqScheme>::sign_deterministic(sk_pq, &message, &[], binding)?;
     delta_slot[0] = encoding_delta::encode_delta_byte(binding.len(), S::MIN_PQ_SIG_LEN)?;
-    Ok(HEADER_LEN + encoding_delta::DELTA_LEN + binding.len())
+    Ok(header_len::<S::Classical>() + encoding_delta::DELTA_LEN + binding.len())
 }
 
 /// Verify a hybrid VRF proof under a delta-length suite.
@@ -626,11 +669,7 @@ where
     let c_pk = <S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
     let (pre_output, body) = proof.split_at(PRE_OUTPUT_LEN);
 
-    // `decode_delta` expects a 64-byte classical signature ahead of the delta
-    // field. Here that slot holds the classical VRF proof, which is the same
-    // width, so the decoder's length arithmetic and its rejection of a
-    // truncated body and of trailing bytes apply unchanged.
-    let Ok(decoded) = encoding_delta::decode_delta(body, S::MIN_PQ_SIG_LEN) else {
+    let Ok((classical, binding)) = decode_delta_body::<S>(body) else {
         return false;
     };
 
@@ -639,11 +678,53 @@ where
         S::LABEL,
         input,
         pre_output,
-        &decoded.classical[..],
+        classical,
     );
     let message = binding_message(S::LABEL, input, pre_output);
-    let binding_ok = <S::Pq as PqScheme>::verify(&pk[c_pk..], &message, decoded.pq);
+    let binding_ok = <S::Pq as PqScheme>::verify(&pk[c_pk..], &message, binding);
     bool::from(classical_ok & binding_ok)
+}
+
+/// Split `classical_proof || DeltaLen || binding` into its two payloads.
+///
+/// This does not call [`encoding_delta::decode_delta`], which fixes the
+/// classical field at [`encoding_delta::CLASSICAL_SIG_LEN`]. That width is
+/// right for a signature and wrong here: the field holds a classical VRF
+/// proof, which is 64 bytes on sr25519 and 48 on ed25519. The checks run in
+/// `decode_delta`'s order, and the order is the security property -- reject a
+/// body too short to hold the header before any length arithmetic, then
+/// recover `pq_len` from the one declared byte, then require the body to be
+/// exactly that long, so neither a truncated binding nor trailing bytes gets
+/// past the split.
+fn decode_delta_body<S: DeltaSuite>(body: &[u8]) -> Result<(&[u8], &[u8])>
+where
+    S::Classical: ClassicalVrf,
+{
+    let head = <S::Classical as ClassicalVrf>::PROOF_LEN + encoding_delta::DELTA_LEN;
+    if body.len() < head {
+        return Err(Error::BadLength {
+            expected: head,
+            actual: body.len(),
+        });
+    }
+    let (classical, tail) = body.split_at(<S::Classical as ClassicalVrf>::PROOF_LEN);
+    // `tail[0]` is the `DeltaLen` byte; the addition cannot overflow for any
+    // `MIN_PQ_SIG_LEN` this crate ships, but it is checked so a future, larger
+    // one fails closed rather than wrapping.
+    let pq_len = S::MIN_PQ_SIG_LEN.checked_add(usize::from(tail[0])).ok_or(
+        Error::DeltaLengthOutOfRange {
+            actual_len: body.len(),
+            min_len: S::MIN_PQ_SIG_LEN,
+        },
+    )?;
+    let binding = &tail[encoding_delta::DELTA_LEN..];
+    if binding.len() != pq_len {
+        return Err(Error::BadLength {
+            expected: pq_len,
+            actual: binding.len(),
+        });
+    }
+    Ok((classical, binding))
 }
 
 /// Derive output bytes from a verified delta-length proof's pre-output.
@@ -664,14 +745,14 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// H6: stateless post-quantum binding, charged to the few-time budget.
+// H5 and H6: stateless post-quantum binding, charged to the few-time budget.
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "alloc")]
 mod stateless {
     use super::{
-        binding_message, make_bytes_inner, split_proof, split_proof_out, ClassicalVrf, Error,
-        Result, HEADER_LEN,
+        binding_message, header_len, make_bytes_inner, split_proof, split_proof_out, ClassicalVrf,
+        Error, Result,
     };
     use crate::budget::{spend_stateless_budget, StatelessBudgetStore};
     use crate::component::{ClassicalScheme, PqStatefulScheme};
@@ -689,7 +770,7 @@ mod stateless {
     where
         S::Classical: ClassicalVrf,
     {
-        HEADER_LEN + <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN
+        header_len::<S::Classical>() + <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN
     }
 
     /// Evaluate the hybrid VRF under a stateful suite, binding through the
@@ -726,7 +807,8 @@ mod stateless {
         S::Classical: ClassicalVrf,
     {
         let binding_len = <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN;
-        let (pre_output, classical, binding) = split_proof_out(proof_out, binding_len)?;
+        let (pre_output, classical, binding) =
+            split_proof_out::<S::Classical>(proof_out, binding_len)?;
 
         <S::Classical as ClassicalVrf>::vrf_evaluate(
             sk.classical_bytes(),
@@ -756,7 +838,7 @@ mod stateless {
                 actual: written,
             });
         }
-        Ok(HEADER_LEN + binding_len)
+        Ok(header_len::<S::Classical>() + binding_len)
     }
 
     /// Verify a hybrid VRF proof under a stateful suite.
@@ -774,7 +856,7 @@ mod stateless {
         }
         let c_pk = <S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
         let Ok((pre_output, classical, binding)) =
-            split_proof(proof, <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN)
+            split_proof::<S::Classical>(proof, <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN)
         else {
             return false;
         };
@@ -816,19 +898,25 @@ pub use stateless::{make_bytes_stateless, proof_len_stateless, sign_stateless, v
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classical::{Ed25519, Sr25519};
     use crate::composite;
     use crate::composite_delta;
-    use crate::{H3, H4};
+    use crate::{H1, H2, H3, H4};
     use rand_core::OsRng;
 
     const INPUT: &[u8] = b"epoch-7/slot-42/randomness";
     const OTHER_INPUT: &[u8] = b"epoch-7/slot-43/randomness";
     const OUT_CTX: &[u8] = b"leadership-score";
 
+    /// The two proof-header widths, spelled out once. They differ, which is
+    /// the whole reason [`header_len`] is a function.
+    const SR_HEADER: usize = header_len::<Sr25519>();
+    const ED_HEADER: usize = header_len::<Ed25519>();
+
     const H3_SK_LEN: usize = <H3 as Suite>::SECRET_KEY_LEN;
     const H3_PK_LEN: usize = <H3 as Suite>::PUBLIC_KEY_LEN;
     const H3_BINDING_LEN: usize = <<H3 as Suite>::Pq as PqScheme>::SIGNATURE_LEN;
-    const H3_PROOF_LEN: usize = HEADER_LEN + H3_BINDING_LEN;
+    const H3_PROOF_LEN: usize = SR_HEADER + H3_BINDING_LEN;
     const H3_CLASSICAL_SK_LEN: usize =
         <<H3 as Suite>::Classical as ClassicalScheme>::SECRET_KEY_LEN;
     const H3_CLASSICAL_PK_LEN: usize =
@@ -899,8 +987,8 @@ mod tests {
         assert!(verify::<H3>(&pk, INPUT, &first));
         assert!(verify::<H3>(&pk, INPUT, &second));
         assert_ne!(
-            first[PRE_OUTPUT_LEN..HEADER_LEN],
-            second[PRE_OUTPUT_LEN..HEADER_LEN],
+            first[PRE_OUTPUT_LEN..SR_HEADER],
+            second[PRE_OUTPUT_LEN..SR_HEADER],
             "the classical proof is hedged, so two runs must differ"
         );
         assert_eq!(
@@ -932,13 +1020,13 @@ mod tests {
             &sk[H3_CLASSICAL_SK_LEN..],
             &message,
             &mut OsRng,
-            &mut ground[HEADER_LEN..],
+            &mut ground[SR_HEADER..],
         )
         .expect("a second binding over the same message");
 
         assert_ne!(
-            honest[HEADER_LEN..],
-            ground[HEADER_LEN..],
+            honest[SR_HEADER..],
+            ground[SR_HEADER..],
             "the grind must actually reach a different binding"
         );
         assert!(
@@ -985,7 +1073,7 @@ mod tests {
     fn a_tampered_binding_is_rejected() {
         let (sk, pk) = h3_keypair(11);
         let mut proof = h3_proof(&sk);
-        proof[HEADER_LEN] ^= 0x01;
+        proof[SR_HEADER] ^= 0x01;
         assert!(!verify::<H3>(&pk, INPUT, &proof));
     }
 
@@ -1009,10 +1097,12 @@ mod tests {
     /// separates them.
     #[test]
     fn the_suite_label_separates_pre_outputs() {
-        use crate::classical::Sr25519;
         let sk = [7u8; H3_CLASSICAL_SK_LEN];
         let (mut left, mut right) = ([0u8; PRE_OUTPUT_LEN], [0u8; PRE_OUTPUT_LEN]);
-        let (mut lp, mut rp) = ([0u8; CLASSICAL_PROOF_LEN], [0u8; CLASSICAL_PROOF_LEN]);
+        let (mut lp, mut rp) = (
+            [0u8; <Sr25519 as ClassicalVrf>::PROOF_LEN],
+            [0u8; <Sr25519 as ClassicalVrf>::PROOF_LEN],
+        );
         Sr25519::vrf_evaluate_deterministic(&sk, H3::LABEL, INPUT, &mut left, &mut lp).expect("h3");
         Sr25519::vrf_evaluate_deterministic(&sk, H4::LABEL, INPUT, &mut right, &mut rp)
             .expect("h4");
@@ -1052,7 +1142,7 @@ mod tests {
         let mut pk = [0u8; <H4 as DeltaSuite>::PUBLIC_KEY_LEN];
         composite_delta::keypair_from_seed::<H4>(&[14u8; 32], &mut sk, &mut pk).expect("keygen");
 
-        let mut proof = [0u8; HEADER_LEN + 1 + <<H4 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let mut proof = [0u8; SR_HEADER + 1 + <<H4 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
         let written = sign_delta_deterministic::<H4>(&sk, INPUT, &mut proof).expect("evaluate");
         assert_eq!(written, max_proof_len_delta::<H4>());
         assert!(verify_delta::<H4>(&pk, INPUT, &proof[..written]));
@@ -1072,8 +1162,7 @@ mod tests {
         composite_delta::keypair_from_seed::<H4>(&[15u8; 32], &mut sk, &mut pk).expect("keygen");
 
         let len = max_proof_len_delta::<H4>();
-        let mut honest =
-            [0u8; HEADER_LEN + 1 + <<H4 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let mut honest = [0u8; SR_HEADER + 1 + <<H4 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
         sign_delta_deterministic::<H4>(&sk, INPUT, &mut honest).expect("evaluate");
 
         let classical_sk = <<H4 as DeltaSuite>::Classical as ClassicalScheme>::SECRET_KEY_LEN;
@@ -1083,11 +1172,11 @@ mod tests {
             &sk[classical_sk..],
             &message,
             &mut OsRng,
-            &mut ground[HEADER_LEN + 1..],
+            &mut ground[SR_HEADER + 1..],
         )
         .expect("a second binding");
 
-        assert_ne!(honest[HEADER_LEN + 1..], ground[HEADER_LEN + 1..]);
+        assert_ne!(honest[SR_HEADER + 1..], ground[SR_HEADER + 1..]);
         assert!(verify_delta::<H4>(&pk, INPUT, &ground[..len]));
         let first: [u8; 32] =
             make_bytes_delta::<H4, [u8; 32]>(&pk, INPUT, &honest[..len], OUT_CTX).expect("bytes");
@@ -1114,11 +1203,214 @@ mod tests {
         .expect("derive bytes");
         assert_eq!(from_composite, from_classical);
     }
+
+    // -----------------------------------------------------------------------
+    // The ed25519 suites. The construction is identical, so these repeat the
+    // two tests that carry the security property rather than the whole H3
+    // battery: the output must not move when a second, equally valid binding
+    // is minted, and it must not move when the hedged path is re-run.
+    // -----------------------------------------------------------------------
+
+    const H1_SK_LEN: usize = <H1 as Suite>::SECRET_KEY_LEN;
+    const H1_PK_LEN: usize = <H1 as Suite>::PUBLIC_KEY_LEN;
+    const H1_BINDING_LEN: usize = <<H1 as Suite>::Pq as PqScheme>::SIGNATURE_LEN;
+    const H1_PROOF_LEN: usize = ED_HEADER + H1_BINDING_LEN;
+    const H1_CLASSICAL_SK_LEN: usize =
+        <<H1 as Suite>::Classical as ClassicalScheme>::SECRET_KEY_LEN;
+
+    fn h1_keypair(seed: u8) -> ([u8; H1_SK_LEN], [u8; H1_PK_LEN]) {
+        let mut sk = [0u8; H1_SK_LEN];
+        let mut pk = [0u8; H1_PK_LEN];
+        composite::keypair_from_seed::<H1>(&[seed; 32], &mut sk, &mut pk).expect("keygen");
+        (sk, pk)
+    }
+
+    fn h1_proof(sk: &[u8]) -> [u8; H1_PROOF_LEN] {
+        let mut proof = [0u8; H1_PROOF_LEN];
+        let written = sign_deterministic::<H1>(sk, INPUT, &mut proof).expect("evaluate");
+        assert_eq!(written, H1_PROOF_LEN);
+        proof
+    }
+
+    fn h1_output(pk: &[u8], proof: &[u8]) -> [u8; 32] {
+        make_bytes::<H1, [u8; 32]>(pk, INPUT, proof, OUT_CTX).expect("derive bytes")
+    }
+
+    #[test]
+    fn an_ed25519_proof_round_trips() {
+        let (sk, pk) = h1_keypair(20);
+        let proof = h1_proof(&sk);
+        assert!(verify::<H1>(&pk, INPUT, &proof));
+        assert!(!verify::<H1>(&pk, OTHER_INPUT, &proof));
+    }
+
+    #[test]
+    fn the_two_classical_components_do_not_share_a_proof_length() {
+        // If they ever did, `header_len` could go back to being a constant --
+        // and until then, a caller who assumed 96 bytes for every suite would
+        // be writing past the end of an H1 header.
+        assert_eq!(SR_HEADER, PRE_OUTPUT_LEN + 64);
+        assert_eq!(ED_HEADER, PRE_OUTPUT_LEN + 48);
+        assert_eq!(proof_len::<H1>(), H1_PROOF_LEN);
+        assert_eq!(proof_len::<H3>(), H3_PROOF_LEN);
+    }
+
+    /// The uniqueness property from the prover's side, for H1. The ed25519
+    /// ECVRF has no witness to hedge at all -- RFC 9381 derives its nonce
+    /// from the secret key and the input -- so unlike H3 the *whole* proof
+    /// has to repeat, not merely the pre-output.
+    #[test]
+    fn randomness_cannot_move_the_output_on_ed25519() {
+        let (sk, pk) = h1_keypair(21);
+        let mut first = [0u8; H1_PROOF_LEN];
+        let mut second = [0u8; H1_PROOF_LEN];
+        sign::<H1>(&sk, INPUT, &mut OsRng, &mut first).expect("first");
+        sign::<H1>(&sk, INPUT, &mut OsRng, &mut second).expect("second");
+
+        assert!(verify::<H1>(&pk, INPUT, &first));
+        assert!(verify::<H1>(&pk, INPUT, &second));
+        assert_eq!(
+            first, second,
+            "the ed25519 ECVRF reads no randomness, so two hedged runs coincide"
+        );
+        assert_eq!(h1_output(&pk, &first), h1_output(&pk, &second));
+    }
+
+    /// The uniqueness property from the attacker's side, for H1. The grind is
+    /// the same one QUI-925 describes: the block producer holds its own
+    /// ML-DSA-44 key and can mint as many valid bindings over one message as
+    /// it likes.
+    #[test]
+    fn a_second_valid_binding_gives_the_same_output_on_ed25519() {
+        let (sk, pk) = h1_keypair(22);
+        let honest = h1_proof(&sk);
+        assert!(verify::<H1>(&pk, INPUT, &honest));
+
+        let message = binding_message(H1::LABEL, INPUT, &honest[..PRE_OUTPUT_LEN]);
+        let mut ground = honest;
+        <<H1 as Suite>::Pq as PqScheme>::sign(
+            &sk[H1_CLASSICAL_SK_LEN..],
+            &message,
+            &mut OsRng,
+            &mut ground[ED_HEADER..],
+        )
+        .expect("a second binding over the same message");
+
+        assert_ne!(
+            honest[ED_HEADER..],
+            ground[ED_HEADER..],
+            "the grind must actually reach a different binding"
+        );
+        assert!(
+            verify::<H1>(&pk, INPUT, &ground),
+            "the second binding is equally valid, which is the whole problem"
+        );
+        assert_eq!(
+            h1_output(&pk, &honest),
+            h1_output(&pk, &ground),
+            "a chosen binding must not move a consensus-decisive byte"
+        );
+    }
+
+    /// Two suites over one ed25519 key must not evaluate to one pre-output.
+    /// The suite label is length-prefixed into `alpha_string`, which is what
+    /// separates them; the sr25519 half of this is
+    /// `the_suite_label_separates_pre_outputs`.
+    #[test]
+    fn the_suite_label_separates_ed25519_pre_outputs() {
+        let sk = [7u8; H1_CLASSICAL_SK_LEN];
+        let (mut left, mut right) = ([0u8; PRE_OUTPUT_LEN], [0u8; PRE_OUTPUT_LEN]);
+        let (mut lp, mut rp) = (
+            [0u8; <Ed25519 as ClassicalVrf>::PROOF_LEN],
+            [0u8; <Ed25519 as ClassicalVrf>::PROOF_LEN],
+        );
+        Ed25519::vrf_evaluate_deterministic(&sk, H1::LABEL, INPUT, &mut left, &mut lp).expect("h1");
+        Ed25519::vrf_evaluate_deterministic(&sk, H2::LABEL, INPUT, &mut right, &mut rp)
+            .expect("h2");
+        assert_ne!(left, right);
+    }
+
+    /// H2 puts the ed25519 ECVRF behind the delta-length encoding, where the
+    /// classical field is 48 bytes rather than the 64 the signature encoder
+    /// assumes. That is the case `decode_delta_body` exists for, and a wrong
+    /// width here would put the `DeltaLen` byte inside the ECVRF proof.
+    #[test]
+    fn a_delta_length_ed25519_proof_round_trips() {
+        let mut sk = [0u8; <H2 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut pk = [0u8; <H2 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<H2>(&[23u8; 32], &mut sk, &mut pk).expect("keygen");
+
+        let mut proof = [0u8; ED_HEADER + 1 + <<H2 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let written = sign_delta_deterministic::<H2>(&sk, INPUT, &mut proof).expect("evaluate");
+        assert_eq!(written, max_proof_len_delta::<H2>());
+        assert!(verify_delta::<H2>(&pk, INPUT, &proof[..written]));
+        assert!(!verify_delta::<H2>(&pk, OTHER_INPUT, &proof[..written]));
+        assert!(
+            !verify_delta::<H2>(&pk, INPUT, &proof[..written - 1]),
+            "a truncated binding must not be accepted"
+        );
+
+        let hedged = sign_delta::<H2>(&sk, INPUT, &mut OsRng, &mut proof).expect("hedged");
+        assert!(verify_delta::<H2>(&pk, INPUT, &proof[..hedged]));
+    }
+
+    /// The H2 case of the grind, over FN-DSA-512, whose signatures are not
+    /// deterministic by specification and so give an even larger space of
+    /// valid bindings to search.
+    #[test]
+    fn a_delta_length_ed25519_proof_survives_a_reground_binding() {
+        let mut sk = [0u8; <H2 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut pk = [0u8; <H2 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<H2>(&[24u8; 32], &mut sk, &mut pk).expect("keygen");
+
+        let len = max_proof_len_delta::<H2>();
+        let mut honest = [0u8; ED_HEADER + 1 + <<H2 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        sign_delta_deterministic::<H2>(&sk, INPUT, &mut honest).expect("evaluate");
+
+        let classical_sk = <<H2 as DeltaSuite>::Classical as ClassicalScheme>::SECRET_KEY_LEN;
+        let message = binding_message(H2::LABEL, INPUT, &honest[..PRE_OUTPUT_LEN]);
+        let mut ground = honest;
+        <<H2 as DeltaSuite>::Pq as PqScheme>::sign(
+            &sk[classical_sk..],
+            &message,
+            &mut OsRng,
+            &mut ground[ED_HEADER + 1..],
+        )
+        .expect("a second binding");
+
+        assert_ne!(honest[ED_HEADER + 1..], ground[ED_HEADER + 1..]);
+        assert!(verify_delta::<H2>(&pk, INPUT, &ground[..len]));
+        let first: [u8; 32] =
+            make_bytes_delta::<H2, [u8; 32]>(&pk, INPUT, &honest[..len], OUT_CTX).expect("bytes");
+        let second: [u8; 32] =
+            make_bytes_delta::<H2, [u8; 32]>(&pk, INPUT, &ground[..len], OUT_CTX).expect("bytes");
+        assert_eq!(first, second);
+    }
+
+    /// The structural statement that the post-quantum binding carries no
+    /// entropy, for the ed25519 component: a verifier holding only the
+    /// classical half derives the identical bytes.
+    #[test]
+    fn the_ed25519_public_key_is_all_make_bytes_reads() {
+        let (sk, pk) = h1_keypair(25);
+        let proof = h1_proof(&sk);
+        let from_classical: [u8; 32] = <<H1 as Suite>::Classical as ClassicalVrf>::vrf_make_bytes(
+            &pk[..<<H1 as Suite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN],
+            H1::LABEL,
+            INPUT,
+            &proof[..PRE_OUTPUT_LEN],
+            OUT_CTX,
+        )
+        .expect("derive bytes");
+        assert_eq!(h1_output(&pk, &proof), from_classical);
+    }
 }
 
-/// H6 evaluates through the SHRINCS stateless path, so these tests check the
-/// two properties that path adds: the few-time budget is charged, and the
-/// key's one-time leaf counter is not.
+/// H5 and H6 evaluate through the SHRINCS stateless path, so these tests check
+/// the two properties that path adds: the few-time budget is charged, and the
+/// key's one-time leaf counter is not. The budget arithmetic is identical on
+/// either suite, so it is exercised on H6 alone; H5 gets the round trip and
+/// the uniqueness check, which are the two that depend on the classical half.
 #[cfg(all(
     test,
     feature = "alloc",
@@ -1132,8 +1424,9 @@ mod tests {
 mod stateful_tests {
     use super::*;
     use crate::budget::{BudgetKey, StatelessBudgetStore};
+    use crate::classical::Ed25519;
     use crate::component::PqStatefulScheme;
-    use crate::shrincs::H6;
+    use crate::shrincs::{H5, H6};
     use crate::stateful_composite::{keygen, SecretKey};
     use crate::suite::StatefulSuite;
     use alloc::vec;
@@ -1142,6 +1435,10 @@ mod stateful_tests {
 
     const INPUT: &[u8] = b"epoch-7/randomness";
     const OUT_CTX: &[u8] = b"epoch-randomness";
+
+    /// The H6 proof header. H5's is 16 bytes shorter, because the ed25519
+    /// ECVRF proof is `c || s` rather than schnorrkel's 64-byte DLEQ proof.
+    const SR_HEADER: usize = header_len::<crate::classical::Sr25519>();
 
     /// A budget store held in memory. `Infallible` because a test that wants
     /// to see a store fault sets `fail` instead of relying on a real fault.
@@ -1242,7 +1539,7 @@ mod stateful_tests {
             Err(Error::BudgetStoreFailed)
         );
         assert!(
-            proof.iter().all(|b| *b == 0) || proof[HEADER_LEN..].iter().all(|b| *b == 0),
+            proof.iter().all(|b| *b == 0) || proof[SR_HEADER..].iter().all(|b| *b == 0),
             "no binding may be released when the spend did not land"
         );
     }
@@ -1291,6 +1588,62 @@ mod stateful_tests {
             make_bytes_stateless::<H6, [u8; 32]>(&pk, INPUT, &first, OUT_CTX).expect("bytes");
         let b: [u8; 32] =
             make_bytes_stateless::<H6, [u8; 32]>(&pk, INPUT, &second, OUT_CTX).expect("bytes");
+        assert_eq!(a, b, "a re-evaluated binding must not move the output");
+    }
+
+    fn h5_key(seed: u8) -> (SecretKey<H5>, Vec<u8>) {
+        let (sk, pk) = keygen::<H5>(&[seed; 32], 8).expect("keygen");
+        let mut verify_pk = Vec::with_capacity(<H5 as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN);
+        verify_pk.extend_from_slice(pk.classical());
+        verify_pk.extend_from_slice(pk.pq_verify_key());
+        (sk, verify_pk)
+    }
+
+    fn evaluate_h5(sk: &SecretKey<H5>, budget: &mut MemoryBudget) -> Vec<u8> {
+        let mut proof = vec![0u8; proof_len_stateless::<H5>()];
+        let written =
+            sign_stateless::<H5>(sk, budget, INPUT, &mut OsRng, &mut proof).expect("evaluate");
+        assert_eq!(written, proof.len());
+        proof
+    }
+
+    #[test]
+    fn an_ed25519_stateless_proof_round_trips() {
+        let (sk, pk) = h5_key(6);
+        let mut budget = MemoryBudget::default();
+        let proof = evaluate_h5(&sk, &mut budget);
+        assert_eq!(
+            proof.len(),
+            header_len::<Ed25519>()
+                + <<H5 as StatefulSuite>::Pq as PqStatefulScheme>::STATELESS_SIG_LEN
+        );
+        assert!(verify_stateless::<H5>(&pk, INPUT, &proof));
+        assert!(!verify_stateless::<H5>(&pk, b"another input", &proof));
+        assert_eq!(budget.total(), 1, "one unit of the few-time budget");
+    }
+
+    /// The H5 uniqueness check. The SHRINCS binding's FORS-C counter search
+    /// makes a second, equally valid binding cheap to reach, so a
+    /// re-evaluation must land on the same output.
+    #[test]
+    fn a_second_ed25519_evaluation_gives_the_same_output() {
+        let (sk, pk) = h5_key(7);
+        let mut budget = MemoryBudget::default();
+        let first = evaluate_h5(&sk, &mut budget);
+        let second = evaluate_h5(&sk, &mut budget);
+
+        assert!(verify_stateless::<H5>(&pk, INPUT, &first));
+        assert!(verify_stateless::<H5>(&pk, INPUT, &second));
+        assert_eq!(
+            first[..PRE_OUTPUT_LEN],
+            second[..PRE_OUTPUT_LEN],
+            "the pre-output is a deterministic function of the key and the input"
+        );
+
+        let a: [u8; 32] =
+            make_bytes_stateless::<H5, [u8; 32]>(&pk, INPUT, &first, OUT_CTX).expect("bytes");
+        let b: [u8; 32] =
+            make_bytes_stateless::<H5, [u8; 32]>(&pk, INPUT, &second, OUT_CTX).expect("bytes");
         assert_eq!(a, b, "a re-evaluated binding must not move the output");
     }
 }
