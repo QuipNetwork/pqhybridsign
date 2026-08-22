@@ -283,6 +283,16 @@ where
     /// classical prefix and the commitment at an offset the caller has to
     /// know.
     ///
+    /// This computes; it does not verify. `self` is whatever verify key its
+    /// caller built it from, and this method trusts that key completely: it
+    /// is not this method's job to ask whether `self` is the key a verifier
+    /// should be installing. A caller who computes a stored form from an
+    /// attacker-supplied verify key and then installs it has installed the
+    /// attacker's key. Call this only on a key you already trust -- one
+    /// [`keygen`] handed back, or one read from your own storage -- and
+    /// never on a verify key that arrived from the wire or from an
+    /// untrusted peer.
+    ///
     /// # Errors
     ///
     /// [`Error::BadLength`] or [`Error::ComponentFailure`] as
@@ -1876,6 +1886,16 @@ mod tests {
         let (_sk_b, pk_b) = keygen::<FakeH>(&[8u8; 32], 4).expect("keygen b");
 
         let stored_a = pk_a.stored_form().expect("stored form a");
+        let stored_b = pk_b.stored_form().expect("stored form b");
+
+        // Pins that `stored_form` is a function of its receiver: without
+        // this, a `stored_form` that always returned the same constant bytes
+        // would still pass the check below, since a constant does not
+        // verify key B either.
+        assert_ne!(
+            stored_a, stored_b,
+            "two different keys must not compute the same stored form"
+        );
 
         assert!(
             <FakePq as CommittedVerifyKey>::verify_committed_key(
