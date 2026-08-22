@@ -20,6 +20,10 @@ use pqhybridsign::encoding_delta::{
     decode_delta, delta_encoded_len, encode_delta_byte, write_delta, DeltaSig, CLASSICAL_SIG_LEN,
     DELTA_LEN,
 };
+// The owned-buffer encoder only exists under `alloc`. `write_delta` is the
+// no-allocator API, so the tests that cover it stay in every feature set.
+#[cfg(feature = "alloc")]
+use pqhybridsign::encoding_delta::encode_delta;
 use pqhybridsign::error::Error;
 
 /// A stand-in `min_len`. The real value is `MIN_FALCON512_SIG_LEN` (411);
@@ -195,4 +199,40 @@ fn write_reports_a_buffer_that_is_too_small() {
     let mut longer = vec![0u8; needed + 8];
     assert_eq!(write_delta(&mut longer, &sig, 20), Ok(needed));
     assert_eq!(&longer[..needed], raw(&classical, 10, &pq).as_slice());
+}
+
+/// `encode_delta` is the alloc-gated wrapper the hand-written suite skips in
+/// favour of `write_delta`, which left its whole body and its offset
+/// arithmetic untested. Asserting the exact bytes, not just the length, is
+/// what distinguishes a correct encoding from a same-length wrong one.
+#[cfg(feature = "alloc")]
+#[test]
+fn encode_delta_lays_out_every_field_at_its_own_offset() {
+    let classical = classical(0xC1);
+    let pq = synthetic_pq(40);
+    let sig = DeltaSig {
+        classical: &classical,
+        pq: &pq,
+    };
+
+    let out = encode_delta(&sig, pq.len()).expect("an exact min_len must encode");
+
+    assert_eq!(out, raw(&classical, 0, &pq));
+}
+
+/// `min_len` is a floor, not a cap: the delta byte records how far `pq.len()`
+/// exceeds it, and no field moves as a result.
+#[cfg(feature = "alloc")]
+#[test]
+fn encode_delta_records_the_excess_over_min_len_without_moving_a_field() {
+    let classical = classical(0xC1);
+    let pq = synthetic_pq(40);
+    let sig = DeltaSig {
+        classical: &classical,
+        pq: &pq,
+    };
+
+    let out = encode_delta(&sig, pq.len() - 7).expect("pq past the minimum must encode");
+
+    assert_eq!(out, raw(&classical, 7, &pq));
 }
