@@ -144,11 +144,11 @@ fn generate_verify_with_stored_public_key_fixture() {
     sig.truncate(n);
 
     // A second signature over the stateful path (`PathSelector` 0x01, one
-    // leaf spent), so the fixture exercises both selectors
-    // `verify_with_stored_public_key` can see -- the stateless one above is
-    // 0x02. The commitment check does not branch on the selector, but
-    // nothing else in this test suite covered 0x01 before this fixture
-    // gained a second signature.
+    // leaf spent), so the fixture exercises both
+    // `verify_with_stored_public_key_stateful` and
+    // `verify_with_stored_public_key_stateless` -- the stateless signature
+    // above carries selector 0x02, and each entry point now accepts only its
+    // own.
     let identity = pqhybridsign_abi::key_identity(SUITE, &pk).expect("key_identity");
     let mut journal = MemoryJournal::default();
     pqhybridsign_abi::adopt_key(&mut journal, identity).expect("adopt_key");
@@ -168,11 +168,11 @@ fn generate_verify_with_stored_public_key_fixture() {
 
     let stored = stored_form(SUITE, &pk);
     let bundle = bundle_of(SUITE, &pk);
-    assert!(pqhybridsign_abi::verify_with_stored_public_key(
+    assert!(pqhybridsign_abi::verify_with_stored_public_key_stateless(
         SUITE, &stored, bundle, MSG, CTX, &sig
     )
-    .expect("the fixture's own signature must verify before it is written out"));
-    assert!(pqhybridsign_abi::verify_with_stored_public_key(
+    .expect("the fixture's own stateless-path signature must verify before it is written out"));
+    assert!(pqhybridsign_abi::verify_with_stored_public_key_stateful(
         SUITE,
         &stored,
         bundle,
@@ -180,7 +180,7 @@ fn generate_verify_with_stored_public_key_fixture() {
         CTX,
         &stateful_sig
     )
-    .expect("the fixture's stateful-selector signature must verify before it is written out"));
+    .expect("the fixture's stateful-path signature must verify before it is written out"));
 
     // A second, unrelated key: its bundle signs the same message and must
     // still be refused against the first key's stored commitment.
@@ -196,7 +196,7 @@ fn generate_verify_with_stored_public_key_fixture() {
     .expect("attacker keygen");
     let attacker_bundle = bundle_of(SUITE, &attacker_pk);
     assert_eq!(
-        pqhybridsign_abi::verify_with_stored_public_key(
+        pqhybridsign_abi::verify_with_stored_public_key_stateless(
             SUITE,
             &stored,
             attacker_bundle,

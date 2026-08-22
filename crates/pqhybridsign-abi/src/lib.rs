@@ -80,7 +80,8 @@ pub use error::AbiError;
 pub use sizes::{public_key_len, secret_key_len, signature_len, stored_public_key_len};
 pub use stateful_suites::{
     adopt_key, key_identity, key_identity_from_secret_key, keygen_stateful_from_seed,
-    require_bound_key, sign_stateful, sign_stateless, verify_with_stored_public_key,
+    require_bound_key, sign_stateful, sign_stateless, verify_stateful, verify_stateless,
+    verify_with_stored_public_key_stateful, verify_with_stored_public_key_stateless,
 };
 pub use stateless_suites::{keygen_from_seed, sign, sign_deterministic};
 pub use suite::Suite;
@@ -129,9 +130,11 @@ pub use pqhybridsign::stateful::{KeyIdentity, KEY_IDENTITY_LEN};
 /// Re-exported so a caller can check a SHRINCS commitment bundle on its own,
 /// without depending on `pqhybridsign-shrincs` directly.
 ///
-/// [`verify_with_stored_public_key`] is the entry point most callers want:
-/// it runs this check and the signature verification together, and it takes
-/// and returns nothing but byte slices and a `bool`. Reach for
+/// [`verify_with_stored_public_key_stateful`] and
+/// [`verify_with_stored_public_key_stateless`] are the entry points most
+/// callers want: each runs this check and the signature verification
+/// together, and takes and returns nothing but byte slices and a `bool`.
+/// Reach for
 /// [`verify_bundle`] only to check a bundle at the moment it is installed,
 /// or to look at the parsed key it returns -- a
 /// `hashsigs_rs::shrincs::PublicKey`, from a crate this one does not

@@ -243,19 +243,29 @@ not live here.
 
 ### Hybrid VRF
 
-A verifiable random function (VRF) for the sr25519 suites, behind the
-non-default `vrf` feature. The sr25519 VRF supplies the output. A post-quantum
-binding signature over the same input proves post-quantum key possession.
+A verifiable random function (VRF) for every suite, behind the non-default
+`vrf` feature. The classical component supplies the output: schnorrkel's own
+VRF on the sr25519 suites, and an RFC 9381 `ECVRF-EDWARDS25519-SHA512-TAI` on
+the ed25519 suites. A post-quantum binding signature over the same input proves
+post-quantum key possession.
+
+`0.0.0-rc4` covers the sr25519 suites only. The ed25519 half is on `main` and
+ships in the next release.
 
 Every consensus-decisive byte derives from the classical pre-output alone. That
 pre-output is unique per key and input. A verifier checks the binding but never
 feeds it into that derivation. Post-quantum signatures are not unique for a
 fixed message, so a signer able to read one into the output could grind it.
 
-The feature covers all three sr25519 suites. `hybrid-sr25519-shrincs-*-v1` binds
-through the SHRINCS stateless path, spending one unit of the few-time budget
-rather than a one-time leaf. That suits a low-frequency VRF such as epoch
-randomness, not per-slot leader election.
+The ed25519 half passes the RFC's own Appendix B.3 test vectors. Its
+pre-output followed by its proof is exactly the RFC's 80-byte `pi_string`.
+Key validation is always on, so the verifier rejects a public key of small
+order.
+
+`hybrid-ed25519-shrincs-*-v1` and `hybrid-sr25519-shrincs-*-v1` bind through
+the SHRINCS stateless path, spending one unit of the few-time budget rather
+than a one-time leaf. That suits a low-frequency VRF such as epoch randomness,
+not per-slot leader election.
 
 ### Mnemonic and junction derivation
 

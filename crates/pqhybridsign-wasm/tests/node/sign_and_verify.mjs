@@ -4,10 +4,11 @@
 // confirms H5/H6 are refused with an explanatory error rather than
 // silently mishandled, and confirms a tampered message and a
 // wrong-suite signature both fail verification. Also exercises
-// verifyWithStoredPublicKey/storedPublicKeyLen, the one H5/H6 entry point
-// this binding does expose (see lib.rs for why verification is safe where
-// signing is not). Run against a `nodejs`-target build assembled by
-// ../../scripts/build-npm.sh:
+// verifyStateful/verifyStateless,
+// verifyWithStoredPublicKeyStateful/verifyWithStoredPublicKeyStateless and
+// storedPublicKeyLen, the H5/H6 verify entry points this binding exposes
+// (see lib.rs for why verification is safe where signing is not). Run
+// against a `nodejs`-target build assembled by ../../scripts/build-npm.sh:
 //
 //   ../../scripts/build-npm.sh
 //   node tests/node/sign_and_verify.mjs
@@ -226,21 +227,24 @@ check("storedPublicKeyLen is total over H1-H4, agreeing with publicKeyLen", () =
     }
 });
 
-check("verifyWithStoredPublicKey is refused for H1-H4", () => {
-    // verifyWithStoredPublicKey stays H5/H6-only, matching the C
+check("verifyWithStoredPublicKeyStateful and verifyWithStoredPublicKeyStateless are refused for H1-H4", () => {
+    // Both stay H5/H6-only, matching the C
     // `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` and Python
-    // `WrongEntryPointForSuiteError`: it is semantically a stateful
+    // `WrongEntryPointForSuiteError`: this is semantically a stateful
     // operation, unlike storedPublicKeyLen above.
     for (const suite of SUITES) {
         assert.throws(() =>
-            pqhs.verifyWithStoredPublicKey(suite, STORED, BUNDLE, STORED_MSG, STORED_CTX, STORED_SIG),
+            pqhs.verifyWithStoredPublicKeyStateful(suite, STORED, BUNDLE, STORED_MSG, STORED_CTX, STORED_STATEFUL_SIG),
+        );
+        assert.throws(() =>
+            pqhs.verifyWithStoredPublicKeyStateless(suite, STORED, BUNDLE, STORED_MSG, STORED_CTX, STORED_SIG),
         );
     }
 });
 
-check("verifyWithStoredPublicKey accepts the bundle the stored key names", () => {
+check("verifyWithStoredPublicKeyStateless accepts the bundle the stored key names", () => {
     assert.equal(
-        pqhs.verifyWithStoredPublicKey(
+        pqhs.verifyWithStoredPublicKeyStateless(
             "H5",
             STORED,
             BUNDLE,
@@ -252,13 +256,9 @@ check("verifyWithStoredPublicKey accepts the bundle the stored key names", () =>
     );
 });
 
-check("verifyWithStoredPublicKey accepts the stateful-selector signature too", () => {
-    // The check above used PathSelector 0x02 (stateless); this one is 0x01
-    // (stateful, one leaf spent when the fixture was generated). The
-    // commitment check does not branch on the selector, but nothing else
-    // in this suite exercised 0x01 through verifyWithStoredPublicKey before.
+check("verifyWithStoredPublicKeyStateful accepts the stateful-path signature", () => {
     assert.equal(
-        pqhs.verifyWithStoredPublicKey(
+        pqhs.verifyWithStoredPublicKeyStateful(
             "H5",
             STORED,
             BUNDLE,
@@ -270,13 +270,42 @@ check("verifyWithStoredPublicKey accepts the stateful-selector signature too", (
     );
 });
 
-check("verifyWithStoredPublicKey refuses a bundle the stored key does not name", () => {
+check("each stored-public-key entry point refuses the other path's signature by selector", () => {
+    // STORED_SIG carries PathSelector 0x02 (stateless), STORED_STATEFUL_SIG
+    // carries 0x01 (stateful, one leaf spent). Each entry point refuses the
+    // signature that does not name its own path, before either component
+    // signature is checked.
+    assert.equal(
+        pqhs.verifyWithStoredPublicKeyStateful(
+            "H5",
+            STORED,
+            BUNDLE,
+            STORED_MSG,
+            STORED_CTX,
+            STORED_SIG,
+        ),
+        false,
+    );
+    assert.equal(
+        pqhs.verifyWithStoredPublicKeyStateless(
+            "H5",
+            STORED,
+            BUNDLE,
+            STORED_MSG,
+            STORED_CTX,
+            STORED_STATEFUL_SIG,
+        ),
+        false,
+    );
+});
+
+check("verifyWithStoredPublicKeyStateless refuses a bundle the stored key does not name", () => {
     // The attacker's own bundle verifies the same signature's message and
     // context perfectly well as a self-consistent key; what it fails is
     // the binding to the *stored* commitment, which is what this entry
     // point exists to check.
     assert.equal(
-        pqhs.verifyWithStoredPublicKey(
+        pqhs.verifyWithStoredPublicKeyStateless(
             "H5",
             STORED,
             ATTACKER_BUNDLE,
@@ -288,14 +317,14 @@ check("verifyWithStoredPublicKey refuses a bundle the stored key does not name",
     );
 });
 
-check("verifyWithStoredPublicKey returns false and does not throw for malformed lengths", () => {
+check("verifyWithStoredPublicKeyStateless returns false and does not throw for malformed lengths", () => {
     for (const bad of MALFORMED) {
         assert.equal(
-            pqhs.verifyWithStoredPublicKey("H5", bad, BUNDLE, STORED_MSG, STORED_CTX, STORED_SIG),
+            pqhs.verifyWithStoredPublicKeyStateless("H5", bad, BUNDLE, STORED_MSG, STORED_CTX, STORED_SIG),
             false,
         );
         assert.equal(
-            pqhs.verifyWithStoredPublicKey("H5", STORED, bad, STORED_MSG, STORED_CTX, STORED_SIG),
+            pqhs.verifyWithStoredPublicKeyStateless("H5", STORED, bad, STORED_MSG, STORED_CTX, STORED_SIG),
             false,
         );
     }
@@ -322,6 +351,11 @@ for (const [i, suite] of STATEFUL_SUITES.entries()) {
         assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, signature), true);
         // A tampered message must not verify against a real stateful signature.
         assert.equal(pqhs.verify(suite, publicKey, MSG2, CTX, signature), false);
+        // The path-explicit entry points agree with plain `verify`: a
+        // stateful-path signature verifies under verifyStateful and is
+        // refused by verifyStateless.
+        assert.equal(pqhs.verifyStateful(suite, publicKey, MSG, CTX, signature), true);
+        assert.equal(pqhs.verifyStateless(suite, publicKey, MSG, CTX, signature), false);
     });
 
     check(`${suite}: keyIdentity and keyIdentityFromSecretKey name the same key`, () => {
@@ -402,7 +436,12 @@ for (const [i, suite] of STATEFUL_SUITES.entries()) {
         const budget = new MemoryStatelessBudget();
         const sig = pqhs.signStateless(suite, secretKey, budget, MSG, CTX);
         assert.ok(sig.length <= pqhs.signatureLen(suite));
-        assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, sig), true);
+        // Plain `verify` accepts only the stateful path for H5/H6
+        // (specification section 20.2): a stateless-path signature verifies
+        // only through `verifyStateless`.
+        assert.equal(pqhs.verify(suite, publicKey, MSG, CTX, sig), false);
+        assert.equal(pqhs.verifyStateless(suite, publicKey, MSG, CTX, sig), true);
+        assert.equal(pqhs.verifyStateful(suite, publicKey, MSG, CTX, sig), false);
     });
 }
 

@@ -70,12 +70,12 @@ where
     let pk = PublicKey::<S>::from_bytes(&f.public_key).expect("public key from fixture");
 
     assert!(
-        S::verify(&pk, &f.stateful_msg, &f.stateful_ctx, &f.stateful_signature),
+        S::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &f.stateful_signature),
         "{} stateful fixture signature must verify",
         f.suite
     );
     assert!(
-        S::verify(
+        S::verify_stateless(
             &pk,
             &f.stateless_msg,
             &f.stateless_ctx,
@@ -88,7 +88,7 @@ where
     let mut bad_stateful = f.stateful_signature.clone();
     bad_stateful[0] ^= 0x01;
     assert!(
-        !S::verify(&pk, &f.stateful_msg, &f.stateful_ctx, &bad_stateful),
+        !S::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &bad_stateful),
         "{} must reject a stateful signature with one bit flipped",
         f.suite
     );
@@ -96,7 +96,7 @@ where
     let mut bad_stateless = f.stateless_signature.clone();
     bad_stateless[0] ^= 0x01;
     assert!(
-        !S::verify(&pk, &f.stateless_msg, &f.stateless_ctx, &bad_stateless),
+        !S::verify_stateless(&pk, &f.stateless_msg, &f.stateless_ctx, &bad_stateless),
         "{} must reject a stateless signature with one bit flipped",
         f.suite
     );
@@ -108,7 +108,7 @@ where
     let other_pk =
         PublicKey::<S>::from_bytes(other_pk_bytes).expect("other suite public key length matches");
     assert!(
-        !S::verify(
+        !S::verify_stateful(
             &other_pk,
             &f.stateful_msg,
             &f.stateful_ctx,
@@ -118,7 +118,7 @@ where
         f.suite
     );
     assert!(
-        !S::verify(
+        !S::verify_stateless(
             &other_pk,
             &f.stateless_msg,
             &f.stateless_ctx,

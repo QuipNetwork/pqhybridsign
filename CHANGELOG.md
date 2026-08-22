@@ -2,6 +2,60 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- An RFC 9381 `ECVRF-EDWARDS25519-SHA512-TAI` for the ed25519 component, which
+  gives `hybrid-ed25519-mldsa44-v1`, `hybrid-ed25519-falcon512-v1` and
+  `hybrid-ed25519-shrincs-*-v1` a hybrid VRF. Every suite now supports the
+  mechanism. rc4 shipped it for the sr25519 suites only. The construction is
+  unchanged: the classical pre-output carries uniqueness, and the
+  post-quantum binding is verified but never enters the output derivation.
+  The test suite runs the RFC's own Appendix B.3 vectors as known answers. A
+  pre-output followed by its proof is exactly the RFC's 80-byte `pi_string`,
+  so any other RFC 9381 code can read a proof. `alpha_string` is
+  the suite label and the caller's input, each length-prefixed, which
+  separates two suites derived from one classical key. Key validation (RFC
+  9381 section 5.4.5) is always on, and point decoding follows RFC 8032
+  section 5.1.3 rather than the ZIP-215 rule this component's signature
+  verifier takes: a VRF that two honest verifiers read differently is a chain
+  split.
+
+### Changed
+
+- **Breaking, and a silent one.** Verification of the stateful suites now
+  requires the caller to name a path, the way signing already did. The
+  composite `verify` is gone, replaced by `verify_stateful` and
+  `verify_stateless`, each refusing a signature that carries the other path's
+  selector before either component signature is checked. The old call decoded
+  the wire `PathSelector` byte and dispatched on it, so the signature chose
+  its own verification path. Specification section 20.2 requires the opposite:
+  the stateless key is reserved for rotation and recovery and must not be
+  accepted for ordinary application messages.
+
+  The part to watch is the entry point whose name and signature did not
+  change. `verify` in the abi, `pqhs_verify` in C, and their Python and
+  WebAssembly mirrors stay total over all six suites, but for H5 and H6 they
+  now accept the stateful path only. A stateless-signed message that used to
+  verify through them returns `false` with no error to distinguish it from a
+  bad signature. Call `verify_stateless` for that case.
+  `verify_with_stored_public_key` is replaced outright by
+  `verify_with_stored_public_key_stateful` and `_stateless`.
+
+- **Breaking.** `vrf::HEADER_LEN` and `vrf::CLASSICAL_PROOF_LEN`, both public
+  in rc4, are removed. The two classical components do not share a proof
+  width: schnorrkel's DLEQ proof is 64 bytes and the ed25519 ECVRF's `c || s`
+  is 48, so a single constant cannot describe both. The width now lives on
+  `ClassicalVrf::PROOF_LEN`, and `vrf::header_len` computes the header per
+  component. Size a buffer from `vrf::proof_len`,
+  `vrf::max_proof_len_delta` or `vrf::proof_len_stateless` instead. Only a
+  caller of the non-default `vrf` feature is affected.
+- The compile-fail test asserting that an ed25519 suite cannot be used with
+  the VRF is deleted, along with the claim in the `vrf` module documentation
+  and the README. It pinned a missing primitive as though it were a design
+  decision.
+
 ## 0.0.0-rc4
 
 rc4 adds three optional capabilities and changes nothing in the signature

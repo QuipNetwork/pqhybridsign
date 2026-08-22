@@ -85,7 +85,7 @@ fn time_the_costly_operations() {
     let stateless_secs = t.elapsed().as_secs_f64();
 
     let t = Instant::now();
-    let ok = H5::verify(&pk, b"message", b"ctx", &stateful);
+    let ok = H5::verify_stateful(&pk, b"message", b"ctx", &stateful);
     let verify_secs = t.elapsed().as_secs_f64();
     assert!(ok, "the stateful signature must verify");
 

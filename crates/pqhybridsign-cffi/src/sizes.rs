@@ -93,8 +93,10 @@ pub unsafe extern "C" fn pqhs_signature_len(suite: u8, out: *mut usize) -> c_int
 
 /// Write the stored public key length for `suite`, in bytes, into `*out`:
 /// the form a verifier keeps, which is what
-/// [`pqhs_verify_with_stored_public_key`](crate::pqhs_verify_with_stored_public_key)
-/// takes as `stored_public_key`.
+/// [`pqhs_verify_with_stored_public_key_stateful`](crate::pqhs_verify_with_stored_public_key_stateful)
+/// and
+/// [`pqhs_verify_with_stored_public_key_stateless`](crate::pqhs_verify_with_stored_public_key_stateless)
+/// take as `stored_public_key`.
 ///
 /// Total over `1..=6`. For H5 and H6 this is the classical public key and a
 /// 32-byte commitment to the post-quantum verify key, smaller than

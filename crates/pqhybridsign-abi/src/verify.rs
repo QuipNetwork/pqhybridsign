@@ -1,16 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use pqhybridsign::shrincs::{H5, H6};
-use pqhybridsign::stateful::StatefulHybridSignatureScheme;
-use pqhybridsign::stateful_composite::PublicKey;
-use pqhybridsign::{composite, composite_delta, suite::StatefulSuite};
+use pqhybridsign::{composite, composite_delta};
 use pqhybridsign::{H1, H2, H3, H4};
 
+use crate::stateful_suites::verify_stateful_pk;
 use crate::suite::Suite;
 
 /// Verify `sig` over `msg` under `ctx` for `suite`, against `pk`.
 ///
 /// Covers all six suites: unlike signing, verification never has to be
 /// kept apart by statefulness, because verifying never spends anything.
+///
+/// For H1 through H4 there is only one signing path, so there is nothing
+/// this function could accept by mistake. For H5 and H6 -- the two suites
+/// whose post-quantum half pairs a stateful fast path with a stateless
+/// few-time one -- this function accepts only a signature produced by
+/// `sign_stateful`, the same behaviour
+/// [`crate::verify_stateful`] gives directly. Specification section 20.2
+/// requires this: the primary stateless path is reserved for rotation and
+/// recovery, and a verifier for an ordinary application message MUST NOT
+/// accept it. A caller that genuinely needs to verify a stateless-path H5
+/// or H6 signature -- a rotation or recovery authorization, or a message an
+/// application has deliberately signed on the few-time path -- calls
+/// [`crate::verify_stateless`] instead of this function.
 ///
 /// Returns `false`, never an error, for a malformed `pk` or `sig` -- the
 /// same design every underlying verify function in this workspace uses:
@@ -26,17 +37,9 @@ pub fn verify(suite: Suite, pk: &[u8], msg: &[u8], ctx: &[u8], sig: &[u8]) -> bo
         Suite::H3 => composite::verify::<H3>(pk, msg, ctx, sig),
         Suite::H2 => composite_delta::verify::<H2>(pk, msg, ctx, sig),
         Suite::H4 => composite_delta::verify::<H4>(pk, msg, ctx, sig),
-        Suite::H5 => verify_stateful::<H5>(pk, msg, ctx, sig),
-        Suite::H6 => verify_stateful::<H6>(pk, msg, ctx, sig),
+        Suite::H5 => verify_stateful_pk::<pqhybridsign::shrincs::H5>(pk, msg, ctx, sig),
+        Suite::H6 => verify_stateful_pk::<pqhybridsign::shrincs::H6>(pk, msg, ctx, sig),
     }
-}
-
-fn verify_stateful<S: StatefulSuite>(pk: &[u8], msg: &[u8], ctx: &[u8], sig: &[u8]) -> bool {
-    let Ok(pk) = PublicKey::<S>::from_bytes(pk) else {
-        return false;
-    };
-    let sig = sig.to_vec();
-    <S as StatefulHybridSignatureScheme>::verify(&pk, msg, ctx, &sig)
 }
 
 #[cfg(test)]

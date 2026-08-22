@@ -46,6 +46,16 @@ hmac = { version = "0.12", default-features = false, optional = true }
 # caller-supplied RNG to the proof instead of panicking on a `no_std` target
 # without `getrandom`. schnorrkel re-exports no path to it.
 merlin = { version = "3.0", default-features = false, optional = true }
+# Curve arithmetic for the ed25519 component's RFC 9381 ECVRF. Already in the
+# tree as `ed25519-zebra`'s own dependency and as this crate's dev-dependency,
+# and pinned to the same 4.1 line so exactly one copy is built. `ed25519-zebra`
+# exposes no scalar or point type, so the ECVRF cannot be written over it.
+# `default-features = false` drops `alloc` and the 30 KiB basepoint table,
+# which the `no_std` cross-build has to fit in flash; `zeroize` is kept because
+# the ECVRF's secret scalar and nonce are `Scalar` values that must be wiped.
+curve25519-dalek = { version = "4.1", default-features = false, features = [
+    "zeroize",
+], optional = true }
 
 [dev-dependencies]
 subtle.workspace = true
@@ -82,10 +92,10 @@ mnemonic = ["alloc", "dep:bip39", "dep:pbkdf2", "dep:hmac", "zeroize/alloc"]
 # default features and name it (each profile turns the suites on by itself).
 # hashsigs-rs allows exactly one profile per build.
 stateful = ["profile-256s"]
-# Hybrid VRF for the sr25519 suites (specification section 15). Off by
-# default: only a consensus integration needs it, and a signing-only build
-# should not compile schnorrkel's VRF or carry `merlin` directly.
-vrf = ["dep:merlin"]
+# Hybrid VRF for every suite (specification section 15). Off by default: only
+# a consensus integration needs it, and a signing-only build should not
+# compile schnorrkel's VRF, the ed25519 ECVRF, `merlin` or `curve25519-dalek`.
+vrf = ["dep:merlin", "dep:curve25519-dalek"]
 profile-256s = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-256s"]
 profile-256s-sha2 = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-256s-sha2"]
 profile-128s-q18 = ["std", "dep:hashsigs-rs", "dep:sha3", "hashsigs-rs/profile-128s-q18"]

@@ -307,7 +307,12 @@ fn successive_signatures_advance_the_leaf_and_the_wire_leaf_count_follows_it() {
     );
 
     for (msg, sig) in FIXTURE_MESSAGES.iter().zip(&fixture.signatures) {
-        assert!(H5::verify(&fixture.public_key, msg, FIXTURE_CTX, sig));
+        assert!(H5::verify_stateful(
+            &fixture.public_key,
+            msg,
+            FIXTURE_CTX,
+            sig
+        ));
     }
 }
 
@@ -364,8 +369,8 @@ fn signer_guard_is_a_budget_check_not_a_reuse_detector() {
         "leaf 1 was reissued under a different message"
     );
     assert_eq!(pk.as_ref(), restored_pk.as_ref(), "the same public key");
-    assert!(H5::verify(&pk, b"guard", b"", &first));
-    assert!(H5::verify(&pk, b"reissued", b"", &reissued));
+    assert!(H5::verify_stateful(&pk, b"guard", b"", &first));
+    assert!(H5::verify_stateful(&pk, b"reissued", b"", &reissued));
     // Two one-time signatures under one leaf now exist. That is the state
     // RFC 8391 says leaves no security guarantee for the key.
 }
@@ -414,7 +419,7 @@ impl MonotonicIndex {
             return IndexVerdict::ReplayedLeaf;
         }
         self.crypto_calls += 1;
-        if !H5::verify(pk, msg, ctx, &sig.to_vec()) {
+        if !H5::verify_stateful(pk, msg, ctx, &sig.to_vec()) {
             return IndexVerdict::BadSignature;
         }
         self.highest_accepted = leaf;
@@ -462,7 +467,7 @@ fn monotonic_index_rejects_a_reused_leaf_before_any_cryptography_runs() {
     );
     // The rejection is the index policy's, not the cryptography's: that same
     // signature still verifies on its own.
-    assert!(H5::verify(
+    assert!(H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[0],
         FIXTURE_CTX,
@@ -505,9 +510,9 @@ fn two_messages_under_one_leaf_both_verify_because_it_is_not_a_verifier_property
     assert_eq!(wire_leaf_count(&sig_b), 1, "the same leaf");
     assert_ne!(sig_a, sig_b, "different messages, different signatures");
 
-    assert!(H5::verify(&pk, b"pay alice 1", b"", &sig_a));
+    assert!(H5::verify_stateful(&pk, b"pay alice 1", b"", &sig_a));
     assert!(
-        H5::verify(&pk, b"pay bob 1000", b"", &sig_b),
+        H5::verify_stateful(&pk, b"pay bob 1000", b"", &sig_b),
         "both signatures verify: the verifier has no way to reject the second"
     );
 }
@@ -526,7 +531,7 @@ fn signing_past_the_budget_yields_leaves_exhausted_and_consumes_nothing() {
     for i in 0..max {
         let sig = H5::sign_stateful(&mut sk, &mut handle, b"within budget", b"").expect("sign");
         assert_eq!(wire_leaf_count(&sig), i + 1);
-        assert!(H5::verify(&pk, b"within budget", b"", &sig));
+        assert!(H5::verify_stateful(&pk, b"within budget", b"", &sig));
     }
     let committed = journal.committed();
     assert_eq!(committed, vec![0, 1]);
@@ -725,9 +730,9 @@ fn keygen_from_the_same_seed_is_byte_identical_and_resets_the_counter() {
         1,
         "the counter reset to the first leaf"
     );
-    assert!(H5::verify(&pk, b"reissued", b"", &reissued));
+    assert!(H5::verify_stateful(&pk, b"reissued", b"", &reissued));
     assert!(
-        H5::verify(&pk, b"spent", b"", &first),
+        H5::verify_stateful(&pk, b"spent", b"", &first),
         "the original leaf-1 signature is still valid, so leaf 1 now carries two messages"
     );
 }
@@ -804,7 +809,7 @@ fn decode_rejects_an_unknown_path_selector() {
             Err(Error::BadPathSelector { selector }),
             "selector {selector:#04x} is rejected before any length is read"
         );
-        assert!(!H5::verify(
+        assert!(!H5::verify_stateful(
             &fixture.public_key,
             FIXTURE_MESSAGES[0],
             FIXTURE_CTX,
@@ -827,7 +832,7 @@ fn decode_rejects_a_short_body() {
             actual: expected - 1
         })
     );
-    assert!(!H5::verify(
+    assert!(!H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[0],
         FIXTURE_CTX,
@@ -857,7 +862,7 @@ fn decode_rejects_trailing_bytes() {
         }),
         "a signature is a fixed-length string, not a prefix of one"
     );
-    assert!(!H5::verify(
+    assert!(!H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[0],
         FIXTURE_CTX,
@@ -908,13 +913,13 @@ fn decode_rejects_a_leaf_count_above_max_signatures() {
                 + AUTH_PATH_NODE_LEN,
         })
     );
-    assert!(!H5::verify(
+    assert!(!H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[0],
         FIXTURE_CTX,
         &mutated
     ));
-    assert!(!H5::verify(
+    assert!(!H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[0],
         FIXTURE_CTX,
@@ -986,13 +991,13 @@ fn repeat_calls_differ_by_leaf_advance_which_is_not_a_canonicality_failure() {
 
     // Both are valid: the leaf is not part of the message, so nothing about
     // the advance invalidates the earlier signature.
-    assert!(H5::verify(
+    assert!(H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[0],
         FIXTURE_CTX,
         first
     ));
-    assert!(H5::verify(
+    assert!(H5::verify_stateful(
         &fixture.public_key,
         FIXTURE_MESSAGES[2],
         FIXTURE_CTX,

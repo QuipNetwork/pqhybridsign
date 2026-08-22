@@ -76,10 +76,12 @@
 //!
 //! # Verifying needs no key and no journal
 //!
-//! [`verify`], [`verify_with_stored_public_key`] and [`stored_public_key_len`]
+//! [`verify`], [`verify_stateful`], [`verify_stateless`],
+//! [`verify_with_stored_public_key_stateful`],
+//! [`verify_with_stored_public_key_stateless`] and [`stored_public_key_len`]
 //! neither receive nor return a secret key, so no journal and no
-//! durability obligation attaches to them. `verify_with_stored_public_key`
-//! checks an H5 or H6 signature against public data alone;
+//! durability obligation attaches to them. The `WithStoredPublicKey`
+//! functions check an H5 or H6 signature against public data alone;
 //! `stored_public_key_len` is a plain length accessor over public data,
 //! defined for all six suites, the same as its C and Python counterparts.
 //!
@@ -167,9 +169,12 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// [`keygenStatefulFromSeed`](keygen_stateful_from_seed),
 /// [`signStateful`](sign_stateful), [`signStateless`](sign_stateless),
 /// [`keyIdentity`](key_identity),
-/// [`keyIdentityFromSecretKey`](key_identity_from_secret_key) and
-/// [`verifyWithStoredPublicKey`](verify_with_stored_public_key). It is the
-/// counterpart of [`stateless_suite`], which rejects H5/H6, and of
+/// [`keyIdentityFromSecretKey`](key_identity_from_secret_key),
+/// [`verifyStateful`](verify_stateful), [`verifyStateless`](verify_stateless),
+/// [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful)
+/// and
+/// [`verifyWithStoredPublicKeyStateless`](verify_with_stored_public_key_stateless).
+/// It is the counterpart of [`stateless_suite`], which rejects H5/H6, and of
 /// [`any_suite`], which accepts all six for the length accessors and
 /// [`verify`].
 ///
@@ -197,7 +202,8 @@ fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// not throw for the four suites this binding's other functions actually
 /// sign and verify with. Compare [`stateless_suite`], which excludes H5/H6
 /// for a reason specific to *signing*, and [`stateful_suite`], which exists
-/// only because [`verify_with_stored_public_key`] is specific to H5/H6.
+/// only because the `WithStoredPublicKey` verify functions are specific to
+/// H5/H6.
 ///
 /// # Errors
 ///
@@ -394,8 +400,17 @@ pub fn sign_deterministic(
 /// [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returns, and no
 /// commitment is checked because there is nothing to check one against; use
 /// this only where that verify key came from a trusted place, and
-/// [`verifyWithStoredPublicKey`](verify_with_stored_public_key) -- which
-/// binds a signer-supplied bundle to a stored commitment -- otherwise.
+/// [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful)
+/// -- which binds a signer-supplied bundle to a stored commitment --
+/// otherwise.
+///
+/// For H5 and H6 this accepts only a signature produced by
+/// [`signStateful`](sign_stateful), the same behaviour
+/// [`verifyStateful`](verify_stateful) gives directly: specification section
+/// 20.2 reserves the primary stateless path for rotation and recovery, and
+/// an ordinary application message must not verify through it. Call
+/// [`verifyStateless`](verify_stateless) for a message deliberately signed
+/// on that path.
 ///
 /// Returns `false`, never throws, for a malformed `public_key` or `sig`;
 /// see [`pqhybridsign_abi::verify`] for why a verification failure is
@@ -416,9 +431,68 @@ pub fn verify(
     Ok(pqhybridsign_abi::verify(suite, public_key, msg, ctx, sig))
 }
 
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+/// `"H6"`), accepting only a signature produced by
+/// [`signStateful`](sign_stateful), against one whole verify-form
+/// `public_key`.
+///
+/// [`verify`] is the total dispatcher across all six suites and, for H5 and
+/// H6, behaves exactly as this function does; call this one directly only
+/// where the suite is already known to be H5 or H6. A signature whose wire
+/// `PathSelector` names the stateless path is refused before either
+/// component signature is checked. Call
+/// [`verifyStateless`](verify_stateless) for a message deliberately signed
+/// on the stateless path.
+///
+/// Returns `false`, never throws, for a malformed `public_key` or `sig`, on
+/// the same terms as [`verify`].
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+#[wasm_bindgen(js_name = verifyStateful)]
+pub fn verify_stateful(
+    suite: &str,
+    public_key: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, JsValue> {
+    let suite = stateful_suite(suite).map_err(js_error)?;
+    pqhybridsign_abi::verify_stateful(suite, public_key, msg, ctx, sig).map_err(js_error)
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+/// `"H6"`), accepting only a signature produced by
+/// [`signStateless`](sign_stateless), against one whole verify-form
+/// `public_key`.
+///
+/// The mirror image of [`verifyStateful`](verify_stateful). Use this for
+/// rotation and recovery authorizations, and for any other message an
+/// application has deliberately chosen to sign on the few-time stateless
+/// path.
+///
+/// # Errors
+///
+/// The same as [`verifyStateful`](verify_stateful).
+#[wasm_bindgen(js_name = verifyStateless)]
+pub fn verify_stateless(
+    suite: &str,
+    public_key: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, JsValue> {
+    let suite = stateful_suite(suite).map_err(js_error)?;
+    pqhybridsign_abi::verify_stateless(suite, public_key, msg, ctx, sig).map_err(js_error)
+}
+
 /// Stored public key length, in bytes, for `suite`: the form a verifier
-/// keeps, which is what [`verify_with_stored_public_key`] takes as
-/// `stored_public_key`.
+/// keeps, which is what
+/// [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful)
+/// and
+/// [`verifyWithStoredPublicKeyStateless`](verify_with_stored_public_key_stateless)
+/// take as `stored_public_key`.
 ///
 /// Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
 /// the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
@@ -442,8 +516,9 @@ pub fn stored_public_key_len(suite: &str) -> Result<u32, JsValue> {
 }
 
 /// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
-/// `"H6"`), against a signer-supplied verify key that must be the one
-/// `stored_public_key` commits to.
+/// `"H6"`), accepting only a signature produced by
+/// [`signStateful`](sign_stateful), against a signer-supplied verify key
+/// that must be the one `stored_public_key` commits to.
 ///
 /// This is the entry point the H5/H6 deployment is built for: the
 /// verifier stores the small form (`ClassicalPK || commitment`,
@@ -458,10 +533,15 @@ pub fn stored_public_key_len(suite: &str) -> Result<u32, JsValue> {
 /// taken from `stored_public_key`, so nothing the signer supplied can
 /// substitute a key of their own.
 ///
-/// [`verify`] is the other shape: it takes one whole verify-form public
-/// key and checks no commitment, because it has nothing to check one
-/// against. Use it only where the verify key itself came from a trusted
-/// place.
+/// [`verifyStateful`](verify_stateful) is the other shape: it takes one
+/// whole verify-form public key and checks no commitment, because it has
+/// nothing to check one against. Use it only where the verify key itself
+/// came from a trusted place.
+///
+/// A signature whose wire `PathSelector` names the stateless path is
+/// refused before either component signature is checked. Call
+/// [`verifyWithStoredPublicKeyStateless`](verify_with_stored_public_key_stateless)
+/// for a message deliberately signed on that path.
 ///
 /// Returns `false`, never throws, for a commitment that does not match, a
 /// malformed key or a malformed signature -- the same design [`verify`]
@@ -470,8 +550,8 @@ pub fn stored_public_key_len(suite: &str) -> Result<u32, JsValue> {
 /// # Errors
 ///
 /// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
-#[wasm_bindgen(js_name = verifyWithStoredPublicKey)]
-pub fn verify_with_stored_public_key(
+#[wasm_bindgen(js_name = verifyWithStoredPublicKeyStateful)]
+pub fn verify_with_stored_public_key_stateful(
     suite: &str,
     stored_public_key: &[u8],
     pq_verify_key: &[u8],
@@ -480,7 +560,43 @@ pub fn verify_with_stored_public_key(
     sig: &[u8],
 ) -> Result<bool, JsValue> {
     let suite = stateful_suite(suite).map_err(js_error)?;
-    pqhybridsign_abi::verify_with_stored_public_key(
+    pqhybridsign_abi::verify_with_stored_public_key_stateful(
+        suite,
+        stored_public_key,
+        pq_verify_key,
+        msg,
+        ctx,
+        sig,
+    )
+    .map_err(js_error)
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
+/// `"H6"`), accepting only a signature produced by
+/// [`signStateless`](sign_stateless), against a signer-supplied verify key
+/// that must be the one `stored_public_key` commits to.
+///
+/// The mirror image of
+/// [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful).
+/// Use this for rotation and recovery authorizations, and for any other
+/// message an application has deliberately chosen to sign on the few-time
+/// stateless path.
+///
+/// # Errors
+///
+/// The same as
+/// [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful).
+#[wasm_bindgen(js_name = verifyWithStoredPublicKeyStateless)]
+pub fn verify_with_stored_public_key_stateless(
+    suite: &str,
+    stored_public_key: &[u8],
+    pq_verify_key: &[u8],
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &[u8],
+) -> Result<bool, JsValue> {
+    let suite = stateful_suite(suite).map_err(js_error)?;
+    pqhybridsign_abi::verify_with_stored_public_key_stateless(
         suite,
         stored_public_key,
         pq_verify_key,

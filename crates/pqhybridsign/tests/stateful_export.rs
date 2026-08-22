@@ -157,7 +157,7 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
 
     let sig = H5::sign_stateful(&mut restored, &mut journal, b"third", b"").expect("sign");
     assert!(
-        H5::verify(&fixture.public_key, b"third", b"", &sig),
+        H5::verify_stateful(&fixture.public_key, b"third", b"", &sig),
         "the restored key signs under the original public key"
     );
     assert_eq!(journal.committed.borrow().as_slice(), &[0, 1, 2]);

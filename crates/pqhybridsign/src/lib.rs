@@ -62,9 +62,9 @@ pub mod stateful;
 #[cfg(feature = "alloc")]
 pub mod stateful_composite;
 pub mod suite;
-// Hybrid VRF for the sr25519 suites, specification section 15. Behind the
-// `vrf` feature: a signing-only build has no use for it and should not carry
-// schnorrkel's VRF code.
+// Hybrid VRF for every suite, specification section 15. Behind the `vrf`
+// feature: a signing-only build has no use for it and should not carry
+// schnorrkel's VRF code or the ed25519 ECVRF.
 #[cfg(feature = "vrf")]
 pub mod vrf;
 

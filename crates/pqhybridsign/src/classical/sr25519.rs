@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::{
+    classical::Wiped,
     component::ClassicalScheme,
     error::{Error, Result},
 };
@@ -21,28 +22,6 @@ pub struct Sr25519;
 /// which omits it; harmless either way since a fixed-length domain is
 /// always followed by an explicit 8-byte length.
 const NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/sr25519/v1\0";
-
-/// Holds a schnorrkel key so that its wipe happens on drop.
-///
-/// schnorrkel 0.11.5 implements `Drop` only for `Keypair` (`src/keys.rs`);
-/// `MiniSecretKey` and `SecretKey` derive `Zeroize` but have no destructor,
-/// so a plain local leaves its bytes in the stack frame verbatim. Both
-/// key types below are short-lived copies of real key material -- the
-/// HKDF-expanded component seed in `derive`, the full 64-byte secret on
-/// every signature in `sign_with_rng` -- and both were previously dropped
-/// unwiped.
-///
-/// A bare `zeroize()` call at the end of each function would fix today's
-/// code and quietly stop working the moment somebody adds an early return
-/// or a `?` above it. Holding the value here makes the wipe structural
-/// instead: it runs on every exit path, including a panic unwind.
-struct Wiped<T: Zeroize>(T);
-
-impl<T: Zeroize> Drop for Wiped<T> {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
 
 /// A deterministic RNG seeded from [`nonce_seed`].
 ///
@@ -260,7 +239,7 @@ mod vrf_impl {
         check_len, nonce_seed_in, SeededRng, Sr25519, Wiped, {Error, Result},
     };
     use crate::component::ClassicalScheme;
-    use crate::vrf::{ClassicalVrf, CLASSICAL_PROOF_LEN, PRE_OUTPUT_LEN};
+    use crate::vrf::{ClassicalVrf, PRE_OUTPUT_LEN};
     use merlin::Transcript;
     use schnorrkel::context::attach_rng;
     use schnorrkel::vrf::{VRFPreOut, VRFProof, KUSAMA_VRF};
@@ -283,6 +262,8 @@ mod vrf_impl {
     const EXTRA_TRANSCRIPT_LABEL: &[u8] = b"VRF";
 
     impl ClassicalVrf for Sr25519 {
+        const PROOF_LEN: usize = 64;
+
         fn vrf_evaluate(
             sk: &[u8],
             label: &'static [u8],
@@ -384,7 +365,7 @@ mod vrf_impl {
     ) -> Result<()> {
         check_len(sk, Sr25519::SECRET_KEY_LEN)?;
         check_len(pre_output_out, PRE_OUTPUT_LEN)?;
-        check_len(proof_out, CLASSICAL_PROOF_LEN)?;
+        check_len(proof_out, Sr25519::PROOF_LEN)?;
 
         // `to_keypair` consumes the `SecretKey`, and `Keypair` is the one
         // schnorrkel type with a `Drop` that wipes, so the expanded secret

@@ -91,7 +91,7 @@ fn h5_stateful_round_trip_verifies() {
 
     let sig = H5::sign_stateful(&mut sk, &mut journal, b"hello H5", b"ctx").expect("sign");
 
-    assert!(H5::verify(&pk, b"hello H5", b"ctx", &sig));
+    assert!(H5::verify_stateful(&pk, b"hello H5", b"ctx", &sig));
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn h6_stateful_round_trip_verifies() {
 
     let sig = H6::sign_stateful(&mut sk, &mut journal, b"hello H6", b"ctx").expect("sign");
 
-    assert!(H6::verify(&pk, b"hello H6", b"ctx", &sig));
+    assert!(H6::verify_stateful(&pk, b"hello H6", b"ctx", &sig));
 }
 
 // 2. Composite sizes live in `profile_conformance.rs` so they run under every
@@ -117,16 +117,16 @@ fn successive_stateful_signatures_advance_the_leaf_and_both_verify() {
 
     let first = H5::sign_stateful(&mut sk, &mut journal, b"message one", b"").expect("first sign");
     assert_eq!(*journal.committed.borrow(), vec![0]);
-    assert!(H5::verify(&pk, b"message one", b"", &first));
+    assert!(H5::verify_stateful(&pk, b"message one", b"", &first));
 
     let second =
         H5::sign_stateful(&mut sk, &mut journal, b"message two", b"").expect("second sign");
     assert_eq!(*journal.committed.borrow(), vec![0, 1]);
-    assert!(H5::verify(&pk, b"message two", b"", &second));
+    assert!(H5::verify_stateful(&pk, b"message two", b"", &second));
 
     // Leaf-consuming: the two signatures over different messages must not
     // be interchangeable.
-    assert!(!H5::verify(&pk, b"message two", b"", &first));
+    assert!(!H5::verify_stateful(&pk, b"message two", b"", &first));
 }
 
 // 4. A signature made under H5 does NOT verify under H6.
@@ -139,7 +139,7 @@ fn h5_signature_does_not_verify_under_h6() {
 
     let sig = H5::sign_stateful(&mut sk_h5, &mut journal, b"cross-suite", b"").expect("sign");
 
-    assert!(!H6::verify(&pk_h6, b"cross-suite", b"", &sig));
+    assert!(!H6::verify_stateful(&pk_h6, b"cross-suite", b"", &sig));
 }
 
 // 5. Tampering with the classical half alone fails verification; tampering
@@ -150,19 +150,29 @@ fn tampering_either_half_fails_verification() {
     let (mut sk, pk) = keygen::<H5>(&[5u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
     let sig = H5::sign_stateful(&mut sk, &mut journal, b"tamper me", b"").expect("sign");
-    assert!(H5::verify(&pk, b"tamper me", b"", &sig));
+    assert!(H5::verify_stateful(&pk, b"tamper me", b"", &sig));
 
     // Classical half: the first 64 bytes of the composite encoding
     // (specification section 6, `pqhybridsign::encoding_path`).
     let mut classical_tampered = sig.clone();
     classical_tampered[0] ^= 0x01;
-    assert!(!H5::verify(&pk, b"tamper me", b"", &classical_tampered));
+    assert!(!H5::verify_stateful(
+        &pk,
+        b"tamper me",
+        b"",
+        &classical_tampered
+    ));
 
     // SHRINCS half: anywhere past the classical signature and selector.
     let mut shrincs_tampered = sig.clone();
     let last = shrincs_tampered.len() - 1;
     shrincs_tampered[last] ^= 0x01;
-    assert!(!H5::verify(&pk, b"tamper me", b"", &shrincs_tampered));
+    assert!(!H5::verify_stateful(
+        &pk,
+        b"tamper me",
+        b"",
+        &shrincs_tampered
+    ));
 }
 
 // 6. The leaf-burning rule (every signing attempt spends its leaf, even one
@@ -190,7 +200,7 @@ fn stateless_signature_verifies_and_resigning_is_byte_identical() {
     let b = H5::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign b");
 
     assert_eq!(a, b, "resigning the same message must be byte-identical");
-    assert!(H5::verify(&pk, b"stateless message", b"ctx", &a));
+    assert!(H5::verify_stateless(&pk, b"stateless message", b"ctx", &a));
 }
 
 #[test]
@@ -200,7 +210,7 @@ fn h6_stateless_signature_verifies() {
     let sig =
         H6::sign_stateless(&sk, &mut MemoryBudget::default(), b"h6 stateless", b"").expect("sign");
 
-    assert!(H6::verify(&pk, b"h6 stateless", b"", &sig));
+    assert!(H6::verify_stateless(&pk, b"h6 stateless", b"", &sig));
 }
 
 /// An in-memory `StatelessBudgetStore`. Not durable across a process
