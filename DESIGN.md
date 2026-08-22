@@ -621,10 +621,12 @@ does not require rotation on a suite with no leaf budget. Leaf exhaustion
 forces a stateful key to hand over its authority.
 `RotationKind::StatefulGraft` grafts a fresh stateful tree onto the
 unchanged stateless-verify half. A suite with no tree has no target for
-that graft. `RotationKind::FullSwap` replaces the stateless material as
-well, and a lattice suite has no stateless half apart from its whole key.
-Swapping the whole key is what installing a new public key already does,
-a deployment step rather than a construction this library authorizes.
+that graft. `RotationKind::FullSwap` also replaces the stateless material that
+`PqStatefulScheme::stateless_key_material` exposes. A lattice suite's `Pq`
+type never implements that trait, so it has no stateless material for
+`FullSwap` to replace. It also has no commitment for `NextStoredPublicKey`
+to carry. Installing a new lattice public key is a deployment step rather
+than a construction this library authorizes.
 
 The label grammar allows an optional `-rotate` suffix on any suite. In
 code, only the eight SHRINCS suites set `rotate_label`
