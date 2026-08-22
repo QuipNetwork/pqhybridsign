@@ -15,10 +15,14 @@ stages: [check, test, validate, smoke, release, pypi, crates, notes]
 # The `when: never` clause is what keeps the cost flat rather than doubling
 # it. Once a merge request is open, the branch push stops producing its own
 # pipeline and the merge-request pipeline is the only one for that commit.
+# It is limited to push pipelines on purpose. Without that limit the clause
+# also cancels scheduled, web and API pipelines on a branch that happens to
+# have an open merge request, which would silently stop the scheduled
+# `mutants` job for as long as the merge request stays open.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"
       when: never
     - if: $CI_COMMIT_BRANCH
     - if: $CI_COMMIT_TAG
