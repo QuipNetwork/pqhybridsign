@@ -1,7 +1,7 @@
 # Mutation testing is scoped to the modules where a skipped check is the
-# dangerous failure, per DESIGN.md lines 485-491: encoding and domain
-# separation. Mutating the component wrappers instead would mostly time out
-# inside SHRINCS keygen and report nothing useful.
+# dangerous failure, per DESIGN.md line 846: encoding and domain separation.
+# Mutating the component wrappers instead would mostly time out inside
+# SHRINCS keygen and report nothing useful.
 examine_globs = [
     "crates/pqhybridsign/src/encoding_path.rs",
     "crates/pqhybridsign/src/encoding_delta.rs",
@@ -9,6 +9,11 @@ examine_globs = [
 ]
 
 # A mutant that makes a test hang must fail rather than stall the pipeline.
-# The unmutated suite runs these files' tests in well under a second.
+# The multiplier is against the unmutated baseline, which is the whole
+# `cargo test --workspace` run at roughly 57 seconds, so the effective
+# per-mutant limit is a little under five minutes. minimum_test_timeout is a
+# floor for the case where the baseline is fast enough that five times it
+# would be too tight to be meaningful; at the current baseline it does not
+# bind.
 timeout_multiplier = 5.0
 minimum_test_timeout = 60

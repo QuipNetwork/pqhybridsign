@@ -264,27 +264,38 @@ profile-matrix:
           --features "$p"
       done
 
-# DESIGN.md lines 485-491 specify mutation testing over the encoding and
+# DESIGN.md line 846 specifies mutation testing over the encoding and
 # domain-separation modules, where a skipped check is the dangerous failure.
 # Scheduled rather than per-pipeline: a full run rebuilds and retests once
 # per mutant, which is minutes, not seconds. The scope lives in
 # .cargo/mutants.toml so a local `cargo mutants` run matches this job.
 #
 # The timeout is measured, not guessed. A full run of the 160 mutants in
-# scope took 931 seconds on a 32-core workstation with a warm cargo
-# registry. Every mutant pays for its own incremental rebuild, and that
-# rebuild is what the core count buys, so a 2-core to 4-core shared runner
-# is several times slower. The job also builds cargo-mutants from source
-# first. 3h leaves room for that spread; a job that always times out
-# teaches people to ignore a red pipeline.
+# scope took 931 seconds on a developer workstation with a warm cargo
+# registry. cargo-mutants tests one mutant at a time by default, so that is
+# a serial figure: a 12.6-second baseline build, a 57.1-second baseline
+# test, then a mean 1.25-second incremental rebuild and 4.26-second test per
+# mutant. A caught mutant is cheap because cargo test stops at the first
+# failure rather than running the whole 57-second suite.
+#
+# A shared runner is slower on each of those parts, and it also pays to
+# build cargo-mutants from source before the first mutant runs, which the
+# 931 seconds does not include. That puts a plausible CI run somewhere
+# under two hours. 3h is the ceiling rather than the estimate, because a job
+# that always times out teaches people to ignore a red pipeline.
+#
+# The version is pinned. This scope and these config keys were verified
+# against 27.1.0, and a scheduled `cargo install` otherwise fetches whatever
+# crates.io returns that day, which is the same unreviewed-fetch risk the
+# cooldown job exists to stop for Cargo.lock.
 mutants:
   stage: test
   timeout: 3h
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
   script:
-    - cargo install cargo-mutants --locked
-    - cargo mutants -- --workspace
+    - cargo install cargo-mutants --locked --version 27.1.0
+    - cargo mutants -- --workspace --locked
   artifacts:
     when: always
     paths:
@@ -452,11 +463,11 @@ release:validate:
   # pipeline, not halfway through a release.
   #
   # `needs:` starts a job as soon as its own needs are met and ignores stage
-  # order, so a job left off this list is not waited for at all. Two jobs are
-  # deliberately absent: schedule-exists is allow_failure and informational,
-  # so it must never gate a release; regenerate-fixtures exists only in
-  # scheduled pipelines, and a needs: edge onto a job that is absent from
-  # the pipeline makes the whole pipeline invalid.
+  # order, so a job left off this list is not waited for at all. Three jobs
+  # are deliberately absent: schedule-exists is allow_failure and
+  # informational, so it must never gate a release; regenerate-fixtures and
+  # mutants exist only in scheduled pipelines, and a needs: edge onto a job
+  # that is absent from the pipeline makes the whole pipeline invalid.
   needs:
     - job: fmt
     - job: clippy
