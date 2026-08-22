@@ -445,6 +445,32 @@ for (const [i, suite] of STATEFUL_SUITES.entries()) {
     });
 }
 
+// A boundKey() read fault during adoption must not reach bindKey. The bridge
+// reports a throwing boundKey() to the abi as null, which reads as
+// never-bound; proceeding on that would overwrite an already-bound journal
+// and defeat the JournalKeyMismatch guard.
+check("adoptKey does not bind when boundKey throws", () => {
+    const bindCalls = [];
+    const journal = {
+        commit(_leaf) {},
+        nextLeaf() {
+            return 0;
+        },
+        boundKey() {
+            throw new Error("transient read fault");
+        },
+        bindKey(identity) {
+            bindCalls.push(identity);
+        },
+    };
+
+    assert.throws(
+        () => pqhs.adoptKey(journal, new Uint8Array(32)),
+        /transient read fault/,
+    );
+    assert.deepEqual(bindCalls, [], "bindKey must never be reached");
+});
+
 if (failures > 0) {
     console.error(`${failures} check(s) failed`);
     process.exit(1);

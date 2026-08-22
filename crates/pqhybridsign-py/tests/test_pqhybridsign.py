@@ -483,6 +483,39 @@ def test_adopt_key_rejects_an_identity_of_the_wrong_length():
     assert journal.bound_key() is None
 
 
+def test_adopt_key_does_not_bind_when_bound_key_raises():
+    """A read fault during adoption must not reach bind_key.
+
+    The bridge reports a raising bound_key() to the abi as None, which reads
+    as never-bound. If adopt_key proceeded on that, it would overwrite the
+    binding of an already-bound journal and defeat the JournalKeyMismatch
+    guard."""
+
+    class FaultyJournal:
+        def __init__(self):
+            self.bind_calls = []
+
+        def commit(self, leaf):
+            return None
+
+        def next_leaf(self):
+            return 0
+
+        def bound_key(self):
+            raise OSError("transient read fault")
+
+        def bind_key(self, identity):
+            self.bind_calls.append(identity)
+
+    journal = FaultyJournal()
+    identity = bytes(32)
+
+    with pytest.raises(OSError, match="transient read fault"):
+        phs.adopt_key(journal, identity)
+
+    assert journal.bind_calls == [], "bind_key must never be reached"
+
+
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
 def test_identity_entry_points_reject_stateless_suites(suite):
     sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))

@@ -61,7 +61,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use zeroize::Zeroize;
 
-use pqhybridsign_abi::{BudgetKey, KeyIdentity, KEY_IDENTITY_LEN};
+use pqhybridsign_abi::{BudgetKey, KeyIdentity, LeafJournal, KEY_IDENTITY_LEN};
 
 use crate::bytes_in::extract_bytes;
 use crate::errors::{to_py_err, StatefulKeyNotCloneableError};
@@ -100,7 +100,7 @@ impl<'py> PyJournal<'py> {
     }
 }
 
-impl pqhybridsign_abi::LeafJournal for PyJournal<'_> {
+impl LeafJournal for PyJournal<'_> {
     /// The Python exception is recorded on `self` and re-raised by the
     /// caller; this marker only tells the ABI layer that the commit did
     /// not happen, which maps to `AbiError::JournalFailed`.
@@ -521,6 +521,9 @@ fn key_identity_from_secret_key<'py>(
 /// nothing is written. `JournalFailedError` if `journal.bind_key` reported
 /// the write did not become durable. Any exception `journal.bound_key` or
 /// `journal.bind_key` itself raised is re-raised unchanged.
+///
+/// A `journal.bound_key` that raises prevents `bind_key` from being called
+/// at all, so a read fault can never replace an existing binding.
 #[pyfunction]
 fn adopt_key(
     py: Python<'_>,
@@ -531,6 +534,16 @@ fn adopt_key(
     let bytes = <[u8; KEY_IDENTITY_LEN]>::try_from(&identity[..])
         .map_err(|_| to_py_err(pqhybridsign_abi::AbiError::BadLength))?;
     let mut journal = PyJournal::new(journal.clone());
+    // Read the binding once, and surface a read fault, before anything can
+    // write. The bridge reports a raising `bound_key` to the abi as `None`,
+    // which the abi reads as never-bound: it would call `bind_key` and only
+    // then let the deferred exception surface. Against an already-bound
+    // journal whose `bind_key` is not write-once, that silently replaces the
+    // binding, which is what the JournalKeyMismatch guard exists to prevent.
+    let _ = journal.bound_key();
+    if let Some(err) = journal.take_error() {
+        return Err(err);
+    }
     let outcome = pqhybridsign_abi::adopt_key(&mut journal, KeyIdentity::from_bytes(bytes));
     if let Some(err) = journal.take_error() {
         return Err(err);

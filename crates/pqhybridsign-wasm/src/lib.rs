@@ -992,11 +992,24 @@ pub fn key_identity_from_secret_key(
 /// belongs to another key (the abi's `JournalKeyMismatch`), or if `bindKey`
 /// could not durably record the binding. Any exception a journal method
 /// itself threw is re-thrown unchanged.
+///
+/// A `boundKey()` that throws prevents `bindKey` from being called at all,
+/// so a read fault can never replace an existing binding.
 #[wasm_bindgen(js_name = adoptKey)]
 pub fn adopt_key(journal: &JsValue, identity: &[u8]) -> Result<(), JsValue> {
     let bytes = <[u8; KEY_IDENTITY_LEN]>::try_from(identity)
         .map_err(|_| js_error(pqhybridsign_abi::AbiError::BadLength))?;
     let mut journal = JsJournal::new(journal);
+    // Read the binding once, and surface a read fault, before anything can
+    // write. The bridge reports a throwing `boundKey` to the abi as `None`,
+    // which the abi reads as never-bound: it would call `bindKey` and only
+    // then let the deferred exception surface. Against an already-bound
+    // journal whose `bindKey` is not write-once, that silently replaces the
+    // binding, which is what the JournalKeyMismatch guard exists to prevent.
+    let _ = journal.bound_key();
+    if let Some(err) = journal.take_error() {
+        return Err(err);
+    }
     let result = pqhybridsign_abi::adopt_key(&mut journal, KeyIdentity::from_bytes(bytes));
     if let Some(err) = journal.take_error() {
         return Err(err);
