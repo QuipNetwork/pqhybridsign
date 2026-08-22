@@ -24,6 +24,25 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking, and a silent one.** Verification of the stateful suites now
+  requires the caller to name a path, the way signing already did. The
+  composite `verify` is gone, replaced by `verify_stateful` and
+  `verify_stateless`, each refusing a signature that carries the other path's
+  selector before either component signature is checked. The old call decoded
+  the wire `PathSelector` byte and dispatched on it, so the signature chose
+  its own verification path. Specification section 20.2 requires the opposite:
+  the stateless key is reserved for rotation and recovery and must not be
+  accepted for ordinary application messages.
+
+  The part to watch is the entry point whose name and signature did not
+  change. `verify` in the abi, `pqhs_verify` in C, and their Python and
+  WebAssembly mirrors stay total over all six suites, but for H5 and H6 they
+  now accept the stateful path only. A stateless-signed message that used to
+  verify through them returns `false` with no error to distinguish it from a
+  bad signature. Call `verify_stateless` for that case.
+  `verify_with_stored_public_key` is replaced outright by
+  `verify_with_stored_public_key_stateful` and `_stateless`.
+
 - **Breaking.** `vrf::HEADER_LEN` and `vrf::CLASSICAL_PROOF_LEN`, both public
   in rc4, are removed. The two classical components do not share a proof
   width: schnorrkel's DLEQ proof is 64 bytes and the ed25519 ECVRF's `c || s`
