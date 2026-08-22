@@ -12,10 +12,14 @@ stages: [check, test, validate, smoke, release, pypi, crates, notes]
 # merge-request pipelines is what `.everywhere` (below) is for: every job
 # that should run in every pipeline shape extends it.
 #
-# Before `.everywhere` existed, the merge-request pipeline for MR !2 was
-# already created: the workflow rule below already admitted it. But the
-# only job that reached it was schedule-exists (its last rule is
-# `when: always`); every other job declared no rules and so was excluded.
+# Before `.everywhere` existed, and before this `workflow:` block existed,
+# the merge-request pipeline for MR !2 was still created: with no workflow
+# block at all, GitLab did not restrict which sources produced a pipeline.
+# schedule-exists already carried its own `rules:` ending in `when: always`,
+# which matches unconditionally, including a merge-request source, so that
+# one job being configured to run everywhere is what put it into the
+# merge-request pipeline. Every other job declared no rules and so was
+# excluded.
 # The merge widget showed a green pipeline that had compiled nothing, and
 # the merge gate was vacuous. That already landed one bad merge: MR !2
 # passed while its own branch pipeline failed, and main went red until
@@ -411,7 +415,8 @@ regenerate-fixtures:
       # of silent.
       for p in profile-256s profile-256s-sha2 profile-128s-q18 profile-128s-q20; do
         out=$(cargo test --locked -p pqhybridsign --release --no-default-features \
-          --features "$p" --test generate_fixtures -- --ignored --nocapture 2>&1)
+          --features "$p" --test generate_fixtures -- --ignored --nocapture 2>&1) \
+          || { printf '%s\n' "$out"; exit 1; }
         echo "$out"
         wrote=$(printf '%s\n' "$out" | grep -c '^wrote ' || true)
         if [ "$wrote" -ne 1 ]; then
@@ -424,7 +429,8 @@ regenerate-fixtures:
       # builds against one SHRINCS profile, so unlike the loop above there is
       # one file to regenerate, and it records which profile made it.
       out=$(cargo test --locked -p pqhybridsign-wasm --release \
-        --test generate_verify_with_stored_public_key_fixture -- --ignored --nocapture 2>&1)
+        --test generate_verify_with_stored_public_key_fixture -- --ignored --nocapture 2>&1) \
+        || { printf '%s\n' "$out"; exit 1; }
       echo "$out"
       wrote=$(printf '%s\n' "$out" | grep -c '^wrote ' || true)
       if [ "$wrote" -ne 1 ]; then
