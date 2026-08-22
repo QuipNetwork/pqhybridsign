@@ -103,7 +103,10 @@ const VRF_STATELESS_INFO_PREFIX: &[u8] = b"vrf-stateless/";
 /// # What this is for
 ///
 /// H5 and H6 bind their hybrid VRF through the SHRINCS **stateless** path
-/// ([`crate::vrf::sign_stateless`]), which spends the same few-time budget
+/// (`vrf::sign_stateless`, behind the `vrf` feature -- named here rather
+/// than linked because this module compiles whether or not that feature is
+/// on, and rustdoc cannot resolve a link into a module that is not there),
+/// which spends the same few-time budget
 /// that key's rotation and recovery authorizations draw on
 /// ([`crate::rotation::sign_rotation`]). Specification section 21 forbids
 /// sharing that budget between ordinary signing and rotation/recovery, so a
@@ -133,14 +136,16 @@ const VRF_STATELESS_INFO_PREFIX: &[u8] = b"vrf-stateless/";
 /// # Not a second allowance
 ///
 /// The derived seed's key is bound by exactly the same few-time budget as
-/// any other stateless key for this suite ([`2^20`, or `2^18` under
-/// `profile-128s-q18`]). That bound follows from the profile's FORS-C
+/// any other stateless key for this suite (`2^20`, or `2^18` under
+/// `profile-128s-q18`). That bound follows from the profile's FORS-C
 /// parameters, not from what the key is used for, so a dedicated key is not
 /// a way to sign more; it is a way to stop one key's ordinary VRF use from
 /// spending another key's rotation reserve.
 ///
 /// # Errors
 ///
+/// [`Error::OutputBufferTooSmall`] if `label` is long enough that the info
+/// string overruns `MAX_INFO`, which no registry label comes close to doing.
 /// [`Error::ComponentFailure`] if HKDF expansion fails, which does not
 /// happen for any fixed-length output this crate requests.
 pub fn derive_stateless_vrf_seed(master: &[u8; 32], label: &[u8]) -> Result<[u8; 32]> {

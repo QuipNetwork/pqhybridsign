@@ -946,9 +946,15 @@ mod stateless {
     /// spends the exact reserve that key's own rotation and recovery
     /// authorizations need, which specification section 21 forbids. This
     /// function derives a key with none of that identity key's material in
-    /// common: its own classical secret, from `vrf-stateless/` rather than
-    /// `classical/`, and its own SHRINCS commitment, from the same prefix
-    /// rather than `pq/`.
+    /// common. The separation happens one level above the component seeds,
+    /// not at them: `master` is first expanded under `vrf-stateless/<label>`
+    /// into an intermediate master seed, and that intermediate seed then
+    /// goes through the ordinary [`crate::stateful_composite::keygen`], which
+    /// applies the usual `classical/<label>` and `pq/<label>` expansions to
+    /// it. Both keys therefore use the same two component-info strings; what
+    /// differs is the master seed underneath them, which is what makes the
+    /// classical secret and the SHRINCS commitment independent of the
+    /// identity key's.
     ///
     /// # Opt-in, and that is the point
     ///
