@@ -91,12 +91,39 @@
 //! [`pqhybridsign_abi::AbiError`] message. Nothing here returns an
 //! integer error code or a Rust `Result` to JavaScript.
 //!
-//! # No panics
+//! # Panics and instance loss
 //!
-//! `#![forbid(unsafe_code)]` and no `unwrap`/`expect` outside
-//! `#[cfg(test)]`: a panic unwinding across the WebAssembly boundary is
-//! undefined behaviour, and every export here is written to be called
-//! from JavaScript.
+//! This module is built for `wasm32-unknown-unknown`, whose standard library
+//! uses `panic = "abort"`. A panic there compiles to an `unreachable`
+//! instruction and traps the WebAssembly instance rather than raising a
+//! catchable JavaScript exception. `catch_unwind` cannot contain a panic on
+//! this target -- confirmed directly against the `wasm-bindgen` build this
+//! crate ships, not only against a bare `cdylib` -- so this crate does not
+//! attempt it: the C ABI's per-entry-point guard has no equivalent here.
+//!
+//! Every export in this module has been audited for a panic reachable from
+//! caller-controlled input, and none was found: `#![forbid(unsafe_code)]`
+//! and no `unwrap`/`expect` outside `#[cfg(test)]`; every suite name and
+//! length is validated and reported as a thrown `Error` rather than indexed
+//! or unwrapped; and every buffer this crate slices with a length read back
+//! from elsewhere -- most prominently the signature buffers [`sign`],
+//! [`sign_deterministic`], [`sign_stateful`] and [`sign_stateless`] return --
+//! is bounds-checked inside `pqhybridsign-abi` before that length is ever
+//! used to slice. Ordinary misuse -- a wrong-length key, an unknown suite
+//! name, a malformed signature -- returns an error and leaves the instance
+//! usable; a panic here would indicate a defect in this crate rather than
+//! bad input.
+//!
+//! A trap skips Rust's normal unwind cleanup, so a host cannot assume the
+//! instance's internal state is sound afterward. This crate holds no state
+//! of its own across calls -- every export is a plain function over its
+//! arguments, with no `static` or thread-local data -- so a trap here
+//! cannot leave a lock or a half-built value behind for a later call to
+//! observe. That is a property of this crate, not a guarantee the
+//! `wasm32-unknown-unknown` target itself makes about the surrounding
+//! instance, so a host that must survive a panic here should still
+//! instantiate the module in a context it can discard and recreate, such as
+//! a dedicated worker, rather than rely on the instance remaining usable.
 //!
 //! # Secret key handling
 //!
