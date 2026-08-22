@@ -785,8 +785,9 @@ mod stateless {
         header_len::<S::Classical>() + <S::Pq as PqStatefulScheme>::STATELESS_SIG_LEN
     }
 
-    /// A stateless key dedicated to VRF evaluation, disjoint from the key
-    /// that carries an identity's rotation and recovery authority.
+    /// A stateless key its holder asserts is dedicated to VRF evaluation,
+    /// separate from the key that carries an identity's rotation and
+    /// recovery authority.
     ///
     /// [`sign_stateless`] takes this rather than a bare
     /// [`SecretKey`](stateful_composite::SecretKey) so that handing it the
