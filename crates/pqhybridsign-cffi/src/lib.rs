@@ -66,6 +66,7 @@ pub use sizes::{
 };
 pub use stateful::{
     pqhs_adopt_key, pqhs_key_identity, pqhs_key_identity_from_secret_key, pqhs_sign_stateful,
-    pqhs_sign_stateless, pqhs_verify_with_stored_public_key, PqhsLeafJournal, PqhsStatelessBudget,
-    PQHS_BUDGET_KEY_LEN, PQHS_KEY_IDENTITY_LEN,
+    pqhs_sign_stateless, pqhs_verify_stateful, pqhs_verify_stateless,
+    pqhs_verify_with_stored_public_key_stateful, pqhs_verify_with_stored_public_key_stateless,
+    PqhsLeafJournal, PqhsStatelessBudget, PQHS_BUDGET_KEY_LEN, PQHS_KEY_IDENTITY_LEN,
 };

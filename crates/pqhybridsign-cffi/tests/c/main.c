@@ -294,7 +294,7 @@ static int check_h5(void) {
     failures += expect_rc("h5 verify call", rc, PQHS_OK);
     failures += expect_true("h5 stateful signature verified", valid);
 
-    /* pqhs_stored_public_key_len and pqhs_verify_with_stored_public_key,
+    /* pqhs_stored_public_key_len and pqhs_verify_with_stored_public_key_stateful,
      * against the same key and signature check_h5 already built: `pk` is
      * `ClassicalPK || PqVerifyKey` (see pqhs_public_key_len); the stored
      * form is `ClassicalPK || commitment`, where the 32-byte commitment
@@ -321,11 +321,20 @@ static int check_h5(void) {
     const uint8_t *bundle = pk + classical_len;
 
     bool stored_valid = false;
-    rc = pqhs_verify_with_stored_public_key(5, stored, stored_len, bundle, bundle_len, msg,
-                                             sizeof(msg), NULL, 0, sig, sig_len, &stored_valid);
-    failures += expect_rc("h5 verify_with_stored_public_key call", rc, PQHS_OK);
+    rc = pqhs_verify_with_stored_public_key_stateful(5, stored, stored_len, bundle, bundle_len, msg,
+                                                      sizeof(msg), NULL, 0, sig, sig_len,
+                                                      &stored_valid);
+    failures += expect_rc("h5 verify_with_stored_public_key_stateful call", rc, PQHS_OK);
     failures += expect_true("h5 stateful signature verified against its stored form",
                             stored_valid);
+
+    bool stored_valid_wrong_path = true;
+    rc = pqhs_verify_with_stored_public_key_stateless(5, stored, stored_len, bundle, bundle_len,
+                                                       msg, sizeof(msg), NULL, 0, sig, sig_len,
+                                                       &stored_valid_wrong_path);
+    failures += expect_rc("h5 verify_with_stored_public_key_stateless call", rc, PQHS_OK);
+    failures += expect_true("the stateless entry point refuses a stateful-path signature",
+                            !stored_valid_wrong_path);
     free(stored);
 
 done:

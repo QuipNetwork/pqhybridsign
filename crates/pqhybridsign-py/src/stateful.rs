@@ -701,8 +701,8 @@ fn load_stateful_secret_key(
 }
 
 /// The stored public key length for `suite`, in bytes: the form a verifier
-/// keeps, which is what `verify_with_stored_public_key` takes as
-/// `stored_public_key`.
+/// keeps, which is what `verify_with_stored_public_key_stateful` and
+/// `verify_with_stored_public_key_stateless` take as `stored_public_key`.
 ///
 /// For H5 and H6 this is the classical public key and a 32-byte commitment
 /// to the post-quantum verify key, smaller than the verify-form length
@@ -715,9 +715,69 @@ fn stored_public_key_len(suite: PySuite) -> usize {
     pqhybridsign_abi::stored_public_key_len(suite.into())
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
-/// signer-supplied verify key that must be the one `stored_public_key`
-/// commits to.
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by `sign_stateful`, against one whole
+/// verify-form public key `pk`.
+///
+/// `verify` is the total dispatcher across all six suites and, for H5 and
+/// H6, behaves exactly as this function does; call this one directly only
+/// where the suite is already known to be H5 or H6. A signature whose wire
+/// `PathSelector` names the stateless path is refused before either
+/// component signature is checked. Call `verify_stateless` for a message
+/// deliberately signed on that path.
+///
+/// Returns `False`, never raises, for a malformed `pk` or `sig`, on the
+/// same terms as `verify`.
+///
+/// # Errors
+///
+/// `WrongEntryPointForSuiteError` for H1 through H4; use `verify` instead.
+#[pyfunction]
+fn verify_stateful(
+    py: Python<'_>,
+    suite: PySuite,
+    pk: &Bound<'_, PyAny>,
+    msg: &Bound<'_, PyAny>,
+    ctx: &Bound<'_, PyAny>,
+    sig: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let pk = extract_bytes(py, pk)?;
+    let msg = extract_bytes(py, msg)?;
+    let ctx = extract_bytes(py, ctx)?;
+    let sig = extract_bytes(py, sig)?;
+    pqhybridsign_abi::verify_stateful(suite.into(), &pk, &msg, &ctx, &sig).map_err(to_py_err)
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by `sign_stateless`, against one whole
+/// verify-form public key `pk`.
+///
+/// The mirror image of `verify_stateful`. Use this for rotation and
+/// recovery authorizations, and for any other message an application has
+/// deliberately chosen to sign on the few-time stateless path.
+///
+/// # Errors
+///
+/// The same as `verify_stateful`.
+#[pyfunction]
+fn verify_stateless(
+    py: Python<'_>,
+    suite: PySuite,
+    pk: &Bound<'_, PyAny>,
+    msg: &Bound<'_, PyAny>,
+    ctx: &Bound<'_, PyAny>,
+    sig: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let pk = extract_bytes(py, pk)?;
+    let msg = extract_bytes(py, msg)?;
+    let ctx = extract_bytes(py, ctx)?;
+    let sig = extract_bytes(py, sig)?;
+    pqhybridsign_abi::verify_stateless(suite.into(), &pk, &msg, &ctx, &sig).map_err(to_py_err)
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by `sign_stateful`, against a signer-supplied
+/// verify key that must be the one `stored_public_key` commits to.
 ///
 /// This is the entry point the H5/H6 deployment is built for: the verifier
 /// stores the small form (`ClassicalPK || commitment`,
@@ -731,9 +791,15 @@ fn stored_public_key_len(suite: PySuite) -> usize {
 /// taken from `stored_public_key`, so nothing the signer supplied can
 /// substitute a key of their own.
 ///
-/// `verify` is the other shape: it takes one whole verify-form public key
-/// and checks no commitment, because it has nothing to check one against.
-/// Use it only where the verify key itself came from a trusted place.
+/// `verify_stateful` is the other shape: it takes one whole verify-form
+/// public key and checks no commitment, because it has nothing to check one
+/// against. Use it only where the verify key itself came from a trusted
+/// place.
+///
+/// A signature whose wire `PathSelector` names the stateless path is
+/// refused before either component signature is checked. A caller that
+/// genuinely needs to accept a stateless-path signature under a stored
+/// commitment calls `verify_with_stored_public_key_stateless` instead.
 ///
 /// Returns `False`, never raises, for a commitment that does not match, a
 /// malformed key or a malformed signature -- the same design `verify`
@@ -745,7 +811,7 @@ fn stored_public_key_len(suite: PySuite) -> usize {
 /// single form with no commitment in it, so there is nothing for this
 /// entry point to bind; use `verify`.
 #[pyfunction]
-fn verify_with_stored_public_key(
+fn verify_with_stored_public_key_stateful(
     py: Python<'_>,
     suite: PySuite,
     stored_public_key: &Bound<'_, PyAny>,
@@ -759,7 +825,45 @@ fn verify_with_stored_public_key(
     let msg = extract_bytes(py, msg)?;
     let ctx = extract_bytes(py, ctx)?;
     let sig = extract_bytes(py, sig)?;
-    pqhybridsign_abi::verify_with_stored_public_key(
+    pqhybridsign_abi::verify_with_stored_public_key_stateful(
+        suite.into(),
+        &stored_public_key,
+        &pq_verify_key,
+        &msg,
+        &ctx,
+        &sig,
+    )
+    .map_err(to_py_err)
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by `sign_stateless`, against a signer-supplied
+/// verify key that must be the one `stored_public_key` commits to.
+///
+/// The mirror image of `verify_with_stored_public_key_stateful`. Use this
+/// for rotation and recovery authorizations, and for any other message an
+/// application has deliberately chosen to sign on the few-time stateless
+/// path.
+///
+/// # Errors
+///
+/// The same as `verify_with_stored_public_key_stateful`.
+#[pyfunction]
+fn verify_with_stored_public_key_stateless(
+    py: Python<'_>,
+    suite: PySuite,
+    stored_public_key: &Bound<'_, PyAny>,
+    pq_verify_key: &Bound<'_, PyAny>,
+    msg: &Bound<'_, PyAny>,
+    ctx: &Bound<'_, PyAny>,
+    sig: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    let stored_public_key = extract_bytes(py, stored_public_key)?;
+    let pq_verify_key = extract_bytes(py, pq_verify_key)?;
+    let msg = extract_bytes(py, msg)?;
+    let ctx = extract_bytes(py, ctx)?;
+    let sig = extract_bytes(py, sig)?;
+    pqhybridsign_abi::verify_with_stored_public_key_stateless(
         suite.into(),
         &stored_public_key,
         &pq_verify_key,
@@ -778,6 +882,12 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(key_identity_from_secret_key, m)?)?;
     m.add_function(wrap_pyfunction!(adopt_key, m)?)?;
     m.add_function(wrap_pyfunction!(stored_public_key_len, m)?)?;
-    m.add_function(wrap_pyfunction!(verify_with_stored_public_key, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_stateful, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_stateless, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_with_stored_public_key_stateful, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        verify_with_stored_public_key_stateless,
+        m
+    )?)?;
     Ok(())
 }

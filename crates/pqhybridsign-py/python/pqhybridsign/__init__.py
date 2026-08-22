@@ -42,7 +42,10 @@ from pqhybridsign._pqhybridsign import (
     sign_deterministic,
     stored_public_key_len,
     verify,
-    verify_with_stored_public_key,
+    verify_stateful,
+    verify_stateless,
+    verify_with_stored_public_key_stateful,
+    verify_with_stored_public_key_stateless,
 )
 
 __all__ = [
@@ -80,5 +83,8 @@ __all__ = [
     "sign_deterministic",
     "stored_public_key_len",
     "verify",
-    "verify_with_stored_public_key",
+    "verify_stateful",
+    "verify_stateless",
+    "verify_with_stored_public_key_stateful",
+    "verify_with_stored_public_key_stateless",
 ]

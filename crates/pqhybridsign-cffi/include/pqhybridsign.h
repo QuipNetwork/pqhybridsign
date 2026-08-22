@@ -754,8 +754,10 @@ int pqhs_signature_len(uint8_t suite, size_t *out);
 /**
  * Write the stored public key length for `suite`, in bytes, into `*out`:
  * the form a verifier keeps, which is what
- * [`pqhs_verify_with_stored_public_key`](crate::pqhs_verify_with_stored_public_key)
- * takes as `stored_public_key`.
+ * [`pqhs_verify_with_stored_public_key_stateful`](crate::pqhs_verify_with_stored_public_key_stateful)
+ * and
+ * [`pqhs_verify_with_stored_public_key_stateless`](crate::pqhs_verify_with_stored_public_key_stateless)
+ * take as `stored_public_key`.
  *
  * Total over `1..=6`. For H5 and H6 this is the classical public key and a
  * 32-byte commitment to the post-quantum verify key, smaller than
@@ -773,7 +775,8 @@ int pqhs_signature_len(uint8_t suite, size_t *out);
  *
  * `out`, if non-null, must be a valid, writable `usize` pointer.
  */
-int pqhs_stored_public_key_len(uint8_t suite, size_t *out);
+int pqhs_stored_public_key_len(uint8_t suite,
+                               size_t *out);
 
 /**
  * Bind `journal` to the key `key` names, unless it already belongs to a
@@ -1006,7 +1009,84 @@ int pqhs_sign_stateless(uint8_t suite,
                         size_t *sig_written);
 
 /**
- * Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
+ * Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+ * only a signature produced by [`pqhs_sign_stateful`], against one whole
+ * verify-form public key `pk`.
+ *
+ * [`pqhs_verify`](crate::sign::pqhs_verify) is the total dispatcher across
+ * all six suites and, for H5 and H6, behaves exactly as this function
+ * does; call this one directly only where the suite is already known to be
+ * H5 or H6. Specification section 20.2 requires the behaviour both
+ * enforce: the primary stateless path is reserved for rotation and
+ * recovery, and a verifier for an ordinary application message MUST NOT
+ * accept it. The wire `PathSelector` is checked, and a signature naming
+ * the stateless path is refused, before either component signature is
+ * checked. A caller that genuinely needs to verify a stateless-path H5 or
+ * H6 signature calls [`pqhs_verify_stateless`] instead.
+ *
+ * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
+ * cases, on the same terms as [`pqhs_verify`](crate::sign::pqhs_verify).
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4; use
+ * [`pqhs_verify`](crate::sign::pqhs_verify) instead.
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+ * null, or if `valid_out` is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `pk`/`msg`/`ctx`/`sig`, a write for `valid_out`) for
+ * exactly its paired length in bytes, and must not be aliased by another
+ * live pointer for the duration of this call. A null pointer is only
+ * valid when its paired length is `0`; `valid_out` has no paired length
+ * and must be a valid, non-null, writable `bool` pointer.
+ */
+int pqhs_verify_stateful(uint8_t suite,
+                         const uint8_t *pk,
+                         size_t pk_len,
+                         const uint8_t *msg,
+                         size_t msg_len,
+                         const uint8_t *ctx,
+                         size_t ctx_len,
+                         const uint8_t *sig,
+                         size_t sig_len,
+                         bool *valid_out);
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+ * only a signature produced by [`pqhs_sign_stateless`], against one whole
+ * verify-form public key `pk`.
+ *
+ * The mirror image of [`pqhs_verify_stateful`]. Use this for rotation and
+ * recovery authorizations, and for any other message an application has
+ * deliberately chosen to sign on the few-time stateless path rather than
+ * by spending a leaf.
+ *
+ * # Errors
+ *
+ * The same as [`pqhs_verify_stateful`].
+ *
+ * # Safety
+ *
+ * The same as [`pqhs_verify_stateful`].
+ */
+int pqhs_verify_stateless(uint8_t suite,
+                          const uint8_t *pk,
+                          size_t pk_len,
+                          const uint8_t *msg,
+                          size_t msg_len,
+                          const uint8_t *ctx,
+                          size_t ctx_len,
+                          const uint8_t *sig,
+                          size_t sig_len,
+                          bool *valid_out);
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+ * only a signature produced by [`pqhs_sign_stateful`], against a
  * signer-supplied verify key that must be the one `stored_public_key`
  * commits to.
  *
@@ -1021,10 +1101,11 @@ int pqhs_sign_stateless(uint8_t suite,
  * verified, and the classical public key is taken from `stored_public_key`,
  * so nothing the signer supplied can substitute a key of their own.
  *
- * [`pqhs_verify`](crate::pqhs_verify) is the other shape: it takes one
- * whole verify-form public key and checks no commitment, because it has
- * nothing to check one against. Use it only where the verify key itself
- * came from a trusted place.
+ * A signature whose wire `PathSelector` names the stateless path is
+ * refused before either component signature is checked, on the same terms
+ * [`pqhs_verify_stateful`] enforces. A caller that genuinely needs to
+ * accept a stateless-path signature under a stored commitment calls
+ * [`pqhs_verify_with_stored_public_key_stateless`] instead.
  *
  * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
  * cases: a commitment that does not match, a malformed key or a malformed
@@ -1051,18 +1132,50 @@ int pqhs_sign_stateless(uint8_t suite,
  * has no paired length and must be a valid, non-null, writable `bool`
  * pointer.
  */
-int pqhs_verify_with_stored_public_key(uint8_t suite,
-                                       const uint8_t *stored_public_key,
-                                       size_t stored_public_key_len,
-                                       const uint8_t *pq_verify_key,
-                                       size_t pq_verify_key_len,
-                                       const uint8_t *msg,
-                                       size_t msg_len,
-                                       const uint8_t *ctx,
-                                       size_t ctx_len,
-                                       const uint8_t *sig,
-                                       size_t sig_len,
-                                       bool *valid_out);
+int pqhs_verify_with_stored_public_key_stateful(uint8_t suite,
+                                                const uint8_t *stored_public_key,
+                                                size_t stored_public_key_len,
+                                                const uint8_t *pq_verify_key,
+                                                size_t pq_verify_key_len,
+                                                const uint8_t *msg,
+                                                size_t msg_len,
+                                                const uint8_t *ctx,
+                                                size_t ctx_len,
+                                                const uint8_t *sig,
+                                                size_t sig_len,
+                                                bool *valid_out);
+
+/**
+ * Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+ * only a signature produced by [`pqhs_sign_stateless`], against a
+ * signer-supplied verify key that must be the one `stored_public_key`
+ * commits to.
+ *
+ * The mirror image of [`pqhs_verify_with_stored_public_key_stateful`]. Use
+ * this for rotation and recovery authorizations, and for any other message
+ * an application has deliberately chosen to sign on the few-time stateless
+ * path.
+ *
+ * # Errors
+ *
+ * The same as [`pqhs_verify_with_stored_public_key_stateful`].
+ *
+ * # Safety
+ *
+ * The same as [`pqhs_verify_with_stored_public_key_stateful`].
+ */
+int pqhs_verify_with_stored_public_key_stateless(uint8_t suite,
+                                                 const uint8_t *stored_public_key,
+                                                 size_t stored_public_key_len,
+                                                 const uint8_t *pq_verify_key,
+                                                 size_t pq_verify_key_len,
+                                                 const uint8_t *msg,
+                                                 size_t msg_len,
+                                                 const uint8_t *ctx,
+                                                 size_t ctx_len,
+                                                 const uint8_t *sig,
+                                                 size_t sig_len,
+                                                 bool *valid_out);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -739,7 +739,158 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
     })
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, against a
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`pqhs_sign_stateful`], against one whole
+/// verify-form public key `pk`.
+///
+/// [`pqhs_verify`](crate::sign::pqhs_verify) is the total dispatcher across
+/// all six suites and, for H5 and H6, behaves exactly as this function
+/// does; call this one directly only where the suite is already known to be
+/// H5 or H6. Specification section 20.2 requires the behaviour both
+/// enforce: the primary stateless path is reserved for rotation and
+/// recovery, and a verifier for an ordinary application message MUST NOT
+/// accept it. The wire `PathSelector` is checked, and a signature naming
+/// the stateless path is refused, before either component signature is
+/// checked. A caller that genuinely needs to verify a stateless-path H5 or
+/// H6 signature calls [`pqhs_verify_stateless`] instead.
+///
+/// Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
+/// cases, on the same terms as [`pqhs_verify`](crate::sign::pqhs_verify).
+///
+/// # Errors
+///
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4; use
+/// [`pqhs_verify`](crate::sign::pqhs_verify) instead.
+/// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+/// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+/// null, or if `valid_out` is null.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `pk`/`msg`/`ctx`/`sig`, a write for `valid_out`) for
+/// exactly its paired length in bytes, and must not be aliased by another
+/// live pointer for the duration of this call. A null pointer is only
+/// valid when its paired length is `0`; `valid_out` has no paired length
+/// and must be a valid, non-null, writable `bool` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_verify_stateful(
+    suite: u8,
+    pk: *const u8,
+    pk_len: usize,
+    msg: *const u8,
+    msg_len: usize,
+    ctx: *const u8,
+    ctx_len: usize,
+    sig: *const u8,
+    sig_len: usize,
+    valid_out: *mut bool,
+) -> c_int {
+    guard(move || {
+        if valid_out.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if let Err(e) = unsafe { write_out(valid_out, false) } {
+            return e;
+        }
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let pk = match unsafe { borrow_slice(pk, pk_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let msg = match unsafe { borrow_slice(msg, msg_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let ctx = match unsafe { borrow_slice(ctx, ctx_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sig = match unsafe { borrow_slice(sig, sig_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        match pqhybridsign_abi::verify_stateful(suite, pk, msg, ctx, sig) {
+            Ok(valid) => match unsafe { write_out(valid_out, valid) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`pqhs_sign_stateless`], against one whole
+/// verify-form public key `pk`.
+///
+/// The mirror image of [`pqhs_verify_stateful`]. Use this for rotation and
+/// recovery authorizations, and for any other message an application has
+/// deliberately chosen to sign on the few-time stateless path rather than
+/// by spending a leaf.
+///
+/// # Errors
+///
+/// The same as [`pqhs_verify_stateful`].
+///
+/// # Safety
+///
+/// The same as [`pqhs_verify_stateful`].
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_verify_stateless(
+    suite: u8,
+    pk: *const u8,
+    pk_len: usize,
+    msg: *const u8,
+    msg_len: usize,
+    ctx: *const u8,
+    ctx_len: usize,
+    sig: *const u8,
+    sig_len: usize,
+    valid_out: *mut bool,
+) -> c_int {
+    guard(move || {
+        if valid_out.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if let Err(e) = unsafe { write_out(valid_out, false) } {
+            return e;
+        }
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let pk = match unsafe { borrow_slice(pk, pk_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let msg = match unsafe { borrow_slice(msg, msg_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let ctx = match unsafe { borrow_slice(ctx, ctx_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sig = match unsafe { borrow_slice(sig, sig_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        match pqhybridsign_abi::verify_stateless(suite, pk, msg, ctx, sig) {
+            Ok(valid) => match unsafe { write_out(valid_out, valid) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`pqhs_sign_stateful`], against a
 /// signer-supplied verify key that must be the one `stored_public_key`
 /// commits to.
 ///
@@ -754,10 +905,11 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
 /// verified, and the classical public key is taken from `stored_public_key`,
 /// so nothing the signer supplied can substitute a key of their own.
 ///
-/// [`pqhs_verify`](crate::pqhs_verify) is the other shape: it takes one
-/// whole verify-form public key and checks no commitment, because it has
-/// nothing to check one against. Use it only where the verify key itself
-/// came from a trusted place.
+/// A signature whose wire `PathSelector` names the stateless path is
+/// refused before either component signature is checked, on the same terms
+/// [`pqhs_verify_stateful`] enforces. A caller that genuinely needs to
+/// accept a stateless-path signature under a stored commitment calls
+/// [`pqhs_verify_with_stored_public_key_stateless`] instead.
 ///
 /// Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
 /// cases: a commitment that does not match, a malformed key or a malformed
@@ -784,7 +936,7 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
 /// has no paired length and must be a valid, non-null, writable `bool`
 /// pointer.
 #[no_mangle]
-pub unsafe extern "C" fn pqhs_verify_with_stored_public_key(
+pub unsafe extern "C" fn pqhs_verify_with_stored_public_key_stateful(
     suite: u8,
     stored_public_key: *const u8,
     stored_public_key_len: usize,
@@ -832,7 +984,88 @@ pub unsafe extern "C" fn pqhs_verify_with_stored_public_key(
             Ok(s) => s,
             Err(e) => return e,
         };
-        match pqhybridsign_abi::verify_with_stored_public_key(
+        match pqhybridsign_abi::verify_with_stored_public_key_stateful(
+            suite,
+            stored_public_key,
+            pq_verify_key,
+            msg,
+            ctx,
+            sig,
+        ) {
+            Ok(valid) => match unsafe { write_out(valid_out, valid) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
+/// only a signature produced by [`pqhs_sign_stateless`], against a
+/// signer-supplied verify key that must be the one `stored_public_key`
+/// commits to.
+///
+/// The mirror image of [`pqhs_verify_with_stored_public_key_stateful`]. Use
+/// this for rotation and recovery authorizations, and for any other message
+/// an application has deliberately chosen to sign on the few-time stateless
+/// path.
+///
+/// # Errors
+///
+/// The same as [`pqhs_verify_with_stored_public_key_stateful`].
+///
+/// # Safety
+///
+/// The same as [`pqhs_verify_with_stored_public_key_stateful`].
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_verify_with_stored_public_key_stateless(
+    suite: u8,
+    stored_public_key: *const u8,
+    stored_public_key_len: usize,
+    pq_verify_key: *const u8,
+    pq_verify_key_len: usize,
+    msg: *const u8,
+    msg_len: usize,
+    ctx: *const u8,
+    ctx_len: usize,
+    sig: *const u8,
+    sig_len: usize,
+    valid_out: *mut bool,
+) -> c_int {
+    guard(move || {
+        if valid_out.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if let Err(e) = unsafe { write_out(valid_out, false) } {
+            return e;
+        }
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let stored_public_key =
+            match unsafe { borrow_slice(stored_public_key, stored_public_key_len) } {
+                Ok(s) => s,
+                Err(e) => return e,
+            };
+        let pq_verify_key = match unsafe { borrow_slice(pq_verify_key, pq_verify_key_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let msg = match unsafe { borrow_slice(msg, msg_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let ctx = match unsafe { borrow_slice(ctx, ctx_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sig = match unsafe { borrow_slice(sig, sig_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        match pqhybridsign_abi::verify_with_stored_public_key_stateless(
             suite,
             stored_public_key,
             pq_verify_key,
@@ -1684,7 +1917,7 @@ mod tests {
                 PQHS_OK
             );
             let mut valid = false;
-            crate::sign::pqhs_verify(
+            pqhs_verify_stateless(
                 5,
                 pk.as_ptr(),
                 pk.len(),
@@ -1859,7 +2092,7 @@ mod tests {
             let mut valid = false;
             // SAFETY: as above.
             let rc = unsafe {
-                crate::sign::pqhs_verify(
+                pqhs_verify_stateless(
                     suite,
                     pk.as_ptr(),
                     pk.len(),
@@ -2207,8 +2440,12 @@ mod tests {
 
     /// A bundle an attacker generated verifies their own signature perfectly
     /// well through `pqhs_verify`, which has no stored key to compare it
-    /// against. Binding the two is what `pqhs_verify_with_stored_public_key`
-    /// adds, across the C boundary.
+    /// against. Binding the two is what
+    /// `pqhs_verify_with_stored_public_key_stateless` adds, across the C
+    /// boundary. Every signature in this test is stateless-signed, so the
+    /// stateful-path entry point must refuse all of them regardless of the
+    /// commitment outcome -- covered separately in
+    /// `verify_with_stored_public_key_stateful_refuses_a_stateless_path_signature`.
     #[test]
     fn verify_with_stored_public_key_refuses_a_bundle_the_stored_key_does_not_name() {
         let (victim_sk, victim_pk) = h5_keypair(31);
@@ -2240,11 +2477,13 @@ mod tests {
         assert_eq!(rc, PQHS_OK);
         let forged = &sig[..n];
 
-        // Whole-key verification accepts it.
+        // Whole-key verification accepts it. `forged` is stateless-signed,
+        // and plain `pqhs_verify` accepts only the stateful path for H5/H6,
+        // so this goes through `pqhs_verify_stateless`.
         let mut valid = false;
         // SAFETY: as above.
         let rc = unsafe {
-            crate::sign::pqhs_verify(
+            pqhs_verify_stateless(
                 5,
                 attacker_pk.as_ptr(),
                 attacker_pk.len(),
@@ -2265,7 +2504,7 @@ mod tests {
         let mut valid = true;
         // SAFETY: as above.
         let rc = unsafe {
-            pqhs_verify_with_stored_public_key(
+            pqhs_verify_with_stored_public_key_stateless(
                 5,
                 victim_stored.as_ptr(),
                 victim_stored.len(),
@@ -2309,7 +2548,7 @@ mod tests {
         let mut valid = false;
         // SAFETY: as above.
         let rc = unsafe {
-            pqhs_verify_with_stored_public_key(
+            pqhs_verify_with_stored_public_key_stateless(
                 5,
                 victim_stored.as_ptr(),
                 victim_stored.len(),
@@ -2326,11 +2565,45 @@ mod tests {
         };
         assert_eq!(rc, PQHS_OK);
         assert!(valid);
+    }
 
-        // Every case above signed through the stateless path (`PathSelector`
-        // 0x02). `verify_with_stored_public_key` does not branch on the
-        // selector, but nothing else here exercises the stateful path
-        // (0x01, one leaf spent) through it.
+    /// A stateless-path signature -- valid against the stored commitment --
+    /// is refused by the stateful-path entry point, and a stateful-path
+    /// signature is refused by the stateless-path entry point. The selector
+    /// decides before either component signature is checked, so this must
+    /// hold regardless of whether the commitment and the underlying
+    /// signature would otherwise verify.
+    #[test]
+    fn the_stateful_and_stateless_stored_public_key_entry_points_each_refuse_the_others_path() {
+        let (victim_sk, victim_pk) = h5_keypair(33);
+        let victim_stored = stored_form(&victim_pk);
+        let victim_bundle = bundle_of(&victim_pk);
+        let msg = b"transfer everything";
+
+        let mut stateless_sig =
+            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut n = 0usize;
+        // SAFETY: every pointer below is either null with a zero length or
+        // points at a live, correctly sized local buffer for the duration
+        // of the call.
+        let rc = unsafe {
+            pqhs_sign_stateless(
+                5,
+                victim_sk.as_ptr(),
+                victim_sk.len(),
+                &test_budget(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                stateless_sig.as_mut_ptr(),
+                stateless_sig.len(),
+                &mut n,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        let stateless_sig = &stateless_sig[..n];
+
         provision_journal(5, &victim_pk);
         let journal = test_journal();
         let mut stateful_sig =
@@ -2356,10 +2629,36 @@ mod tests {
             )
         };
         assert_eq!(rc, PQHS_OK);
-        let mut stateful_valid = false;
+        let stateful_sig = &stateful_sig[..n];
+
+        let mut valid = true;
         // SAFETY: as above.
         let rc = unsafe {
-            pqhs_verify_with_stored_public_key(
+            pqhs_verify_with_stored_public_key_stateful(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                victim_bundle.as_ptr(),
+                victim_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                stateless_sig.as_ptr(),
+                stateless_sig.len(),
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(
+            !valid,
+            "the stateful entry point must refuse a stateless-path signature"
+        );
+
+        let mut valid = true;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key_stateless(
                 5,
                 victim_stored.as_ptr(),
                 victim_stored.len(),
@@ -2370,12 +2669,57 @@ mod tests {
                 std::ptr::null(),
                 0,
                 stateful_sig.as_ptr(),
-                n,
-                &mut stateful_valid,
+                stateful_sig.len(),
+                &mut valid,
             )
         };
         assert_eq!(rc, PQHS_OK);
-        assert!(stateful_valid);
+        assert!(
+            !valid,
+            "the stateless entry point must refuse a stateful-path signature"
+        );
+
+        let mut valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key_stateful(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                victim_bundle.as_ptr(),
+                victim_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                stateful_sig.as_ptr(),
+                stateful_sig.len(),
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(valid, "the stateful entry point accepts its own path");
+
+        let mut valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_with_stored_public_key_stateless(
+                5,
+                victim_stored.as_ptr(),
+                victim_stored.len(),
+                victim_bundle.as_ptr(),
+                victim_bundle.len(),
+                msg.as_ptr(),
+                msg.len(),
+                std::ptr::null(),
+                0,
+                stateless_sig.as_ptr(),
+                stateless_sig.len(),
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(valid, "the stateless entry point accepts its own path");
     }
 
     #[test]
@@ -2387,7 +2731,7 @@ mod tests {
             // SAFETY: every pointer below is a live local buffer of the
             // length passed alongside it.
             let rc = unsafe {
-                pqhs_verify_with_stored_public_key(
+                pqhs_verify_with_stored_public_key_stateful(
                     code,
                     stored.as_ptr(),
                     stored.len(),
@@ -2410,7 +2754,7 @@ mod tests {
         // with a zero length is read as an empty buffer.
         // SAFETY: `valid_out` is the null pointer under test.
         let rc = unsafe {
-            pqhs_verify_with_stored_public_key(
+            pqhs_verify_with_stored_public_key_stateful(
                 5,
                 std::ptr::null(),
                 0,

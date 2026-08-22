@@ -43,7 +43,8 @@ use crate::{
 /// The verify-key-sized composite public key: `ClassicalPK ||
 /// PqVerifyKey`, length [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`].
 ///
-/// This is the form [`StatefulHybridSignatureScheme::verify`] needs. The
+/// This is the form [`StatefulHybridSignatureScheme::verify_stateful`] and
+/// [`StatefulHybridSignatureScheme::verify_stateless`] need. The
 /// smaller on-storage form (`ClassicalPK || PqStoredKey`, length
 /// [`StatefulSuite::STORED_PUBLIC_KEY_LEN`]) is a storage concern the
 /// integrator owns; nothing here assumes how -- or whether -- a caller
@@ -758,66 +759,125 @@ impl<S: StatefulSuite> StatefulHybridSignatureScheme for S {
         )
     }
 
-    fn verify(pk: &Self::PublicKey, msg: &[u8], ctx: &[u8], sig: &Self::Signature) -> bool {
-        let Ok(m_prime) = m_prime(S::LABEL, ctx, msg) else {
+    fn verify_stateful(
+        pk: &Self::PublicKey,
+        msg: &[u8],
+        ctx: &[u8],
+        sig: &Self::Signature,
+    ) -> bool {
+        let Some((m_prime, decoded)) = decode_for_verify::<S>(pk, msg, ctx, sig) else {
             return false;
         };
-        if !<S::Pq as PqStatefulScheme>::precheck(&m_prime) {
-            return false;
-        }
-
-        // Step 2 of `encoding_path`'s decode order. The bound is read out of
-        // the verify key the *verifier* holds, which is the only
-        // `maxSignatures` in reach that the signature under test cannot
-        // choose. The component knows where the field lives inside `vk`; the
-        // generic layer only names which key to ask.
-        //
-        // `pk` is what a caller installed. When that caller built it with
-        // `PublicKey::from_stored_commitment_and_bundle`, the stored
-        // commitment binds every byte of the bundle, this field included.
-        // When they built it with `from_bytes`, the whole key is theirs to
-        // choose and the signature verifies against it either way, so
-        // reading the bound from it concedes nothing new.
-        //
-        // The value is the wire `LeafCount` bound: one-based, so `1..=max`
-        // is the accepted range.
-        let Ok(max_signatures) =
-            <S::Pq as PqStatefulScheme>::max_signatures_from_vk(pk.pq_verify_key())
-        else {
+        // Step 3 of `encoding_path`'s decode order, seen from the caller
+        // that has already committed to one path: a selector naming the
+        // other path is refused here, before either component signature is
+        // checked, and the refusal does not depend on whether `signature`
+        // below would itself have verified. This is what keeps the
+        // stateless path out of reach of a caller who asked for the
+        // stateful one, as specification section 20.2 requires for ordinary
+        // application messages.
+        let PathBody::Stateful { signature, .. } = decoded.body else {
             return false;
         };
-        let trusted_max = TrustedMaxSignatures::from_verified_bundle(max_signatures);
-        let Ok(decoded) =
-            encoding_path::decode_path_selected(sig, trusted_max, &path_profile::<S>())
-        else {
-            return false;
-        };
-
-        let classical_ok = <S::Classical as ClassicalScheme>::verify(
-            pk.classical(),
+        verify_components::<S>(
+            pk,
             &m_prime,
-            S::LABEL,
-            &decoded.classical[..],
-        );
-
-        let pq_ok = match decoded.body {
-            PathBody::Stateful { signature, .. } => <S::Pq as PqStatefulScheme>::verify_stateful(
-                pk.pq_verify_key(),
-                &m_prime,
-                signature,
-            ),
-            PathBody::Stateless { signature } => <S::Pq as PqStatefulScheme>::verify_stateless(
-                pk.pq_verify_key(),
-                &m_prime,
-                signature,
-            ),
-        };
-
-        // Bitwise AND, never `&&`: no short circuit, so neither the result
-        // nor the running time reveals which component rejected. Mirrors
-        // `composite::verify`.
-        bool::from(classical_ok & pq_ok)
+            &decoded,
+            signature,
+            <S::Pq as PqStatefulScheme>::verify_stateful,
+        )
     }
+
+    fn verify_stateless(
+        pk: &Self::PublicKey,
+        msg: &[u8],
+        ctx: &[u8],
+        sig: &Self::Signature,
+    ) -> bool {
+        let Some((m_prime, decoded)) = decode_for_verify::<S>(pk, msg, ctx, sig) else {
+            return false;
+        };
+        // The mirror image of the check in `verify_stateful`: a selector
+        // naming the stateful path is refused before any cryptography runs.
+        let PathBody::Stateless { signature } = decoded.body else {
+            return false;
+        };
+        verify_components::<S>(
+            pk,
+            &m_prime,
+            &decoded,
+            signature,
+            <S::Pq as PqStatefulScheme>::verify_stateless,
+        )
+    }
+}
+
+/// Shared preamble for [`StatefulHybridSignatureScheme::verify_stateful`]
+/// and [`verify_stateless`](StatefulHybridSignatureScheme::verify_stateless):
+/// build `M'`, run the component precheck, and decode the wire signature far
+/// enough to read its `PathSelector`.
+///
+/// Returns `None` for anything that fails before a path is even known -- a
+/// malformed `ctx`/`msg` pairing, a precheck rejection, or an undecodable
+/// signature -- so both callers treat that the same as "reject", without
+/// needing to know why.
+fn decode_for_verify<'a, S: StatefulSuite>(
+    pk: &PublicKey<S>,
+    msg: &[u8],
+    ctx: &[u8],
+    sig: &'a [u8],
+) -> Option<(Vec<u8>, PathSelectedSig<'a>)> {
+    let m_prime = m_prime(S::LABEL, ctx, msg).ok()?;
+    if !<S::Pq as PqStatefulScheme>::precheck(&m_prime) {
+        return None;
+    }
+
+    // Step 2 of `encoding_path`'s decode order. The bound is read out of
+    // the verify key the *verifier* holds, which is the only
+    // `maxSignatures` in reach that the signature under test cannot
+    // choose. The component knows where the field lives inside `vk`; the
+    // generic layer only names which key to ask.
+    //
+    // `pk` is what a caller installed. When that caller built it with
+    // `PublicKey::from_stored_commitment_and_bundle`, the stored
+    // commitment binds every byte of the bundle, this field included.
+    // When they built it with `from_bytes`, the whole key is theirs to
+    // choose and the signature verifies against it either way, so
+    // reading the bound from it concedes nothing new.
+    //
+    // The value is the wire `LeafCount` bound: one-based, so `1..=max`
+    // is the accepted range.
+    let max_signatures =
+        <S::Pq as PqStatefulScheme>::max_signatures_from_vk(pk.pq_verify_key()).ok()?;
+    let trusted_max = TrustedMaxSignatures::from_verified_bundle(max_signatures);
+    let decoded =
+        encoding_path::decode_path_selected(sig, trusted_max, &path_profile::<S>()).ok()?;
+    Some((m_prime, decoded))
+}
+
+/// Verify the classical half of `decoded` against `m_prime`, and the
+/// post-quantum half of `component_signature` against `m_prime` through
+/// `verify_pq`, combining the two by bitwise AND.
+///
+/// Called only once the caller has already matched `decoded.body` against
+/// the path it asked for, so by this point both halves are always checked:
+/// no short circuit stands between them, and neither the result nor the
+/// running time reveals which one rejected. Mirrors `composite::verify`.
+fn verify_components<S: StatefulSuite>(
+    pk: &PublicKey<S>,
+    m_prime: &[u8],
+    decoded: &PathSelectedSig<'_>,
+    component_signature: &[u8],
+    verify_pq: impl FnOnce(&[u8], &[u8], &[u8]) -> subtle::Choice,
+) -> bool {
+    let classical_ok = <S::Classical as ClassicalScheme>::verify(
+        pk.classical(),
+        m_prime,
+        S::LABEL,
+        &decoded.classical[..],
+    );
+    let pq_ok = verify_pq(pk.pq_verify_key(), m_prime, component_signature);
+    bool::from(classical_ok & pq_ok)
 }
 
 #[cfg(test)]
@@ -1483,7 +1543,7 @@ mod tests {
         // The restored key is a working signer: it continues the journal it
         // left off with, rather than starting the budget over.
         let sig = FakeH::sign_stateful(&mut restored, &mut journal, b"three", b"").expect("sign");
-        assert!(FakeH::verify(&pk, b"three", b"", &sig));
+        assert!(FakeH::verify_stateful(&pk, b"three", b"", &sig));
         assert_eq!(journal.next_leaf(), 3);
     }
 
@@ -1766,7 +1826,7 @@ mod tests {
         tampered[0] ^= 0x01; // corrupt the classical half only
 
         let before = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
-        let outcome = FakeH::verify(&pk, b"ok", b"", &tampered);
+        let outcome = FakeH::verify_stateful(&pk, b"ok", b"", &tampered);
         let after = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
 
         assert!(!outcome, "a tampered classical half must fail verification");
@@ -1820,12 +1880,117 @@ mod tests {
         );
 
         assert!(
-            FakeH::verify(&pk, b"ok", b"", &signature_declaring(bound)),
+            FakeH::verify_stateful(&pk, b"ok", b"", &signature_declaring(bound)),
             "a LeafCount at the key's declared bound must still be accepted"
         );
         assert!(
-            !FakeH::verify(&pk, b"ok", b"", &signature_declaring(bound + 1)),
+            !FakeH::verify_stateful(&pk, b"ok", b"", &signature_declaring(bound + 1)),
             "a LeafCount above the key's declared bound must be refused"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // `verify_stateful` and `verify_stateless` each accept only their own
+    // wire path, rejected by `PathSelector` before any signature check.
+    // ------------------------------------------------------------------
+
+    /// A message signed on the stateful path verifies under
+    /// `verify_stateful`, and is refused by `verify_stateless` even though
+    /// the classical half is identical between the two calls.
+    #[test]
+    fn a_stateful_signed_message_verifies_only_under_verify_stateful() {
+        let (mut sk, pk) = keygen::<FakeH>(&[30u8; 32], 4).expect("keygen");
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
+        let sig = FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("sign");
+
+        assert!(
+            FakeH::verify_stateful(&pk, b"ok", b"", &sig),
+            "a stateful signature must verify through its own entry point"
+        );
+        assert!(
+            !FakeH::verify_stateless(&pk, b"ok", b"", &sig),
+            "a stateful signature must be refused by the stateless entry point"
+        );
+    }
+
+    /// The mirror image: a message signed on the stateless path verifies
+    /// under `verify_stateless` and is refused by `verify_stateful`.
+    #[test]
+    fn a_stateless_signed_message_verifies_only_under_verify_stateless() {
+        let (sk, pk) = keygen::<FakeH>(&[31u8; 32], 4).expect("keygen");
+        let mut budget = MemoryStore::default();
+        let sig = FakeH::sign_stateless(&sk, &mut budget, b"ok", b"").expect("sign");
+
+        assert!(
+            FakeH::verify_stateless(&pk, b"ok", b"", &sig),
+            "a stateless signature must verify through its own entry point"
+        );
+        assert!(
+            !FakeH::verify_stateful(&pk, b"ok", b"", &sig),
+            "a stateless signature must be refused by the stateful entry point"
+        );
+    }
+
+    /// Flipping the wire `PathSelector` byte of an otherwise-valid stateful
+    /// signature must make both entry points refuse it: `verify_stateful`
+    /// because the selector no longer names its path, and `verify_stateless`
+    /// because the relabeled body does not decode as one (the length a
+    /// stateful body carries almost never matches the fixed length a
+    /// stateless one requires).
+    #[test]
+    fn flipping_the_path_selector_byte_is_refused_by_both_entry_points() {
+        let (mut sk, pk) = keygen::<FakeH>(&[32u8; 32], 4).expect("keygen");
+        let mut journal = adopted_journal(&Rc::new(RefCell::new(JournalState::default())), &sk);
+        let mut sig = FakeH::sign_stateful(&mut sk, &mut journal, b"ok", b"").expect("sign");
+        assert!(
+            FakeH::verify_stateful(&pk, b"ok", b"", &sig),
+            "sanity: signs and verifies before tampering"
+        );
+
+        sig[encoding_path::CLASSICAL_SIG_LEN] = encoding_path::SELECTOR_STATELESS;
+
+        assert!(
+            !FakeH::verify_stateful(&pk, b"ok", b"", &sig),
+            "a relabeled selector must not still name the stateful path"
+        );
+        assert!(
+            !FakeH::verify_stateless(&pk, b"ok", b"", &sig),
+            "a relabeled selector must not decode as a valid stateless body either"
+        );
+    }
+
+    /// `verify_stateful`'s refusal of a stateless-path signature must not
+    /// depend on whether that stateless signature was itself cryptographically
+    /// valid: a garbled stateless signature and a genuine one are refused the
+    /// same way, and neither reaches `PqStatefulScheme::verify_stateful` at
+    /// all. If the selector check depended on the component result, a
+    /// carefully crafted invalid signature could take a different path
+    /// through this function than a valid one, which is exactly the timing
+    /// side channel the selector-first ordering exists to close.
+    #[test]
+    fn verify_stateful_refuses_a_stateless_signature_without_running_the_stateful_component_check()
+    {
+        let (sk, pk) = keygen::<FakeH>(&[33u8; 32], 4).expect("keygen");
+        let mut budget = MemoryStore::default();
+        let valid = FakeH::sign_stateless(&sk, &mut budget, b"ok", b"").expect("sign");
+        let mut invalid = valid.clone();
+        // Corrupt the stateless component signature itself. `FakePq::verify_stateless`
+        // always returns `Choice::from(1u8)` regardless of content, so this
+        // byte flip cannot be what makes `invalid` fail -- the selector check
+        // must be why both are refused.
+        *invalid
+            .last_mut()
+            .expect("a stateless signature is non-empty") ^= 0xFF;
+
+        let before = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        assert!(!FakeH::verify_stateful(&pk, b"ok", b"", &valid));
+        assert!(!FakeH::verify_stateful(&pk, b"ok", b"", &invalid));
+        let after = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+
+        assert_eq!(
+            before, after,
+            "verify_stateful must reject a stateless-path signature by its selector alone, \
+             never by running the stateful component check"
         );
     }
 

@@ -455,11 +455,51 @@ pub trait StatefulHybridSignatureScheme {
         ctx: &[u8],
     ) -> Result<Self::Signature, StatefulSignError>;
 
-    /// Verify `sig` over `msg` under `ctx`.
+    /// Verify `sig` over `msg` under `ctx`, accepting only a signature
+    /// produced by [`sign_stateful`](Self::sign_stateful).
+    ///
+    /// A signature whose wire `PathSelector` names the stateless path is
+    /// refused here before either component signature is checked, on the
+    /// same terms [`sign_stateless`](Self::sign_stateless) is refused for a
+    /// stateful-only scheme: the selector is public and attacker-controlled,
+    /// so deciding from it first costs nothing and is not a side channel.
+    /// Once the selector matches, the classical and post-quantum halves are
+    /// still combined without a short circuit, for the same reason
+    /// [`verify_stateless`](Self::verify_stateless) is.
+    ///
+    /// Specification section 20.2 requires exactly this for ordinary
+    /// application messages: the primary stateless path is reserved for
+    /// rotation and recovery, and a verifier for an ordinary message MUST
+    /// NOT accept it. This method is that verifier. A caller that genuinely
+    /// needs to accept the stateless path too -- because the message itself
+    /// is a rotation or recovery authorization, or because the application
+    /// has opted into few-time stateless signing for some other message
+    /// class -- calls [`verify_stateless`](Self::verify_stateless)
+    /// explicitly instead of trying both.
     ///
     /// Returns `bool` rather than a `Result` so that a failure cannot reveal
     /// which component of the hybrid rejected the signature.
-    fn verify(pk: &Self::PublicKey, msg: &[u8], ctx: &[u8], sig: &Self::Signature) -> bool;
+    fn verify_stateful(pk: &Self::PublicKey, msg: &[u8], ctx: &[u8], sig: &Self::Signature)
+        -> bool;
+
+    /// Verify `sig` over `msg` under `ctx`, accepting only a signature
+    /// produced by [`sign_stateless`](Self::sign_stateless).
+    ///
+    /// The mirror image of [`verify_stateful`](Self::verify_stateful): a
+    /// signature whose wire `PathSelector` names the stateful path is
+    /// refused before either component signature is checked. Use this for
+    /// rotation and recovery authorizations, and for any other message an
+    /// application has deliberately chosen to sign on the few-time
+    /// stateless path rather than by spending a leaf.
+    ///
+    /// Returns `bool` rather than a `Result`, for the same reason
+    /// [`verify_stateful`](Self::verify_stateful) does.
+    fn verify_stateless(
+        pk: &Self::PublicKey,
+        msg: &[u8],
+        ctx: &[u8],
+        sig: &Self::Signature,
+    ) -> bool;
 }
 
 /// Spend the next leaf, then build the signature: the reference flow for
@@ -995,8 +1035,22 @@ mod tests {
             Err(StatefulSignError::SigningFailed)
         }
 
-        fn verify(pk: &Self::PublicKey, msg: &[u8], _ctx: &[u8], sig: &Self::Signature) -> bool {
+        fn verify_stateful(
+            pk: &Self::PublicKey,
+            msg: &[u8],
+            _ctx: &[u8],
+            sig: &Self::Signature,
+        ) -> bool {
             !msg.is_empty() && &sig[..4] == pk.as_ref()
+        }
+
+        fn verify_stateless(
+            _pk: &Self::PublicKey,
+            _msg: &[u8],
+            _ctx: &[u8],
+            _sig: &Self::Signature,
+        ) -> bool {
+            false
         }
     }
 
@@ -1011,7 +1065,7 @@ mod tests {
 
         let leaf = u32::from_be_bytes([sig[4], sig[5], sig[6], sig[7]]);
         assert!(state.borrow().committed.contains(&leaf));
-        assert!(TestScheme::verify(&[7, 7, 7, 7], b"m", b"", &sig));
+        assert!(TestScheme::verify_stateful(&[7, 7, 7, 7], b"m", b"", &sig));
     }
 
     #[test]

@@ -223,8 +223,40 @@ def verify(
     sig: ReadableBuffer,
 ) -> bool:
     """Verify `sig` over `msg` under `ctx` for `suite`, against `pk`.
-    Covers all six suites. Returns `False`, never raises, for a malformed
-    `pk` or `sig`."""
+    Covers all six suites. For H5 and H6 this accepts only a signature
+    produced by `StatefulSecretKey.sign_stateful`, the same behaviour
+    `verify_stateful` gives directly; call `verify_stateless` for a message
+    deliberately signed on the stateless path. Returns `False`, never
+    raises, for a malformed `pk` or `sig`."""
+
+def verify_stateful(
+    suite: Suite,
+    pk: ReadableBuffer,
+    msg: ReadableBuffer,
+    ctx: ReadableBuffer,
+    sig: ReadableBuffer,
+) -> bool:
+    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (H5 or
+    H6), accepting only a signature produced by `sign_stateful`, against one
+    whole verify-form public key `pk`.
+
+    `verify` is the total dispatcher across all six suites and, for H5 and
+    H6, behaves exactly as this function does. A signature whose wire
+    `PathSelector` names the stateless path is refused before either
+    component signature is checked. Raises `WrongEntryPointForSuiteError`
+    for H1 through H4."""
+
+def verify_stateless(
+    suite: Suite,
+    pk: ReadableBuffer,
+    msg: ReadableBuffer,
+    ctx: ReadableBuffer,
+    sig: ReadableBuffer,
+) -> bool:
+    """The mirror image of `verify_stateful`: accepts only a signature
+    produced by `sign_stateless`. Use this for rotation and recovery
+    authorizations, and for any other message deliberately signed on the
+    few-time stateless path."""
 
 def keygen_stateful_from_seed(
     suite: Suite,
@@ -313,7 +345,8 @@ def profile_name() -> str:
 
 def stored_public_key_len(suite: Suite) -> int:
     """The stored public key length for `suite`, in bytes: the form a
-    verifier keeps, which is what `verify_with_stored_public_key` takes as
+    verifier keeps, which is what `verify_with_stored_public_key_stateful`
+    and `verify_with_stored_public_key_stateless` take as
     `stored_public_key`.
 
     For H5 and H6 this is the classical public key and a 32-byte commitment
@@ -323,7 +356,7 @@ def stored_public_key_len(suite: Suite) -> int:
     the stored and verify forms are the same bytes, so this equals the
     public key length for `suite`; there is no error case for any suite."""
 
-def verify_with_stored_public_key(
+def verify_with_stored_public_key_stateful(
     suite: Suite,
     stored_public_key: ReadableBuffer,
     pq_verify_key: ReadableBuffer,
@@ -332,8 +365,9 @@ def verify_with_stored_public_key(
     sig: ReadableBuffer,
 ) -> bool:
     """Verify `sig` over `msg` under `ctx` for a stateful `suite` (H5 or
-    H6), against a signer-supplied verify key that must be the one
-    `stored_public_key` commits to.
+    H6), accepting only a signature produced by `sign_stateful`, against a
+    signer-supplied verify key that must be the one `stored_public_key`
+    commits to.
 
     `stored_public_key` is trusted (`stored_public_key_len(suite)` bytes,
     the small on-storage form a verifier installs); `pq_verify_key` is not
@@ -343,9 +377,27 @@ def verify_with_stored_public_key(
     classical public key is taken from `stored_public_key`, so nothing the
     signer supplied can substitute a key of their own.
 
-    `verify` is the other shape: it takes one whole verify-form public key
-    and checks no commitment. Use it only where the verify key itself came
-    from a trusted place.
+    `verify_stateful` is the other shape: it takes one whole verify-form
+    public key and checks no commitment. Use it only where the verify key
+    itself came from a trusted place.
+
+    A signature whose wire `PathSelector` names the stateless path is
+    refused before either component signature is checked. Call
+    `verify_with_stored_public_key_stateless` for a message deliberately
+    signed on that path.
 
     Returns `False`, never raises, for a commitment that does not match, a
     malformed key or a malformed signature."""
+
+def verify_with_stored_public_key_stateless(
+    suite: Suite,
+    stored_public_key: ReadableBuffer,
+    pq_verify_key: ReadableBuffer,
+    msg: ReadableBuffer,
+    ctx: ReadableBuffer,
+    sig: ReadableBuffer,
+) -> bool:
+    """The mirror image of `verify_with_stored_public_key_stateful`:
+    accepts only a signature produced by `sign_stateless`. Use this for
+    rotation and recovery authorizations, and for any other message
+    deliberately signed on the few-time stateless path."""

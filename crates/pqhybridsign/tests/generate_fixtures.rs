@@ -151,7 +151,7 @@ where
     let stateful_signature =
         S::sign_stateful(&mut sk, &mut journal, STATEFUL_MSG, STATEFUL_CTX).expect("leaf 1");
     assert!(
-        S::verify(&pk, STATEFUL_MSG, STATEFUL_CTX, &stateful_signature),
+        S::verify_stateful(&pk, STATEFUL_MSG, STATEFUL_CTX, &stateful_signature),
         "{name}: stateful leaf-1 signature must verify before the fixture is written"
     );
 
@@ -163,7 +163,7 @@ where
     )
     .expect("stateless");
     assert!(
-        S::verify(&pk, STATELESS_MSG, STATELESS_CTX, &stateless_signature),
+        S::verify_stateless(&pk, STATELESS_MSG, STATELESS_CTX, &stateless_signature),
         "{name}: stateless signature must verify before the fixture is written"
     );
 
