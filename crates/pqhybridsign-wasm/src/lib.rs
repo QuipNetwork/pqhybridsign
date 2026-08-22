@@ -3,8 +3,9 @@
 // workspace `[lints.rust] unsafe-code = "deny"` and, unlike `deny`,
 // cannot be relaxed by a downstream `#![allow(unsafe_code)]` -- which
 // `clippy::allow_attributes` would not flag, because it does not fire on
-// crate-scope inner attributes. The `# No panics` section below names
-// this attribute, so removing it silently falsifies published rustdoc.
+// crate-scope inner attributes. The `# Panics and instance loss` section
+// below names this attribute, so removing it silently falsifies published
+// rustdoc.
 #![forbid(unsafe_code)]
 // Test-only fixtures use `unwrap` freely; test failure is the desired
 // outcome of a bad input.
@@ -95,11 +96,16 @@
 //!
 //! This module is built for `wasm32-unknown-unknown`, whose standard library
 //! uses `panic = "abort"`. A panic there compiles to an `unreachable`
-//! instruction and traps the WebAssembly instance rather than raising a
-//! catchable JavaScript exception. `catch_unwind` cannot contain a panic on
-//! this target -- confirmed directly against the `wasm-bindgen` build this
-//! crate ships, not only against a bare `cdylib` -- so this crate does not
-//! attempt it: the C ABI's per-entry-point guard has no equivalent here.
+//! instruction, which traps the WebAssembly instance. The host engine
+//! surfaces that trap to JavaScript as a `WebAssembly.RuntimeError`, and an
+//! ordinary `try`/`catch` around the call does catch it -- but catching it
+//! says nothing about whether the instance is safe to call again. A trap is
+//! not one of this crate's ordinary thrown `Error` values, and a caller that
+//! treats it as one and keeps using the instance is trusting state this
+//! crate never vouched for. `catch_unwind` cannot contain a panic on this
+//! target -- confirmed directly against the `wasm-bindgen` build this crate
+//! ships, not only against a bare `cdylib` -- so this crate does not attempt
+//! it: the C ABI's per-entry-point guard has no equivalent here.
 //!
 //! Every export in this module has been audited for a panic reachable from
 //! caller-controlled input, and none was found: `#![forbid(unsafe_code)]`
@@ -118,12 +124,13 @@
 //! instance's internal state is sound afterward. This crate holds no state
 //! of its own across calls -- every export is a plain function over its
 //! arguments, with no `static` or thread-local data -- so a trap here
-//! cannot leave a lock or a half-built value behind for a later call to
-//! observe. That is a property of this crate, not a guarantee the
-//! `wasm32-unknown-unknown` target itself makes about the surrounding
-//! instance, so a host that must survive a panic here should still
-//! instantiate the module in a context it can discard and recreate, such as
-//! a dedicated worker, rather than rely on the instance remaining usable.
+//! cannot leave one of this crate's own locks or half-built values behind
+//! for a later call to observe; that says nothing about the wasm allocator
+//! or the `wasm-bindgen` runtime the instance also carries, which this
+//! crate does not own and cannot vouch for. A host that must survive a
+//! panic here should still instantiate the module in a context it can
+//! discard and recreate, such as a dedicated worker, rather than rely on
+//! the instance remaining usable.
 //!
 //! # Secret key handling
 //!
