@@ -89,6 +89,88 @@ const JUNCTION_INFO_PREFIX: &[u8] = b"junction/hard/";
 /// length-prefix omission to make ambiguous.
 const JUNCTION_INFO_LEN: usize = JUNCTION_INFO_PREFIX.len() + 32;
 
+/// Info prefix for the dedicated hybrid-VRF stateless-binding seed
+/// (specification section 20.3). Distinct from `classical/`, `pq/` above and
+/// `junction/hard/` below in its very first byte, so no label of any length
+/// can make this collide with either: a length-prefixed variable field and a
+/// fixed-width one only need to differ somewhere to stay unambiguous, and
+/// these differ at byte zero.
+const VRF_STATELESS_INFO_PREFIX: &[u8] = b"vrf-stateless/";
+
+/// Derives a master seed dedicated to one stateful suite's hybrid VRF
+/// stateless binding, specification section 20.3.
+///
+/// # What this is for
+///
+/// H5 and H6 bind their hybrid VRF through the SHRINCS **stateless** path
+/// (`vrf::sign_stateless`, behind the `vrf` feature -- named here rather
+/// than linked because this module compiles whether or not that feature is
+/// on, and rustdoc cannot resolve a link into a module that is not there),
+/// which spends the same few-time budget
+/// that key's rotation and recovery authorizations draw on
+/// ([`crate::rotation::sign_rotation`]). Specification section 21 forbids
+/// sharing that budget between ordinary signing and rotation/recovery, so a
+/// deployment that evaluates a VRF frequently needs a **second** SHRINCS key
+/// whose stateless material is disjoint from the identity key's -- not a
+/// second counter over the same key (see [`crate::budget`]'s module
+/// documentation for why a shared FORS-C key cannot be metered around: two
+/// counters over one key permit more few-time signatures than the key's own
+/// bound allows, which is a worse violation than an unmetered shared counter).
+///
+/// This function derives the master seed for that second key. Run it through
+/// an ordinary [`crate::stateful_composite::keygen`] the same way any other
+/// master seed is, and the result is a full, independent stateful-suite
+/// keypair -- its own classical secret and its own SHRINCS commitment -- with
+/// no key material in common with whatever `keygen` on the *parent* seed
+/// produces for the same suite.
+///
+/// # Opt-in
+///
+/// Nothing calls this from an ordinary keygen path. A deployment that never
+/// evaluates a VRF for this suite pays nothing for it: no second hypertree,
+/// no change to the suite's `VERIFY_PUBLIC_KEY_LEN`, no change to the
+/// identity key's exported secret-key blob. Only a caller that invokes this
+/// function -- or that manages a dedicated stateless key by some other means
+/// entirely, which is equally valid -- pays for the second key.
+///
+/// # Not a second allowance
+///
+/// The derived seed's key is bound by exactly the same few-time budget as
+/// any other stateless key for this suite (`2^20`, or `2^18` under
+/// `profile-128s-q18`). That bound follows from the profile's FORS-C
+/// parameters, not from what the key is used for, so a dedicated key is not
+/// a way to sign more; it is a way to stop one key's ordinary VRF use from
+/// spending another key's rotation reserve.
+///
+/// # Errors
+///
+/// [`Error::OutputBufferTooSmall`] if `label` is long enough that the info
+/// string overruns `MAX_INFO`, which no registry label comes close to doing.
+/// [`Error::ComponentFailure`] if HKDF expansion fails, which does not
+/// happen for any fixed-length output this crate requests.
+pub fn derive_stateless_vrf_seed(master: &[u8; 32], label: &[u8]) -> Result<[u8; 32]> {
+    let (mut prk, hk) = Hkdf::<Sha256>::extract(Some(SALT), master);
+    prk.as_mut_slice().zeroize();
+
+    let n = VRF_STATELESS_INFO_PREFIX.len() + label.len();
+    if n > MAX_INFO {
+        return Err(Error::OutputBufferTooSmall {
+            needed: n,
+            actual: MAX_INFO,
+        });
+    }
+    let mut info = [0u8; MAX_INFO];
+    info[..VRF_STATELESS_INFO_PREFIX.len()].copy_from_slice(VRF_STATELESS_INFO_PREFIX);
+    info[VRF_STATELESS_INFO_PREFIX.len()..n].copy_from_slice(label);
+
+    let mut seed = [0u8; 32];
+    let result = hk
+        .expand(&info[..n], &mut seed)
+        .map_err(|_| Error::ComponentFailure);
+    info.zeroize();
+    result.map(|()| seed)
+}
+
 /// Derives a new master seed from a parent master seed and a hard-derivation
 /// chain code, specification section 10.
 ///
@@ -303,6 +385,82 @@ mod tests {
         assert_eq!(
             hex::encode(child),
             "949e575e305f4aca84004570a6e023634ad491b113e280ee6fabe2cb72d06331"
+        );
+    }
+
+    /// H5's registry label, exactly as `hybrid_stateful_suite!` declares it
+    /// for the `shrincs-256s` classical/ed25519 suite: 30 ASCII bytes plus the
+    /// trailing null the registry convention requires.
+    const H5_LABEL: &[u8] = b"hybrid-ed25519-shrincs-256s-v1\0";
+    /// H6's registry label, the sr25519 counterpart of [`H5_LABEL`].
+    const H6_LABEL: &[u8] = b"hybrid-sr25519-shrincs-256s-v1\0";
+
+    #[test]
+    fn stateless_vrf_seed_derivation_is_deterministic() {
+        assert_eq!(
+            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive")
+        );
+    }
+
+    #[test]
+    fn different_master_seeds_give_different_stateless_vrf_seeds() {
+        assert_ne!(
+            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[1u8; 32], H5_LABEL).expect("derive")
+        );
+    }
+
+    /// H5 and H6 must derive independent dedicated stateless keys from one
+    /// master seed, the same separation `suites_derive_independent_trees`
+    /// checks for the ordinary component seeds.
+    #[test]
+    fn different_suite_labels_give_different_stateless_vrf_seeds() {
+        assert_ne!(
+            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[9u8; 32], H6_LABEL).expect("derive")
+        );
+    }
+
+    /// The dedicated stateless-VRF seed must never collide with this suite's
+    /// ordinary component seeds or with a hard-junction child of the same
+    /// master seed: three independent uses of one master seed, three
+    /// disjoint outputs.
+    #[test]
+    fn a_stateless_vrf_seed_cannot_collide_with_a_component_seed_or_a_junction_child() {
+        let parent = [9u8; 32];
+        let vrf_seed = derive_stateless_vrf_seed(&parent, H5_LABEL).expect("derive");
+        let (classical, pq) = seeds(&parent, H5_LABEL);
+        let junction_child = derive_hard_junction(&parent, &[7u8; 32]).expect("derive");
+
+        assert_ne!(vrf_seed, classical);
+        assert_ne!(vrf_seed, pq);
+        assert_ne!(vrf_seed, junction_child);
+    }
+
+    /// Known-answer vector computed independently of this code (a standalone
+    /// HKDF-SHA256 extract/expand implemented directly over Python's `hmac`
+    /// and `hashlib`, not this crate or the `hkdf` crate). Pins the salt, the
+    /// `vrf-stateless/` domain string and the info layout: `SALT ||
+    /// "vrf-stateless/" || label`, HKDF-SHA256 extract-then-expand to 32
+    /// bytes.
+    #[test]
+    fn the_stateless_vrf_seed_layout_is_pinned() {
+        assert_eq!(
+            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive")),
+            "f2b6ec75aef05751bf39adaa9edd24f4916b52ff068533ed4f767486bdade6a8"
+        );
+        assert_eq!(
+            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], H6_LABEL).expect("derive")),
+            "45639b3bed9d951c52afcb2df79dc1f7ad0ea571e304baa1da51d17b4f7abdd7"
+        );
+        let mut sequential = [0u8; 32];
+        for (i, b) in sequential.iter_mut().enumerate() {
+            *b = i as u8;
+        }
+        assert_eq!(
+            hex::encode(derive_stateless_vrf_seed(&sequential, H5_LABEL).expect("derive")),
+            "29e1268fd5928311c416ab6039a7d87df30c1fab2d8251e5d8c05acabd48f9f2"
         );
     }
 }

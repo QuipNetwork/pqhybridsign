@@ -104,10 +104,21 @@
 //!   costs about 1.15 s under `profile-256s` and about 0.33 s under
 //!   `profile-256s-sha2`, against about 176 s under the 128s profiles. Only
 //!   the 256s profiles fit a 6-second slot at all.
-//! - **The few-time budget becomes the block-production budget.** The bound is
-//!   `2^20` evaluations, or `2^18` under `profile-128s-q18`, and it is shared
-//!   with rotation and recovery. At one authored block a minute that is about
-//!   two years before a mandatory rotation.
+//! - **The few-time budget is a hard bound, `2^20` evaluations (`2^18` under
+//!   `profile-128s-q18`), on the specific SHRINCS key `sign_stateless`
+//!   receives.** Specification section 21 requires that bound to stay
+//!   disjoint from the same suite's rotation and recovery reserve: "shared
+//!   across rotation and recovery; ordinary signing MUST NOT draw on it."
+//!   [`sign_stateless`] and [`verify_stateless`] MUST be called with a
+//!   dedicated key, never the rotation/recovery identity key, or a
+//!   deployment authoring one block a minute spends that identity key's
+//!   entire rotation reserve in about two years and is then unable to
+//!   authorize a rotation at all. [`derive_stateless_key`] derives that
+//!   dedicated key from a master seed, opt-in and independent of the
+//!   suite's ordinary keygen path; see its documentation and each
+//!   function's "MUST be a dedicated key" section for what independence
+//!   means here and why a second [`crate::budget::StatelessBudgetStore`]
+//!   over the *same* key does not substitute for it.
 //!
 //! So use H5 or H6 for a low-frequency VRF, such as epoch randomness. Per-slot
 //! leader election belongs on H1 through H4.
@@ -756,8 +767,9 @@ mod stateless {
     };
     use crate::budget::{spend_stateless_budget, StatelessBudgetStore};
     use crate::component::{ClassicalScheme, PqStatefulScheme};
-    use crate::stateful_composite::SecretKey;
+    use crate::stateful_composite::{self, SecretKey};
     use crate::suite::StatefulSuite;
+    use zeroize::Zeroize;
 
     /// Length in bytes of a hybrid VRF proof for a stateful suite.
     ///
@@ -777,9 +789,33 @@ mod stateless {
     /// SHRINCS stateless path.
     ///
     /// **This spends one unit of the few-time stateless budget and no leaf.**
-    /// The key's leaf counter is untouched, so a caller needs no journal here,
-    /// but the budget is shared with rotation and recovery and is the reason
-    /// H6 belongs on a low-frequency VRF. See the module documentation.
+    /// The key's leaf counter is untouched, so a caller needs no journal here.
+    ///
+    /// # `sk` MUST be a dedicated key, never the rotation/recovery identity key
+    ///
+    /// The budget this spends is keyed to `sk`'s own stateless material
+    /// ([`crate::budget::BudgetKey::from_material`]), and that key has no
+    /// notion of "VRF" versus "rotation" -- it only sees whatever material it
+    /// is handed. Pass the suite's rotation/recovery identity key here and
+    /// this draws on the exact same reserve
+    /// [`crate::rotation::sign_rotation`] draws on for that key, which
+    /// specification section 21 forbids ("shared across rotation and
+    /// recovery; ordinary signing MUST NOT draw on it"): a validator
+    /// evaluating a VRF once a minute would spend the rotation reserve in
+    /// about two years and then be unable to authorize a rotation at all.
+    ///
+    /// The fix is a `sk` whose stateless material is disjoint from that
+    /// identity key's, never a second [`StatelessBudgetStore`] over the same
+    /// key -- two counters over one FORS-C key permit more few-time
+    /// signatures than the key's own bound allows, which is a worse
+    /// violation than the one this avoids. [`derive_stateless_key`] derives
+    /// one such key from a master seed under its own HKDF info label;
+    /// equally valid is any other independently produced [`SecretKey<S>`]
+    /// this suite's rotation/recovery identity key had no part in deriving.
+    ///
+    /// H6 in particular belongs on a low-frequency VRF regardless of which
+    /// key backs it -- see the module documentation for the latency and
+    /// budget figures that bound has nothing to do with key separation.
     ///
     /// The order of operations matters and matches
     /// `crate::stateful::StatefulHybridSignatureScheme::sign_stateless`. The
@@ -846,6 +882,12 @@ mod stateless {
     /// `pk` is the verify-form composite public key
     /// ([`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes), not the smaller
     /// stored form: a commitment alone cannot check a SHRINCS signature.
+    ///
+    /// Matching [`sign_stateless`]'s key-separation requirement, this is the
+    /// dedicated key's public counterpart -- the second element
+    /// [`derive_stateless_key`] returns, or the public half of whatever other
+    /// independently produced key backed the proof -- never the
+    /// rotation/recovery identity key's own verify-form public key.
     #[must_use]
     pub fn verify_stateless<S: StatefulSuite>(pk: &[u8], input: &[u8], proof: &[u8]) -> bool
     where
@@ -890,10 +932,84 @@ mod stateless {
     {
         make_bytes_inner::<S::Classical, B>(S::LABEL, pk, input, proof, context)
     }
+
+    /// Derive a stateless-only key dedicated to this suite's hybrid VRF
+    /// binding, disjoint from the suite's ordinary rotation/recovery
+    /// identity key, specification section 20.3.
+    ///
+    /// # Why this exists
+    ///
+    /// [`sign_stateless`] charges the SHRINCS few-time budget of whatever key
+    /// `sk` names, and that budget is a hard security bound, not a policy
+    /// this crate is willing to let a deployment share by accident. Passing
+    /// the suite's rotation/recovery identity key to [`sign_stateless`]
+    /// spends the exact reserve that key's own rotation and recovery
+    /// authorizations need, which specification section 21 forbids. This
+    /// function derives a key with none of that identity key's material in
+    /// common. The separation happens one level above the component seeds,
+    /// not at them: `master` is first expanded under `vrf-stateless/<label>`
+    /// into an intermediate master seed, and that intermediate seed then
+    /// goes through the ordinary [`crate::stateful_composite::keygen`], which
+    /// applies the usual `classical/<label>` and `pq/<label>` expansions to
+    /// it. Both keys therefore use the same two component-info strings; what
+    /// differs is the master seed underneath them, which is what makes the
+    /// classical secret and the SHRINCS commitment independent of the
+    /// identity key's.
+    ///
+    /// # Opt-in, and that is the point
+    ///
+    /// [`crate::stateful_composite::keygen`] never calls this, and nothing
+    /// elsewhere in this crate does either. A deployment that never
+    /// evaluates a VRF for this suite pays nothing for it: no second
+    /// hypertree at keygen time, no change to
+    /// [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`], no change to the identity
+    /// key's [`crate::stateful_composite::SecretKey::export`] blob. Only a
+    /// caller that invokes this function pays for the second key, and a
+    /// caller that already manages a dedicated stateless key some other way
+    /// -- its own second master seed, an HSM-backed key, anything disjoint
+    /// from the identity key's material -- does not need this helper at all:
+    /// any independently produced [`SecretKey<S>`] is equally valid as `sk`
+    /// in [`sign_stateless`].
+    ///
+    /// # Not a second allowance
+    ///
+    /// The returned key's stateless budget is bounded by the same `2^20`
+    /// (`2^18` under `profile-128s-q18`) figure as any other stateless key
+    /// for this suite. That bound follows from the profile's FORS-C
+    /// parameters, not from what the key is used for, so this is not a way
+    /// to sign more; it only stops one key's VRF use from spending another
+    /// key's rotation reserve.
+    ///
+    /// `max_stateful_signatures` is fixed at `1`, the smallest value
+    /// [`crate::stateful_composite::keygen`] accepts. The returned key must
+    /// never be passed to
+    /// [`crate::stateful::StatefulHybridSignatureScheme::sign_stateful`]: it
+    /// has no [`crate::stateful::LeafJournal`] tracking it, so a stateful
+    /// signature from it would spend a one-time leaf nothing durably
+    /// records. Only [`sign_stateless`] is a legitimate use of this key.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`crate::derive::derive_stateless_vrf_seed`] or
+    /// [`crate::stateful_composite::keygen`] report.
+    pub fn derive_stateless_key<S: StatefulSuite>(
+        master: &[u8; 32],
+    ) -> Result<(SecretKey<S>, stateful_composite::PublicKey<S>)>
+    where
+        S::Classical: ClassicalVrf,
+    {
+        let mut seed = crate::derive::derive_stateless_vrf_seed(master, S::LABEL)?;
+        let result = stateful_composite::keygen::<S>(&seed, 1);
+        seed.zeroize();
+        result
+    }
 }
 
 #[cfg(feature = "alloc")]
-pub use stateless::{make_bytes_stateless, proof_len_stateless, sign_stateless, verify_stateless};
+pub use stateless::{
+    derive_stateless_key, make_bytes_stateless, proof_len_stateless, sign_stateless,
+    verify_stateless,
+};
 
 #[cfg(test)]
 mod tests {
@@ -1645,5 +1761,87 @@ mod stateful_tests {
         let b: [u8; 32] =
             make_bytes_stateless::<H5, [u8; 32]>(&pk, INPUT, &second, OUT_CTX).expect("bytes");
         assert_eq!(a, b, "a re-evaluated binding must not move the output");
+    }
+
+    // -----------------------------------------------------------------------
+    // The dedicated stateless key (pqhs-1l6): a validator's ordinary VRF use
+    // must draw on its own SHRINCS few-time budget, never the rotation and
+    // recovery reserve of the same suite's identity key.
+    // -----------------------------------------------------------------------
+
+    /// A key derived from one master seed under `vrf-stateless/` must share
+    /// no stateless material with the ordinary keygen path's key over the
+    /// same master seed, even though both start from identical bytes.
+    #[test]
+    fn a_dedicated_stateless_key_shares_no_material_with_the_identity_key() {
+        let (identity_sk, _) = h6_key(8);
+        let (dedicated_sk, dedicated_pk) =
+            derive_stateless_key::<H6>(&[8u8; 32]).expect("derive dedicated key");
+
+        let identity_material =
+            <<H6 as StatefulSuite>::Pq as PqStatefulScheme>::stateless_key_material(
+                identity_sk.pq_verify_key(),
+            )
+            .expect("identity material");
+        let dedicated_material =
+            <<H6 as StatefulSuite>::Pq as PqStatefulScheme>::stateless_key_material(
+                dedicated_sk.pq_verify_key(),
+            )
+            .expect("dedicated material");
+
+        assert_ne!(
+            identity_material, dedicated_material,
+            "the dedicated key's stateless material must differ from the identity key's, \
+             or the two would resolve to one BudgetKey and share one bound"
+        );
+        assert_ne!(dedicated_pk.pq_verify_key(), identity_sk.pq_verify_key());
+    }
+
+    /// Deriving the same suite's dedicated key from the same master seed
+    /// twice must reach the same material: an operator restoring a validator
+    /// from its master seed needs the dedicated key back, not a fresh one
+    /// with a fresh, unmetered budget.
+    #[test]
+    fn deriving_the_same_dedicated_stateless_key_twice_gives_the_same_material() {
+        let (first, _) = derive_stateless_key::<H6>(&[10u8; 32]).expect("first derivation");
+        let (second, _) = derive_stateless_key::<H6>(&[10u8; 32]).expect("second derivation");
+        assert_eq!(first.pq_verify_key(), second.pq_verify_key());
+    }
+
+    /// The whole point of pqhs-1l6: evaluating the VRF through the dedicated
+    /// key must leave the identity key's rotation/recovery reserve at zero,
+    /// even when a single [`StatelessBudgetStore`] tracks both keys. Before
+    /// this change, passing the identity key itself to `sign_stateless` would
+    /// have charged exactly the budget entry this test checks for.
+    #[test]
+    fn evaluating_the_vrf_through_a_dedicated_key_leaves_the_identity_keys_budget_untouched() {
+        let (identity_sk, _) = h6_key(9);
+        let (dedicated_sk, dedicated_pk_bytes) =
+            derive_stateless_key::<H6>(&[9u8; 32]).expect("derive dedicated key");
+        let mut dedicated_pk = Vec::with_capacity(<H6 as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN);
+        dedicated_pk.extend_from_slice(dedicated_pk_bytes.classical());
+        dedicated_pk.extend_from_slice(dedicated_pk_bytes.pq_verify_key());
+
+        let identity_material =
+            <<H6 as StatefulSuite>::Pq as PqStatefulScheme>::stateless_key_material(
+                identity_sk.pq_verify_key(),
+            )
+            .expect("identity material");
+        let identity_budget_key = BudgetKey::from_material(identity_material);
+
+        let mut budget = MemoryBudget::default();
+        let proof = evaluate(&dedicated_sk, &mut budget);
+
+        assert_eq!(
+            budget.consumed(&identity_budget_key),
+            None,
+            "the identity key's rotation/recovery reserve must show no spend at all"
+        );
+        assert_eq!(
+            budget.total(),
+            1,
+            "exactly one unit is spent, against the dedicated key's own material"
+        );
+        assert!(verify_stateless::<H6>(&dedicated_pk, INPUT, &proof));
     }
 }

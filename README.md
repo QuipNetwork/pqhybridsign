@@ -249,9 +249,6 @@ VRF on the sr25519 suites, and an RFC 9381 `ECVRF-EDWARDS25519-SHA512-TAI` on
 the ed25519 suites. A post-quantum binding signature over the same input proves
 post-quantum key possession.
 
-`0.0.0-rc4` covers the sr25519 suites only. The ed25519 half is on `main` and
-ships in the next release.
-
 Every consensus-decisive byte derives from the classical pre-output alone. That
 pre-output is unique per key and input. A verifier checks the binding but never
 feeds it into that derivation. Post-quantum signatures are not unique for a
@@ -295,10 +292,10 @@ Each binding ships from its own registry.
 ```toml
 [dependencies]
 # Every suite, stateful (SHRINCS) on by default.
-pqhybridsign = "0.0.0-rc4"
+pqhybridsign = "0.0.0-rc5"
 
 # Lattice suites only, no hashsigs-rs:
-# pqhybridsign = { version = "0.0.0-rc4", default-features = false, features = ["std"] }
+# pqhybridsign = { version = "0.0.0-rc5", default-features = false, features = ["std"] }
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -339,7 +336,7 @@ accessors work for every suite.
 pip install --pre pqhybridsign
 ```
 
-PEP 440 spells the prerelease version `0.0.0rc4`, not `0.0.0-rc4`. Without
+PEP 440 spells the prerelease version `0.0.0rc5`, not `0.0.0-rc5`. Without
 `--pre`, pip does not find it.
 
 ### C and C++
