@@ -633,18 +633,14 @@ mod tests {
         journal
     }
 
-    /// Offset of the 32-byte commitment inside a SHRINCS bundle
-    /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`).
-    const COMMITMENT_AT: usize = 68;
-
     /// The small form a verifier installs: the classical public key and the
-    /// commitment, lifted out of a verify-form public key its own keygen
+    /// commitment, computed from a verify-form public key its own keygen
     /// produced.
     fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
-        let classical_len = crate::stored_public_key_len(Suite::H5) - 32;
-        let mut stored = verify_public_key[..classical_len].to_vec();
-        stored.extend_from_slice(&verify_public_key[classical_len + COMMITMENT_AT..][..32]);
-        stored
+        PublicKey::<H5>::from_bytes(verify_public_key)
+            .expect("keygen produces a well-formed verify-form public key")
+            .stored_form()
+            .expect("H5's SHRINCS half computes a commitment")
     }
 
     /// The signer-supplied half: everything after the classical public key.

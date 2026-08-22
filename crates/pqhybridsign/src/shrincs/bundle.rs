@@ -58,6 +58,35 @@ pub enum BundleError {
     CommitmentMismatch,
 }
 
+/// Recompute the commitment `bundle`'s own key material implies.
+///
+/// This is the value [`verify_bundle`] compares against the stored one. It
+/// is derived from `bundle`'s `statefulPublicKey`, `pkSeed` and
+/// `hypertreeRoot`, never read from the commitment `bundle` carries at
+/// bytes 68..100: a carried commitment proves only internal consistency,
+/// which an attacker-generated bundle also has.
+///
+/// # Errors
+///
+/// [`BundleError::InvalidLength`] if `bundle` is not [`BUNDLE_LEN`] bytes.
+pub fn commitment(bundle: &[u8]) -> Result<[u8; COMMITMENT_LEN], BundleError> {
+    if bundle.len() != BUNDLE_LEN {
+        return Err(BundleError::InvalidLength);
+    }
+
+    let stateful_public_key = &bundle[0..STATEFUL_PUBLIC_KEY_LEN];
+
+    let mut pk_seed = [0u8; PK_SEED_LEN];
+    pk_seed.copy_from_slice(&bundle[PK_SEED_OFFSET..PK_SEED_OFFSET + PK_SEED_LEN]);
+
+    let mut hypertree_root = [0u8; HYPERTREE_ROOT_LEN];
+    hypertree_root.copy_from_slice(
+        &bundle[HYPERTREE_ROOT_OFFSET..HYPERTREE_ROOT_OFFSET + HYPERTREE_ROOT_LEN],
+    );
+
+    Ok(ShrincsVerifier::new().public_key_commitment(stateful_public_key, pk_seed, hypertree_root))
+}
+
 /// Recompute the commitment from a 164-byte `bundle` and check it against
 /// `stored_commitment`.
 ///
@@ -75,19 +104,12 @@ pub fn verify_bundle(
         return Err(BundleError::ZeroCommitment);
     }
 
+    let recomputed = commitment(bundle)?;
+
     let stateful_public_key = &bundle[0..STATEFUL_PUBLIC_KEY_LEN];
     let carried_commitment = &bundle[STATEFUL_PUBLIC_KEY_LEN..PK_SEED_OFFSET];
-
-    let mut pk_seed = [0u8; PK_SEED_LEN];
-    pk_seed.copy_from_slice(&bundle[PK_SEED_OFFSET..PK_SEED_OFFSET + PK_SEED_LEN]);
-
-    let mut hypertree_root = [0u8; HYPERTREE_ROOT_LEN];
-    hypertree_root.copy_from_slice(
-        &bundle[HYPERTREE_ROOT_OFFSET..HYPERTREE_ROOT_OFFSET + HYPERTREE_ROOT_LEN],
-    );
-
-    let recomputed =
-        ShrincsVerifier::new().public_key_commitment(stateful_public_key, pk_seed, hypertree_root);
+    let pk_seed = &bundle[PK_SEED_OFFSET..PK_SEED_OFFSET + PK_SEED_LEN];
+    let hypertree_root = &bundle[HYPERTREE_ROOT_OFFSET..HYPERTREE_ROOT_OFFSET + HYPERTREE_ROOT_LEN];
 
     // The commitment carried inside the bundle is never trusted as the
     // source of truth for the comparison below — `recomputed` is derived

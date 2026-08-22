@@ -168,6 +168,32 @@ pub trait CommittedVerifyKey: PqStatefulScheme {
     /// uninstalled (for example all-zero) `stored_public_key` that no key
     /// may ever match.
     fn verify_committed_key(stored_public_key: &[u8], verify_key: &[u8]) -> Result<()>;
+
+    /// Compute the stored form `verify_key` commits to.
+    ///
+    /// The inverse of [`verify_committed_key`](Self::verify_committed_key):
+    /// what this writes is exactly what that accepts for the same key. It
+    /// exists so a caller who holds only the verify form can produce the
+    /// stored form to install, without knowing where a component keeps its
+    /// commitment. Slicing at a hard-coded offset is the alternative, and
+    /// it puts component layout into application code.
+    ///
+    /// `out` receives [`PqStatefulScheme::PUBLIC_KEY_LEN`] bytes.
+    ///
+    /// This computes; it does not verify. The result is trustworthy only
+    /// insofar as `verify_key` is: a caller who computes a stored form from
+    /// an attacker-supplied verify key and then installs it has installed
+    /// the attacker's key. Install a stored form obtained out of band, and
+    /// use [`verify_committed_key`](Self::verify_committed_key) to check a
+    /// verify key against it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `verify_key` is not
+    /// [`PqStatefulScheme::VERIFY_KEY_LEN`] bytes or `out` is not
+    /// [`PqStatefulScheme::PUBLIC_KEY_LEN`] bytes.
+    /// [`Error::ComponentFailure`] if `verify_key` is malformed.
+    fn compute_committed_key(verify_key: &[u8], out: &mut [u8]) -> Result<()>;
 }
 
 impl<S: StatefulSuite> PublicKey<S>
@@ -245,6 +271,32 @@ where
             bytes,
             _suite: PhantomData,
         })
+    }
+
+    /// The stored form of this key: the classical public key followed by the
+    /// component's commitment.
+    ///
+    /// This is the form a verifier installs, and the form
+    /// [`from_stored_commitment_and_bundle`](Self::from_stored_commitment_and_bundle)
+    /// takes as its trusted side. Computing it here is what keeps component
+    /// layout out of application code: the alternative is slicing the
+    /// classical prefix and the commitment at an offset the caller has to
+    /// know.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] or [`Error::ComponentFailure`] as
+    /// [`CommittedVerifyKey::compute_committed_key`] reports them.
+    pub fn stored_form(&self) -> Result<Vec<u8>> {
+        let classical = self.classical();
+        let mut out =
+            alloc::vec![0u8; classical.len() + <S::Pq as PqStatefulScheme>::PUBLIC_KEY_LEN];
+        out[..classical.len()].copy_from_slice(classical);
+        <S::Pq as CommittedVerifyKey>::compute_committed_key(
+            self.pq_verify_key(),
+            &mut out[classical.len()..],
+        )?;
+        Ok(out)
     }
 }
 
@@ -1099,6 +1151,21 @@ mod tests {
                 }),
             }
         }
+
+        // Mirrors `fake_commitment` exactly, so whatever this writes is what
+        // `verify_committed_key` above accepts. A fake that computed
+        // something else would make the accessor's round-trip tests pass for
+        // the wrong reason.
+        fn compute_committed_key(verify_key: &[u8], out: &mut [u8]) -> Result<()> {
+            if out.len() != Self::PUBLIC_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: Self::PUBLIC_KEY_LEN,
+                    actual: out.len(),
+                });
+            }
+            out[0] = fake_commitment(verify_key)?;
+            Ok(())
+        }
     }
 
     /// Minimal stand-in `ClassicalScheme`, local to this test module: the
@@ -1773,6 +1840,50 @@ mod tests {
                 expected: verify_key_len,
                 actual: 0
             })
+        );
+    }
+
+    /// The computed stored form must be exactly what the checking side
+    /// accepts. These two are inverses, and a commitment that
+    /// `verify_committed_key` rejects would make the accessor worse than the
+    /// manual slicing it replaces -- callers would install a value that
+    /// never verifies.
+    #[test]
+    fn the_computed_stored_form_is_the_one_verification_accepts() {
+        let (_sk, pk) = keygen::<FakeH>(&[7u8; 32], 4).expect("keygen");
+
+        let stored = pk
+            .stored_form()
+            .expect("a committed suite computes its stored form");
+
+        assert_eq!(
+            stored.len(),
+            <FakeH as StatefulSuite>::STORED_PUBLIC_KEY_LEN
+        );
+        <FakePq as CommittedVerifyKey>::verify_committed_key(
+            &stored[pk.classical().len()..],
+            pk.pq_verify_key(),
+        )
+        .expect("the computed commitment must verify against the key it came from");
+    }
+
+    /// A commitment computed from one key must not verify another. Without
+    /// this the test above would still pass for a function that returns a
+    /// constant.
+    #[test]
+    fn a_computed_stored_form_does_not_verify_another_key() {
+        let (_sk_a, pk_a) = keygen::<FakeH>(&[7u8; 32], 4).expect("keygen a");
+        let (_sk_b, pk_b) = keygen::<FakeH>(&[8u8; 32], 4).expect("keygen b");
+
+        let stored_a = pk_a.stored_form().expect("stored form a");
+
+        assert!(
+            <FakePq as CommittedVerifyKey>::verify_committed_key(
+                &stored_a[pk_a.classical().len()..],
+                pk_b.pq_verify_key(),
+            )
+            .is_err(),
+            "one key's commitment must not accept another key"
         );
     }
 

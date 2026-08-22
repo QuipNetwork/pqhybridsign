@@ -437,6 +437,41 @@ impl CommittedVerifyKey for ShrincsScheme {
             }
         }
     }
+
+    /// Recomputes the commitment from `bundle`'s `statefulPublicKey`,
+    /// `pkSeed` and `hypertreeRoot` ([`bundle::commitment`]), the same
+    /// computation [`verify_committed_key`](Self::verify_committed_key)
+    /// checks against a stored value.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `out` is not 32 bytes or `bundle` is not
+    /// [`bundle::BUNDLE_LEN`] bytes.
+    fn compute_committed_key(bundle: &[u8], out: &mut [u8]) -> Result<()> {
+        if out.len() != Self::PUBLIC_KEY_LEN {
+            return Err(Error::BadLength {
+                expected: Self::PUBLIC_KEY_LEN,
+                actual: out.len(),
+            });
+        }
+        let commitment = bundle::commitment(bundle).map_err(|e| match e {
+            bundle::BundleError::InvalidLength => Error::BadLength {
+                expected: bundle::BUNDLE_LEN,
+                actual: bundle.len(),
+            },
+            // `bundle::commitment` only ever checks length; it never
+            // compares against a stored commitment, so it cannot produce
+            // either of these. Matched explicitly rather than with a
+            // wildcard so a future third `BundleError` variant fails to
+            // compile here instead of being silently mapped to the wrong
+            // `Error`.
+            bundle::BundleError::ZeroCommitment | bundle::BundleError::CommitmentMismatch => {
+                unreachable!("bundle::commitment does not check a stored commitment")
+            }
+        })?;
+        out.copy_from_slice(&commitment);
+        Ok(())
+    }
 }
 
 /// Flatten a `hashsigs_rs::shrincs::PublicKey` into the
