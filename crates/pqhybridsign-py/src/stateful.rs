@@ -78,9 +78,19 @@ use crate::suite::PySuite;
 /// call itself still fails rather than proceeding on bad data; the caller
 /// checks `take_error` after the ABI call returns and re-raises the
 /// original Python exception in preference to whatever the ABI reported.
+///
+/// `bound_key` is memoized in `bound_key_cache`: the first call reaches
+/// `journal.bound_key()`, and every later call on the same `PyJournal`
+/// returns the cached answer without calling back into Python. A caller
+/// that needs a read fault to be visible before the ABI's own read -- see
+/// `adopt_key` below -- gets that only if a transient fault has exactly one
+/// place to land; two independent calls into the same Python method would
+/// give it two, and a fault that lands on the second would go unnoticed by
+/// a guard checked after the first.
 struct PyJournal<'py> {
     journal: Bound<'py, PyAny>,
     error: RefCell<Option<PyErr>>,
+    bound_key_cache: RefCell<Option<Option<KeyIdentity>>>,
 }
 
 impl<'py> PyJournal<'py> {
@@ -88,6 +98,7 @@ impl<'py> PyJournal<'py> {
         Self {
             journal,
             error: RefCell::new(None),
+            bound_key_cache: RefCell::new(None),
         }
     }
 
@@ -137,24 +148,30 @@ impl LeafJournal for PyJournal<'_> {
     /// recorded on `self` and reported here as `None`. `None` is the
     /// fail-closed answer for signing, which refuses it. The caller re-raises
     /// the recorded exception in preference to whatever the ABI reported.
+    ///
+    /// Memoized (see `bound_key_cache` on the struct): `journal.bound_key`
+    /// is called at most once per `PyJournal`, however many times this
+    /// method is called.
     fn bound_key(&self) -> Option<KeyIdentity> {
-        let value = match self.journal.call_method0("bound_key") {
-            Ok(value) => value,
-            Err(err) => {
-                self.record(err);
-                return None;
-            }
-        };
-        if value.is_none() {
-            return None;
+        if let Some(cached) = *self.bound_key_cache.borrow() {
+            return cached;
         }
-        match value.extract::<[u8; KEY_IDENTITY_LEN]>() {
-            Ok(bytes) => Some(KeyIdentity::from_bytes(bytes)),
+        let result = match self.journal.call_method0("bound_key") {
+            Ok(value) if value.is_none() => None,
+            Ok(value) => match value.extract::<[u8; KEY_IDENTITY_LEN]>() {
+                Ok(bytes) => Some(KeyIdentity::from_bytes(bytes)),
+                Err(err) => {
+                    self.record(err);
+                    None
+                }
+            },
             Err(err) => {
                 self.record(err);
                 None
             }
-        }
+        };
+        *self.bound_key_cache.borrow_mut() = Some(result);
+        result
     }
 
     fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {

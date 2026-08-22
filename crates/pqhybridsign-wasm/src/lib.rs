@@ -697,9 +697,19 @@ fn js_to_key_identity(value: &JsValue) -> Option<KeyIdentity> {
 /// so a JavaScript exception thrown from either is captured in `error` and
 /// reported as the fail-closed value (`u32::MAX` or `None`); the WASM entry
 /// point re-throws it in preference to whatever the abi reported.
+///
+/// `bound_key` is memoized in `bound_key_cache`: the first call reaches
+/// `boundKey()`, and every later call on the same `JsJournal` returns the
+/// cached answer without calling back into JavaScript. A caller that needs
+/// a read fault to be visible before the ABI's own read -- see `adoptKey`
+/// below -- gets that only if a transient fault has exactly one place to
+/// land; two independent calls into the same JavaScript method would give
+/// it two, and a fault that lands on the second would go unnoticed by a
+/// guard checked after the first.
 struct JsJournal<'a> {
     obj: &'a JsValue,
     error: RefCell<Option<JsValue>>,
+    bound_key_cache: RefCell<Option<Option<KeyIdentity>>>,
 }
 
 impl<'a> JsJournal<'a> {
@@ -707,6 +717,7 @@ impl<'a> JsJournal<'a> {
         Self {
             obj,
             error: RefCell::new(None),
+            bound_key_cache: RefCell::new(None),
         }
     }
 
@@ -747,26 +758,31 @@ impl LeafJournal for JsJournal<'_> {
         }
     }
 
+    /// Memoized (see `bound_key_cache` on the struct): `boundKey()` is
+    /// called at most once per `JsJournal`, however many times this method
+    /// is called.
     fn bound_key(&self) -> Option<KeyIdentity> {
-        let value = match call0(self.obj, "boundKey") {
-            Ok(value) => value,
+        if let Some(cached) = *self.bound_key_cache.borrow() {
+            return cached;
+        }
+        let result = match call0(self.obj, "boundKey") {
+            Ok(value) if value.is_null() || value.is_undefined() => None,
+            Ok(value) => match js_to_key_identity(&value) {
+                Some(identity) => Some(identity),
+                None => {
+                    self.record_error(js_error(
+                        "boundKey() must return a 32-byte Uint8Array or null",
+                    ));
+                    None
+                }
+            },
             Err(err) => {
                 self.record_error(err);
-                return None;
-            }
-        };
-        if value.is_null() || value.is_undefined() {
-            return None;
-        }
-        match js_to_key_identity(&value) {
-            Some(identity) => Some(identity),
-            None => {
-                self.record_error(js_error(
-                    "boundKey() must return a 32-byte Uint8Array or null",
-                ));
                 None
             }
-        }
+        };
+        *self.bound_key_cache.borrow_mut() = Some(result);
+        result
     }
 
     fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
