@@ -249,6 +249,9 @@ VRF on the sr25519 suites, and an RFC 9381 `ECVRF-EDWARDS25519-SHA512-TAI` on
 the ed25519 suites. A post-quantum binding signature over the same input proves
 post-quantum key possession.
 
+`0.0.0-rc4` covers the sr25519 suites only. The ed25519 half is on `main` and
+ships in the next release.
+
 Every consensus-decisive byte derives from the classical pre-output alone. That
 pre-output is unique per key and input. A verifier checks the binding but never
 feeds it into that derivation. Post-quantum signatures are not unique for a
