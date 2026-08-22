@@ -413,7 +413,7 @@ regenerate-fixtures:
         out=$(cargo test --locked -p pqhybridsign --release --no-default-features \
           --features "$p" --test generate_fixtures -- --ignored --nocapture 2>&1)
         echo "$out"
-        wrote=$(printf '%s\n' "$out" | grep -c '^wrote ')
+        wrote=$(printf '%s\n' "$out" | grep -c '^wrote ' || true)
         if [ "$wrote" -ne 1 ]; then
           echo "expected exactly 1 fixture write for $p, got $wrote" >&2
           echo "(generate_fixtures may have lost its #[ignore] attribute or been renamed)" >&2
@@ -426,7 +426,7 @@ regenerate-fixtures:
       out=$(cargo test --locked -p pqhybridsign-wasm --release \
         --test generate_verify_with_stored_public_key_fixture -- --ignored --nocapture 2>&1)
       echo "$out"
-      wrote=$(printf '%s\n' "$out" | grep -c '^wrote ')
+      wrote=$(printf '%s\n' "$out" | grep -c '^wrote ' || true)
       if [ "$wrote" -ne 1 ]; then
         echo "expected exactly 1 fixture write from the wasm generator, got $wrote" >&2
         echo "(generate_verify_with_stored_public_key_fixture may have lost its #[ignore] attribute or been renamed)" >&2
