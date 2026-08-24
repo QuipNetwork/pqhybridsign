@@ -760,12 +760,31 @@ def test_every_name_in_all_is_importable():
     assert not unresolved, f"__all__ names that do not resolve: {unresolved}"
 
 
+# Names the `.pyi` stub legitimately declares without exporting them
+# through the package namespace. A name earns a place here for one of two
+# reasons: it is a typing helper a signature needs but nothing ever
+# imports (there are none of those among the top-level `class`/`def`
+# nodes the check below scans -- `ReadableBuffer` is a plain assignment,
+# not a class or function, so it never reaches `stub_names` and needs no
+# entry here), or it is a structural `Protocol` class callers implement
+# against but never construct or import (`LeafJournal`,
+# `StatelessBudgetStore`). Anything else added here would hide a stale
+# stub entry a rename or removal left behind -- exactly the defect this
+# test exists to catch.
+ALLOWED_STUB_ONLY = frozenset({"LeafJournal", "StatelessBudgetStore"})
+
+
 def test_every_name_in_all_appears_in_the_type_stub():
     """`__init__.pyi` is hand-maintained, so a name added to `__all__`
     without a matching stub entry silently loses editor completion and
-    static type checking, with no other test in this file noticing.
+    static type checking, with no other test in this file noticing. The
+    reverse direction matters too: a stub entry a rename or removal left
+    behind offers editor completion for a symbol that raises
+    `AttributeError` at runtime.
     """
-    stub_path = Path(phs.__file__).with_name("__init__.pyi")
+    package_file = phs.__file__
+    assert package_file is not None, "pqhybridsign has no resolvable file location"
+    stub_path = Path(package_file).with_name("__init__.pyi")
     tree = ast.parse(stub_path.read_text())
     stub_names = {
         node.name
@@ -774,6 +793,9 @@ def test_every_name_in_all_appears_in_the_type_stub():
     }
     missing = set(phs.__all__) - stub_names
     assert not missing, f"__all__ names missing from the .pyi stub: {sorted(missing)}"
+
+    stale = stub_names - set(phs.__all__) - ALLOWED_STUB_ONLY
+    assert not stale, f"stub names with no runtime counterpart: {sorted(stale)}"
 
 
 # The standard all-zero-entropy BIP39 test vector, matching
@@ -918,10 +940,13 @@ def test_vrf_prove_rejects_the_stateful_suites(suite):
     """H5 and H6 spend a few-time budget unit per evaluation and prove
     through `VrfStatelessKey.prove` instead: a call that looked free and
     was not would be the worst failure mode this module could offer."""
+    # The suite refusal happens before any length check, so this secret
+    # key's length is irrelevant -- short and obviously a dummy on purpose.
+    dummy_secret_key = b"\x00" * 8
     with pytest.raises(phs.WrongEntryPointForSuiteError):
-        phs.vrf_prove(suite, b"\x00" * 328, b"input")
+        phs.vrf_prove(suite, dummy_secret_key, b"input")
     with pytest.raises(phs.WrongEntryPointForSuiteError):
-        phs.vrf_prove_deterministic(suite, b"\x00" * 328, b"input")
+        phs.vrf_prove_deterministic(suite, dummy_secret_key, b"input")
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)

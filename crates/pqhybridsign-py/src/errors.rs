@@ -142,9 +142,12 @@ pub(crate) fn to_py_err(e: AbiError) -> PyErr {
         AbiError::StatelessBudgetExhausted => StatelessBudgetExhaustedError::new_err(msg),
         AbiError::BudgetStoreFailed => BudgetStoreFailedError::new_err(msg),
         AbiError::InvalidMnemonic => InvalidMnemonicError::new_err(msg),
-        // `AbiError` is `#[non_exhaustive]`: only a variant added after
-        // this crate was written can reach this arm, since every variant
-        // that exists today has its own arm above.
+        AbiError::ComponentFailure => ComponentFailureError::new_err(msg),
+        // `AbiError` is `#[non_exhaustive]`, so this arm is required by the
+        // compiler even though every variant that exists today now has its
+        // own arm above: it is what a variant added to the enum after this
+        // crate was written falls into, without this match failing to
+        // compile against the newer `pqhybridsign-abi`.
         _ => ComponentFailureError::new_err(msg),
     }
 }
