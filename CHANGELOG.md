@@ -41,9 +41,9 @@ and the wire format do not change. The only breaking change is the
   test suite exercises the reload under Node. In a browser the reload depends
   on a cache-busting re-import that the suite does not run, so treat a retry
   there as best-effort.
-- A stateful key handle poisons itself after a trap. Once any call on a
-  handle throws `PqHybridSignPanic`, every later call on that handle throws
-  the same error instead of reaching the dead instance, including `free`.
+- A wasm key handle poisons itself after a trap. Once any call on a handle
+  throws `PqHybridSignPanic`, every later call on that handle throws the
+  same error instead of reaching the dead instance, including `free`.
 
 ### Changed
 
