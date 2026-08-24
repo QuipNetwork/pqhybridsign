@@ -1082,6 +1082,85 @@ static int check_null_pointer_and_profile(void) {
     return failures;
 }
 
+/* ------------------------------------------------------------------ */
+/* Mnemonic -> junction -> keypair -> VRF, end to end                  */
+/* ------------------------------------------------------------------ */
+
+/* A fixed recovery phrase becomes a master seed, a hard junction derives a
+ * child seed from it, an H3 keypair is generated from that child, and the
+ * VRF is evaluated, verified, and turned into output bytes. H3 rather than
+ * H5/H6: this path needs no stateless budget store, so it exercises the
+ * seed and VRF entry points without dragging in the budget vtable checked
+ * elsewhere in this file. */
+static int check_seed_and_vrf(void) {
+    const char *phrase =
+        "abandon abandon abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon about";
+    const uint8_t input[] = "epoch-7/slot-42/randomness";
+    const uint8_t out_ctx[] = "leadership-score";
+
+    int failures = 0;
+    uint8_t *sk = NULL;
+    uint8_t *pk = NULL;
+    uint8_t *proof = NULL;
+
+    uint8_t master[PQHS_MASTER_SEED_LEN];
+    int rc = pqhs_master_seed_from_mnemonic(phrase, NULL, master, sizeof(master));
+    if (rc != PQHS_OK) return fail("master_seed_from_mnemonic", rc);
+
+    uint8_t chain_code[PQHS_CHAIN_CODE_LEN];
+    memset(chain_code, 0x24, sizeof(chain_code));
+    uint8_t child[PQHS_MASTER_SEED_LEN];
+    rc = pqhs_derive_hard_junction(master, sizeof(master), chain_code, sizeof(chain_code), child,
+                                    sizeof(child));
+    if (rc != PQHS_OK) return fail("derive_hard_junction", rc);
+    failures += expect_true("the child seed differs from its parent",
+                            memcmp(master, child, sizeof(master)) != 0);
+
+    size_t sk_len, pk_len, proof_len;
+    if (pqhs_secret_key_len(3, &sk_len) != PQHS_OK) return fail("h3 secret_key_len", 1);
+    if (pqhs_public_key_len(3, &pk_len) != PQHS_OK) return fail("h3 public_key_len", 1);
+    if (pqhs_vrf_proof_len(3, &proof_len) != PQHS_OK) return fail("h3 vrf_proof_len", 1);
+
+    sk = calloc(1, sk_len);
+    pk = calloc(1, pk_len);
+    proof = calloc(1, proof_len);
+    if (!sk || !pk || !proof) {
+        fprintf(stderr, "FAIL: seed-and-vrf allocation\n");
+        failures = 1;
+        goto done;
+    }
+
+    rc = pqhs_keygen_from_seed(3, child, sizeof(child), sk, sk_len, pk, pk_len);
+    if (rc != PQHS_OK) {
+        failures = fail("h3 keygen_from_seed", rc);
+        goto done;
+    }
+
+    size_t proof_written = 0;
+    rc = pqhs_vrf_prove(3, sk, sk_len, input, sizeof(input), proof, proof_len, &proof_written);
+    if (rc != PQHS_OK) {
+        failures = fail("vrf_prove", rc);
+        goto done;
+    }
+
+    bool valid = false;
+    rc = pqhs_vrf_verify(3, pk, pk_len, input, sizeof(input), proof, proof_written, &valid);
+    failures += expect_rc("vrf_verify call", rc, PQHS_OK);
+    failures += expect_true("the VRF proof verified", valid);
+
+    uint8_t out[PQHS_VRF_OUTPUT_LEN];
+    rc = pqhs_vrf_make_bytes(3, pk, pk_len, input, sizeof(input), proof, proof_written, out_ctx,
+                             sizeof(out_ctx), out, sizeof(out));
+    failures += expect_rc("vrf_make_bytes call", rc, PQHS_OK);
+
+done:
+    free(sk);
+    free(pk);
+    free(proof);
+    return failures;
+}
+
 int main(void) {
     int failures = 0;
     failures += check_h1();
@@ -1092,6 +1171,7 @@ int main(void) {
     failures += check_journal_key_binding();
     failures += check_malformed_verify_input();
     failures += check_null_pointer_and_profile();
+    failures += check_seed_and_vrf();
 
     if (failures == 0) {
         printf("OK: all C ABI checks passed\n");

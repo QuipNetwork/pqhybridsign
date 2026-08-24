@@ -255,7 +255,12 @@ pub struct PqhsStatelessBudget {
 /// Wraps a caller's `&PqhsStatelessBudget` as a
 /// [`pqhybridsign_abi::StatelessBudgetStore`], on the same terms as
 /// [`FfiJournal`].
-struct FfiBudget<'a>(&'a PqhsStatelessBudget);
+///
+/// `pub(crate)` rather than private: [`crate::vrf`] reuses this exact
+/// wrapper for `pqhs_prove_stateless`, which spends the same few-time
+/// budget through the same [`PqhsStatelessBudget`] vtable, so the callback
+/// logic has one implementation rather than two that could drift apart.
+pub(crate) struct FfiBudget<'a>(pub(crate) &'a PqhsStatelessBudget);
 
 impl StatelessBudgetStore for FfiBudget<'_> {
     /// The callback reported failure; no further detail crosses the FFI

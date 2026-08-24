@@ -14,7 +14,7 @@
  * --- Every entry point returns an error code ---
  *
  * `0` (PQHS_OK) is success. A nonzero return is one of the PQHS_ERR_*
- * constants below: 1..=18 mirror the Rust `pqhybridsign_abi::AbiError`
+ * constants below: 1..=21 mirror the Rust `pqhybridsign_abi::AbiError`
  * codes one for one, and 100 and above are this binding's own codes for
  * situations that only exist at a raw-pointer boundary. pqhs_error_message
  * turns any of them into a human-readable string. pqhs_verify is the one
@@ -264,6 +264,15 @@
 #define PQHS_ERR_BUDGET_STORE_FAILED 20
 
 /**
+ * A phrase passed to [`crate::pqhs_master_seed_from_mnemonic`] was not a
+ * valid English BIP39 mnemonic: a wrong word count, an unknown word, a bad
+ * checksum, or bytes that are not valid UTF-8. The four are not
+ * distinguished, because telling an attacker which part of a guessed
+ * phrase was wrong narrows the search. Mirrors `AbiError::InvalidMnemonic`.
+ */
+#define PQHS_ERR_INVALID_MNEMONIC 21
+
+/**
  * A required pointer argument was null while its paired length was
  * nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
  * raw pointer, so it has no code for a null one. A null pointer paired
@@ -293,6 +302,30 @@
 #define PQHS_ERR_ALIASED_BUFFERS 102
 
 /**
+ * Width in bytes of a master seed, everywhere one crosses this boundary:
+ * [`pqhs_master_seed_from_mnemonic`]'s `out`,
+ * [`pqhs_derive_hard_junction`]'s `parent` and `out`, and
+ * [`pqhs_derive_hard_junction_path`]'s `parent` and `out`.
+ *
+ * Written as a literal for the same reason as
+ * [`crate::PQHS_BUDGET_KEY_LEN`]: cbindgen copies the initialising
+ * expression into the header verbatim, and a C compiler has no Rust
+ * constant to expand. The assertion below keeps it in step with the
+ * library.
+ */
+#define PQHS_MASTER_SEED_LEN 32
+
+/**
+ * Width in bytes of a junction chain code:
+ * [`pqhs_derive_hard_junction`]'s `chain_code`, and one element of the
+ * flat array [`pqhs_derive_hard_junction_path`]'s `chain_codes` packs.
+ *
+ * See [`PQHS_MASTER_SEED_LEN`] for why this is a literal rather than a
+ * reference to the Rust constant it mirrors.
+ */
+#define PQHS_CHAIN_CODE_LEN 32
+
+/**
  * Width in bytes of a key identity: the value
  * [`PqhsLeafJournal::bound_key`] reports, [`PqhsLeafJournal::bind_key`]
  * stores, and [`pqhs_key_identity`] writes.
@@ -317,6 +350,14 @@
  * in step with the library.
  */
 #define PQHS_BUDGET_KEY_LEN 32
+
+/**
+ * Width in bytes of the output [`pqhs_vrf_make_bytes`] writes.
+ *
+ * See [`crate::PQHS_BUDGET_KEY_LEN`] for why this is a literal rather than
+ * a reference to the Rust constant it mirrors.
+ */
+#define PQHS_VRF_OUTPUT_LEN 32
 
 /**
  * An imported stateful secret key, held across signing calls.
@@ -348,6 +389,28 @@
  * advances the key. One handle belongs to one thread at a time.
  */
 typedef struct PqhsStatefulKey PqhsStatefulKey;
+
+/**
+ * A SHRINCS key dedicated to VRF evaluation under H5 or H6, held across
+ * calls.
+ *
+ * H5 and H6 evaluate the VRF through their post-quantum half's few-time
+ * stateless path, which draws on a budget shared with rotation and
+ * recovery. The key that carries an identity's rotation and recovery
+ * authority must not also spend that budget on VRF evaluations, so this
+ * handle always wraps a **separate** key: [`pqhs_vrf_key_derive`] derives
+ * it from the master seed under a label disjoint from the identity key's,
+ * so the two never collide.
+ *
+ * The key lives only in memory. There is no export: a dedicated VRF key is
+ * derived from the master seed when it is needed, not stored.
+ *
+ * Not thread-safe in the general sense every opaque handle in this crate
+ * is not: nothing stops two threads from calling [`pqhs_prove_stateless`]
+ * against one handle concurrently, and the caller's own `budget` vtable,
+ * not this handle, is what must serialise the spends that follow.
+ */
+typedef struct PqhsVrfKey PqhsVrfKey;
 
 /**
  * A caller-owned durable log of spent one-time leaves, passed to
@@ -620,6 +683,136 @@ int pqhs_keygen_stateful_from_seed(uint8_t suite,
  * unknown.
  */
 const char *pqhs_profile_name(void);
+
+/**
+ * Turn an English BIP39 recovery phrase into a `PQHS_MASTER_SEED_LEN`-byte
+ * master seed.
+ *
+ * This is Substrate's seed derivation, not standard BIP39: PBKDF2-HMAC-
+ * SHA512 runs over the mnemonic's **entropy**, not over the phrase text,
+ * salted with `"mnemonic" || password`, for 2048 rounds, and the first
+ * `PQHS_MASTER_SEED_LEN` bytes are the master seed. A caller that
+ * reproduces this with a stock BIP39 library gets a different seed and
+ * therefore a different key.
+ *
+ * `phrase` is a required NUL-terminated C string. `password` is optional:
+ * a null `password` is the empty string, matching Substrate's
+ * `Pair::from_phrase`.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_MNEMONIC` if `phrase` is not valid UTF-8, or is not a
+ * valid English BIP39 mnemonic: a wrong word count, an unknown word, or a
+ * bad checksum. `PQHS_ERR_INVALID_MNEMONIC` also if `password` is
+ * non-null and not valid UTF-8. None of these are distinguished, because
+ * telling an attacker which part of a guessed phrase was wrong narrows the
+ * search. `PQHS_ERR_BAD_LENGTH` if `out_len` is not
+ * `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_NULL_POINTER` if `phrase` is null, or
+ * if `out` is null while `out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * `phrase` and `password`, if non-null, must each point at a byte sequence
+ * valid for reads up to and including its first NUL byte, for the
+ * duration of this call. `out`, if non-null, must be valid for a write of
+ * exactly `out_len` bytes for the duration of this call, and must not be
+ * aliased by another live pointer.
+ */
+int pqhs_master_seed_from_mnemonic(const char *phrase,
+                                   const char *password,
+                                   uint8_t *out,
+                                   size_t out_len);
+
+/**
+ * Derive a hard-junction child master seed.
+ *
+ * `[a, b]` applied through [`pqhs_derive_hard_junction_path`] means
+ * `pqhs_derive_hard_junction(pqhs_derive_hard_junction(parent, a), b)`.
+ * Order is part of the derivation.
+ *
+ * # The re-keygen hazard
+ *
+ * Derivation is deterministic, so the same parent and the same chain code
+ * reach the same child seed on every host that computes it, and therefore
+ * the same stateful tree starting at leaf 1. Deriving one child twice on
+ * two hosts is the same failure as importing one key twice: both hosts
+ * spend leaf 1, and the post-quantum security of that key is gone.
+ *
+ * A derived child must be derived once, then persisted and restored
+ * through the validating import path. A key pool spanning several nodes
+ * must give each node its own distinct junction. Never re-derive one
+ * junction on a second host.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `parent_len` is not `PQHS_MASTER_SEED_LEN`, if
+ * `chain_code_len` is not `PQHS_CHAIN_CODE_LEN`, or if `out_len` is not
+ * `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_COMPONENT_FAILURE` if the key
+ * derivation function fails. `PQHS_ERR_NULL_POINTER` if a pointer paired
+ * with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `parent`/`chain_code`, a write for `out`) for exactly
+ * its paired length in bytes, and must not be aliased by another live
+ * pointer for the duration of this call. A null pointer is only valid
+ * when its paired length is `0`.
+ */
+int pqhs_derive_hard_junction(const uint8_t *parent,
+                              size_t parent_len,
+                              const uint8_t *chain_code,
+                              size_t chain_code_len,
+                              uint8_t *out,
+                              size_t out_len);
+
+/**
+ * Apply a sequence of chain codes in order, each child becoming the next
+ * parent. `chain_codes` is a flat array of `chain_codes_len /
+ * PQHS_CHAIN_CODE_LEN` codes, each `PQHS_CHAIN_CODE_LEN` bytes,
+ * concatenated -- a C caller has no way to pass a slice of arrays, so the
+ * boundary is one buffer and its total length.
+ *
+ * See [`pqhs_derive_hard_junction`] for the re-keygen hazard, which
+ * applies to every seed this function returns.
+ *
+ * # The empty-path trap
+ *
+ * **A `chain_codes_len` of `0` returns `parent` unchanged, and this
+ * succeeds -- it is not an error.** That is the identity a path of no
+ * junctions should have, and it is a trap for a caller building the path
+ * from parsed input: a parse that silently yielded no junctions hands back
+ * the parent key rather than failing. A caller that requires at least one
+ * junction must check for that itself, before calling this function.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `parent_len` is not `PQHS_MASTER_SEED_LEN`, if
+ * `chain_codes_len` is not a multiple of `PQHS_CHAIN_CODE_LEN`, or if
+ * `out_len` is not `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_COMPONENT_FAILURE` if
+ * the key derivation function fails. `PQHS_ERR_NULL_POINTER` if a pointer
+ * paired with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `parent`/`chain_codes`, a write for `out`) for exactly
+ * its paired length in bytes, and must not be aliased by another live
+ * pointer for the duration of this call. A null pointer is only valid
+ * when its paired length is `0`.
+ */
+int pqhs_derive_hard_junction_path(const uint8_t *parent,
+                                   size_t parent_len,
+                                   const uint8_t *chain_codes,
+                                   size_t chain_codes_len,
+                                   uint8_t *out,
+                                   size_t out_len);
 
 /**
  * Hedged (randomized) signing for `suite`. Writes the signature into
@@ -1407,6 +1600,275 @@ int pqhs_stateful_key_sign_stateless(const PqhsStatefulKey *key,
                                      uint8_t *sig_out,
                                      size_t sig_out_len,
                                      size_t *written);
+
+/**
+ * Write the hybrid VRF proof length for `suite`, in bytes, into `*out`.
+ *
+ * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+ * delta-length binding can occupy. For H5 and H6 this is exact.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null.
+ *
+ * # Safety
+ *
+ * `out`, if non-null, must be a valid, writable `usize` pointer.
+ */
+int pqhs_vrf_proof_len(uint8_t suite, size_t *out);
+
+/**
+ * Evaluate the hybrid VRF for `suite`, hedged with the process's secure
+ * random source. Writes the proof into `proof_out` and the number of bytes
+ * written into `*proof_written`.
+ *
+ * H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
+ * budget on every evaluation and need a durable store to record it, so
+ * they prove through [`pqhs_prove_stateless`] instead, on the same terms
+ * [`crate::pqhs_sign`] refuses them: a call that looks free and is not is
+ * the worst failure mode this crate could offer.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+ * [`pqhs_prove_stateless`] instead. `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if
+ * `proof_out` is smaller than [`pqhs_vrf_proof_len`] needs for this input.
+ * `PQHS_ERR_BAD_LENGTH` if `sk` is not the suite's secret-key length.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+ * null, or if `proof_written` is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `sk`/`input`, writes for `proof_out`/`proof_written`)
+ * for exactly its paired length in bytes, and must not be aliased by
+ * another live pointer for the duration of this call. A null pointer is
+ * only valid when its paired length is `0`; `proof_written` has no paired
+ * length and must be a valid, non-null, writable `usize` pointer.
+ */
+int pqhs_vrf_prove(uint8_t suite,
+                   const uint8_t *sk,
+                   size_t sk_len,
+                   const uint8_t *input,
+                   size_t input_len,
+                   uint8_t *proof_out,
+                   size_t proof_out_len,
+                   size_t *proof_written);
+
+/**
+ * Evaluate the hybrid VRF for `suite` with a reproducible classical proof.
+ * Writes the proof into `proof_out` and the number of bytes written into
+ * `*proof_written`.
+ *
+ * H1 through H4 only, on the same terms as [`pqhs_vrf_prove`]: H5 and H6
+ * spend a few-time budget unit and prove through [`pqhs_prove_stateless`].
+ *
+ * # Errors
+ *
+ * The same as [`pqhs_vrf_prove`].
+ *
+ * # Safety
+ *
+ * The same as [`pqhs_vrf_prove`].
+ */
+int pqhs_vrf_prove_deterministic(uint8_t suite,
+                                 const uint8_t *sk,
+                                 size_t sk_len,
+                                 const uint8_t *input,
+                                 size_t input_len,
+                                 uint8_t *proof_out,
+                                 size_t proof_out_len,
+                                 size_t *proof_written);
+
+/**
+ * Verify a hybrid VRF `proof` over `input` for `suite`, against `pk`.
+ * Covers all six suites: verifying never spends anything, so there is
+ * nothing to keep apart by statefulness.
+ *
+ * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
+ * cases: an invalid proof is not a call failure. A malformed `pk` or
+ * `proof` simply fails to verify, on the same terms as
+ * [`crate::pqhs_verify`].
+ *
+ * `*valid_out` is set to `false` before anything else happens, so it is
+ * `false` on every path that returns a code other than `PQHS_OK` too. The
+ * one case that cannot fail closed is a null `valid_out` itself, which is
+ * rejected before any other check.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+ * null, or if `valid_out` is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `pk`/`input`/`proof`, a write for `valid_out`) for
+ * exactly its paired length in bytes, and must not be aliased by another
+ * live pointer for the duration of this call. A null pointer is only
+ * valid when its paired length is `0`; `valid_out` has no paired length
+ * and must be a valid, non-null, writable `bool` pointer.
+ */
+int pqhs_vrf_verify(uint8_t suite,
+                    const uint8_t *pk,
+                    size_t pk_len,
+                    const uint8_t *input,
+                    size_t input_len,
+                    const uint8_t *proof,
+                    size_t proof_len,
+                    bool *valid_out);
+
+/**
+ * Derive `PQHS_VRF_OUTPUT_LEN` output bytes from a verified `proof`.
+ *
+ * **Verify the proof first**, with [`pqhs_vrf_verify`]. That is what
+ * establishes that the pre-output belongs to this key and this input.
+ * Deriving bytes from an unverified proof derives bytes from whatever an
+ * attacker supplied, and this function performs no verification of its
+ * own.
+ *
+ * `context` separates two uses of one proof: the same proof under
+ * `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
+ * evaluation can feed two consumers without either learning the other's
+ * value early.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_BAD_LENGTH` if `out_len` is not `PQHS_VRF_OUTPUT_LEN`, if
+ * `proof` is shorter than the proof header, or if `pk` is shorter than
+ * the classical public key. `PQHS_ERR_COMPONENT_FAILURE` if `pk` or the
+ * pre-output does not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired
+ * with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `pk`/`input`/`proof`/`context`, a write for `out`) for
+ * exactly its paired length in bytes, and must not be aliased by another
+ * live pointer for the duration of this call. A null pointer is only
+ * valid when its paired length is `0`.
+ */
+int pqhs_vrf_make_bytes(uint8_t suite,
+                        const uint8_t *pk,
+                        size_t pk_len,
+                        const uint8_t *input,
+                        size_t input_len,
+                        const uint8_t *proof,
+                        size_t proof_len,
+                        const uint8_t *context,
+                        size_t context_len,
+                        uint8_t *out,
+                        size_t out_len);
+
+/**
+ * Derive a dedicated VRF key from `master` for `suite`, writing its public
+ * key into `pk_out` and returning an opaque handle through `out`.
+ *
+ * `master` is a `PQHS_MASTER_SEED_LEN`-byte master seed, the same one
+ * [`crate::pqhs_master_seed_from_mnemonic`] or
+ * [`crate::pqhs_derive_hard_junction`] produces. `pk_out` must be exactly
+ * [`crate::pqhs_public_key_len`] bytes for `suite`.
+ *
+ * **This key is not the identity key.** Deriving it under the same master
+ * seed as an H5/H6 identity key produces a different key, disjoint from
+ * the identity's rotation and recovery authority, by construction of the
+ * derivation label. Do not adopt an identity key here: doing so would
+ * spend the identity's rotation and recovery budget on VRF evaluations.
+ *
+ * On success, `*out` is a pointer the caller must later pass to
+ * [`pqhs_vrf_key_free`]. On failure, `*out` is left untouched.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: they have no stateful
+ * half and therefore no dedicated stateless VRF key.
+ * `PQHS_ERR_BAD_LENGTH` if `master_len` is not `PQHS_MASTER_SEED_LEN`, or
+ * `pk_out_len` is not [`crate::pqhs_public_key_len`] for `suite`.
+ * `PQHS_ERR_COMPONENT_FAILURE` if derivation fails.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null, or if `master` is null while
+ * `master_len` is nonzero. `PQHS_ERR_INVALID_SUITE` if `suite` is not
+ * `1..=6`.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `master`, writes for `pk_out` and one `*mut
+ * PqhsVrfKey` for `out`) for exactly its paired length in bytes, and must
+ * not be aliased by another live pointer for the duration of this call. A
+ * null pointer is only valid when its paired length is `0`; `out` has no
+ * paired length and must be a valid, non-null, writable `*mut PqhsVrfKey`
+ * pointer.
+ */
+int pqhs_vrf_key_derive(uint8_t suite,
+                        const uint8_t *master,
+                        size_t master_len,
+                        uint8_t *pk_out,
+                        size_t pk_out_len,
+                        PqhsVrfKey **out);
+
+/**
+ * Release a handle previously returned by [`pqhs_vrf_key_derive`].
+ *
+ * A null `key` is a no-op. After this call returns, `key` must not be
+ * used again.
+ *
+ * # Safety
+ *
+ * `key` must be a pointer previously returned by [`pqhs_vrf_key_derive`]
+ * that has not already been freed, or null. The pointer must not be used
+ * after this call returns.
+ */
+void pqhs_vrf_key_free(PqhsVrfKey *key);
+
+/**
+ * Evaluate the hybrid VRF under H5 or H6 through `key`, spending one unit
+ * of the few-time stateless budget. Writes the proof into `proof_out` and
+ * the number of bytes written into `*proof_written`.
+ *
+ * [`pqhs_vrf_prove`] refuses these suites because a call that looks free
+ * and is not is the worst failure mode this crate could offer. This entry
+ * point takes the dedicated key and the durable store the spend needs, on
+ * the same terms as [`crate::pqhs_sign_stateless`]. See
+ * [`PqhsStatelessBudget`] for the durability contract the callbacks must
+ * honour.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's few-time budget is
+ * spent; nothing was recorded and no proof was built.
+ * `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+ * become durable; nothing was recorded either.
+ * `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if `proof_out` is shorter than
+ * [`pqhs_vrf_proof_len`] needs. `PQHS_ERR_COMPONENT_FAILURE` if a
+ * component rejects the key. `PQHS_ERR_NULL_POINTER` if `key` is null, if
+ * a pointer paired with a nonzero length is null, if `proof_written` is
+ * null, if `budget` is null, or if either of `budget`'s callbacks is
+ * null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`/`input`, writes for
+ * `proof_out`/`proof_written`) for exactly its paired length in bytes,
+ * and must not be aliased by another live pointer for the duration of
+ * this call. A null pointer is only valid when its paired length is `0`;
+ * `proof_written` has no paired length and must be a valid, non-null,
+ * writable `usize` pointer. `key` must be a pointer previously returned
+ * by [`pqhs_vrf_key_derive`] that has not been freed. `budget` must point
+ * to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its own
+ * callbacks are prepared to receive, and whose callbacks do not call back
+ * into this library.
+ */
+int pqhs_prove_stateless(const PqhsVrfKey *key,
+                         const PqhsStatelessBudget *budget,
+                         const uint8_t *input,
+                         size_t input_len,
+                         uint8_t *proof_out,
+                         size_t proof_out_len,
+                         size_t *proof_written);
 
 #ifdef __cplusplus
 }  // extern "C"

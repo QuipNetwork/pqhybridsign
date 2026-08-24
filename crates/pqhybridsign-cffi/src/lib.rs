@@ -43,23 +43,29 @@ mod error;
 mod ffi;
 mod keygen;
 mod profile;
+mod seed;
 mod sign;
 mod sizes;
 mod stateful;
 mod suite;
+mod vrf;
 
 pub use error::{
     pqhs_error_message, PQHS_ERR_ALIASED_BUFFERS, PQHS_ERR_BAD_LENGTH, PQHS_ERR_BAD_PATH_SELECTOR,
     PQHS_ERR_BAD_ROTATION_KIND, PQHS_ERR_BUDGET_STORE_FAILED, PQHS_ERR_COMPONENT_FAILURE,
     PQHS_ERR_CONTEXT_TOO_LONG, PQHS_ERR_COUNTERS_DIVERGED, PQHS_ERR_DELTA_LENGTH_OUT_OF_RANGE,
-    PQHS_ERR_GRIND_ABORT, PQHS_ERR_INVALID_SUITE, PQHS_ERR_JOURNAL_FAILED,
-    PQHS_ERR_JOURNAL_KEY_MISMATCH, PQHS_ERR_LEAF_COUNT_OUT_OF_RANGE, PQHS_ERR_LEAVES_EXHAUSTED,
-    PQHS_ERR_NULL_POINTER, PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL, PQHS_ERR_PANIC,
-    PQHS_ERR_SIGNING_FAILED, PQHS_ERR_STATELESS_BUDGET_EXHAUSTED, PQHS_ERR_TRAILING_BYTES,
-    PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, PQHS_OK,
+    PQHS_ERR_GRIND_ABORT, PQHS_ERR_INVALID_MNEMONIC, PQHS_ERR_INVALID_SUITE,
+    PQHS_ERR_JOURNAL_FAILED, PQHS_ERR_JOURNAL_KEY_MISMATCH, PQHS_ERR_LEAF_COUNT_OUT_OF_RANGE,
+    PQHS_ERR_LEAVES_EXHAUSTED, PQHS_ERR_NULL_POINTER, PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL,
+    PQHS_ERR_PANIC, PQHS_ERR_SIGNING_FAILED, PQHS_ERR_STATELESS_BUDGET_EXHAUSTED,
+    PQHS_ERR_TRAILING_BYTES, PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, PQHS_OK,
 };
 pub use keygen::{pqhs_keygen_from_seed, pqhs_keygen_stateful_from_seed};
 pub use profile::pqhs_profile_name;
+pub use seed::{
+    pqhs_derive_hard_junction, pqhs_derive_hard_junction_path, pqhs_master_seed_from_mnemonic,
+    PQHS_CHAIN_CODE_LEN, PQHS_MASTER_SEED_LEN,
+};
 pub use sign::{pqhs_sign, pqhs_sign_deterministic, pqhs_verify};
 pub use sizes::{
     pqhs_public_key_len, pqhs_secret_key_len, pqhs_signature_len, pqhs_stored_public_key_len,
@@ -72,4 +78,9 @@ pub use stateful::{
     pqhs_verify_with_stored_public_key_stateful, pqhs_verify_with_stored_public_key_stateless,
     PqhsLeafJournal, PqhsStatefulKey, PqhsStatelessBudget, PQHS_BUDGET_KEY_LEN,
     PQHS_KEY_IDENTITY_LEN,
+};
+pub use vrf::{
+    pqhs_prove_stateless, pqhs_vrf_key_derive, pqhs_vrf_key_free, pqhs_vrf_make_bytes,
+    pqhs_vrf_proof_len, pqhs_vrf_prove, pqhs_vrf_prove_deterministic, pqhs_vrf_verify, PqhsVrfKey,
+    PQHS_VRF_OUTPUT_LEN,
 };

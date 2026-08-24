@@ -16,7 +16,7 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * --- Every entry point returns an error code ---
  *
  * `0` (PQHS_OK) is success. A nonzero return is one of the PQHS_ERR_*
- * constants below: 1..=18 mirror the Rust `pqhybridsign_abi::AbiError`
+ * constants below: 1..=21 mirror the Rust `pqhybridsign_abi::AbiError`
  * codes one for one, and 100 and above are this binding's own codes for
  * situations that only exist at a raw-pointer boundary. pqhs_error_message
  * turns any of them into a human-readable string. pqhs_verify is the one
