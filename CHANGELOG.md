@@ -23,6 +23,27 @@ and the wire format do not change. The only breaking change is the
   `vrf` feature). The type does not prove disjointness, and no type could:
   disjointness is a property of where key material came from, not of its
   shape. It makes the claim explicit and greppable.
+- `StatefulKeyHandle` in `pqhybridsign-abi`, with `pqhs_stateful_key_open` in
+  C, `StatefulSecretKey` holding the handle in Python, and `openStatefulKey`
+  in the npm package. Importing a stateful key re-derives the hypertree root,
+  which costs about 47 seconds at the `128s` profiles. A handle pays that once
+  instead of once per signature.
+- VRF, BIP39 mnemonic and hard-junction derivation in all four bindings. A C,
+  Python or JavaScript caller can now evaluate a VRF, turn a recovery phrase
+  into a master seed, and derive a child key. The stateful suites prove
+  through a dedicated stateless key that the bindings derive under a label
+  disjoint from the identity key. The bindings expose derivation only:
+  `adopt_unchecked`, which rests on a caller's unverifiable assertion, stays
+  inside the Rust ABI.
+- `PqHybridSignPanic` in the npm package. A WebAssembly trap now reaches a
+  JavaScript caller as a distinct error class rather than trapping the
+  instance silently. The cached instance is discarded, and the package's own
+  test suite exercises the reload under Node. In a browser the reload depends
+  on a cache-busting re-import that the suite does not run, so treat a retry
+  there as best-effort.
+- A stateful key handle poisons itself after a trap. Once any call on a
+  handle throws `PqHybridSignPanic`, every later call on that handle throws
+  the same error instead of reaching the dead instance, including `free`.
 
 ### Changed
 
@@ -50,6 +71,14 @@ and the wire format do not change. The only breaking change is the
   catchable `WebAssembly.RuntimeError`, and catching it does not make the
   instance sound. Every export was audited for a panic reachable from
   caller-controlled input, and none was found.
+- The C and Python test helpers that built a stored public key by slicing the
+  bundle at a fixed offset now recompute it through `PublicKey::stored_form`.
+- The stateful durability rule gains its one exception. A caller still
+  exports and persists the advanced key after every signing call, including
+  a call that failed, because a stateful signer advances its leaf counter on
+  failure as well as on success. A call that threw `PqHybridSignPanic` is the
+  exception: the instance is gone, there is no advanced key to export, and
+  the caller's leaf journal is the only durable record of what was spent.
 
 ### Fixed
 
@@ -68,6 +97,13 @@ and the wire format do not change. The only breaking change is the
   whatever the `workflow` block allows, so a merge-request pipeline contained
   one job, and that job is allowed to fail. The merge widget showed green over
   a pipeline that had compiled nothing.
+- `DESIGN.md` stated the section 7 label registry holds 16 rows including
+  four rotation rows. It holds 13 rows, and rotation is one templated row
+  whose four byte counts are one per profile and cover all eight composed
+  labels.
+- `cargo test --workspace` now fails when the checked-in wasm TypeScript
+  definitions are stale. The check ran only in the `wasm-npm` CI job before.
+- CI runs the `wasm32-unknown-unknown` test target. Nothing ran it before.
 
 ## 0.0.0-rc5
 
