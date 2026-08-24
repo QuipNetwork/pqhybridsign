@@ -2,30 +2,18 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.0.0-rc6
+## 0.0.0-rc7
 
-rc6 adds a stateful key handle to the ABI and all three bindings, so that
-importing a key costs once rather than on every signature. It also adds VRF
-proving and BIP39 mnemonic and hard-junction derivation across all four
-surfaces. The remaining changes close gaps in how this project verifies
-itself. The signature suites and the wire format do not change. The only
-breaking change is the `sign_stateless` signature, which is behind the
-non-default `vrf` feature.
+rc7 adds a stateful key handle to the ABI and all three bindings, so that
+importing a key costs once rather than once per signature. It also adds VRF
+proving and BIP39 mnemonic and hard-junction derivation to the C, Python and
+JavaScript bindings, which had none of the three before. The remaining changes
+close gaps in how this project verifies itself. The signature suites and the
+wire format do not change, and rc7 removes no public entry point and changes
+no signature.
 
 ### Added
 
-- `CommittedVerifyKey::compute_committed_key`, the inverse of
-  `verify_committed_key`, and `PublicKey::stored_form`, which builds the small
-  on-storage form of a stateful public key from a verify-form key. Callers who
-  held a verify-form key had to slice the classical prefix and the commitment
-  at a hard-coded component offset, which put component layout into
-  application code. `bundle::commitment` is factored out of `verify_bundle`,
-  so the side that computes a commitment and the side that checks one share
-  one implementation and cannot drift apart.
-- `vrf::DedicatedVrfKey` and `DedicatedVrfKey::adopt_unchecked` (behind the
-  `vrf` feature). The type does not prove disjointness, and no type could:
-  disjointness is a property of where key material came from, not of its
-  shape. It makes the claim explicit and greppable.
 - `StatefulKeyHandle` in `pqhybridsign-abi`, with `pqhs_stateful_key_open` in
   C, `StatefulSecretKey` holding the handle in Python, and `openStatefulKey`
   in the npm package. Importing a stateful key re-derives the hypertree root,
@@ -54,6 +42,51 @@ non-default `vrf` feature.
 
 ### Changed
 
+- The C crate's test helper that built a stored public key by slicing the
+  bundle at a fixed offset now recomputes it through `PublicKey::stored_form`.
+  The new Python `stored_public_key` function does the same.
+- The stateful durability rule gains its one exception. A caller still
+  exports and persists the advanced key after every signing call, including
+  a call that failed, because a stateful signer advances its leaf counter on
+  failure as well as on success. A call that threw `PqHybridSignPanic` is the
+  exception: the instance is gone, there is no advanced key to export, and
+  the caller's leaf journal is the only durable record of what was spent.
+
+### Fixed
+
+- `DESIGN.md` stated the section 7 label registry holds 16 rows including
+  four rotation rows. It holds 13 rows, and rotation is one templated row
+  whose four byte counts are one per profile and cover all eight composed
+  labels.
+- `cargo test --workspace` now fails when `src/lib.rs` in the wasm crate has
+  changed since the checked-in TypeScript definitions were last regenerated.
+  The check ran only in the `wasm-npm` CI job before.
+- CI runs the `wasm32-unknown-unknown` test target. Nothing ran it before.
+
+## 0.0.0-rc6
+
+rc6 adds one type-level guarantee and one accessor to the public surface, and
+otherwise closes gaps in how this project verifies itself. The signature suites
+and the wire format do not change. The only breaking change is the
+`sign_stateless` signature, which is behind the non-default `vrf` feature.
+
+### Added
+
+- `CommittedVerifyKey::compute_committed_key`, the inverse of
+  `verify_committed_key`, and `PublicKey::stored_form`, which builds the small
+  on-storage form of a stateful public key from a verify-form key. Callers who
+  held a verify-form key had to slice the classical prefix and the commitment
+  at a hard-coded component offset, which put component layout into
+  application code. `bundle::commitment` is factored out of `verify_bundle`,
+  so the side that computes a commitment and the side that checks one share
+  one implementation and cannot drift apart.
+- `vrf::DedicatedVrfKey` and `DedicatedVrfKey::adopt_unchecked` (behind the
+  `vrf` feature). The type does not prove disjointness, and no type could:
+  disjointness is a property of where key material came from, not of its
+  shape. It makes the claim explicit and greppable.
+
+### Changed
+
 - **Breaking, behind the `vrf` feature.** `vrf::sign_stateless` takes a
   `DedicatedVrfKey` rather than a `SecretKey`. Nothing previously stopped a
   caller passing one key to both `rotation::sign_rotation` and the VRF, which
@@ -78,15 +111,6 @@ non-default `vrf` feature.
   catchable `WebAssembly.RuntimeError`, and catching it does not make the
   instance sound. Every export was audited for a panic reachable from
   caller-controlled input, and none was found.
-- The C crate's test helper that built a stored public key by slicing the
-  bundle at a fixed offset now recomputes it through `PublicKey::stored_form`.
-  The new Python `stored_public_key` function does the same.
-- The stateful durability rule gains its one exception. A caller still
-  exports and persists the advanced key after every signing call, including
-  a call that failed, because a stateful signer advances its leaf counter on
-  failure as well as on success. A call that threw `PqHybridSignPanic` is the
-  exception: the instance is gone, there is no advanced key to export, and
-  the caller's leaf journal is the only durable record of what was spent.
 
 ### Fixed
 
@@ -105,14 +129,6 @@ non-default `vrf` feature.
   whatever the `workflow` block allows, so a merge-request pipeline contained
   one job, and that job is allowed to fail. The merge widget showed green over
   a pipeline that had compiled nothing.
-- `DESIGN.md` stated the section 7 label registry holds 16 rows including
-  four rotation rows. It holds 13 rows, and rotation is one templated row
-  whose four byte counts are one per profile and cover all eight composed
-  labels.
-- `cargo test --workspace` now fails when `src/lib.rs` in the wasm crate has
-  changed since the checked-in TypeScript definitions were last regenerated.
-  The check ran only in the `wasm-npm` CI job before.
-- CI runs the `wasm32-unknown-unknown` test target. Nothing ran it before.
 
 ## 0.0.0-rc5
 

@@ -19,7 +19,7 @@ name = "pqhybridsign_cffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc6" }
+pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc7" }
 rand_core = { workspace = true, features = ["getrandom"] }
 
 [dev-dependencies]

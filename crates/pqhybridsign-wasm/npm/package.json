@@ -1,6 +1,6 @@
 {
   "name": "@quip.network/pqhybridsign",
-  "version": "0.0.0-rc6",
+  "version": "0.0.0-rc7",
   "description": "Hybrid classical/post-quantum signing (H1-H6) compiled to WebAssembly, with a Promise-based API for Node.js and browsers",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://quip.network",
