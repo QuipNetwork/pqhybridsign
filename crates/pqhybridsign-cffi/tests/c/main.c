@@ -346,6 +346,128 @@ done:
 }
 
 /* ------------------------------------------------------------------ */
+/* H5: opaque handle -- open once, sign twice, export, reopen          */
+/* ------------------------------------------------------------------ */
+
+static int check_h5_handle(void) {
+    size_t sk_len, pk_len, sig_max_len;
+    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("h5 handle secret_key_len", 1);
+    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("h5 handle public_key_len", 1);
+    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("h5 handle signature_len", 1);
+
+    int failures = 0;
+    uint8_t *sk = calloc(1, sk_len);
+    uint8_t *pk = calloc(1, pk_len);
+    uint8_t *exported = calloc(1, sk_len);
+    uint8_t *sig = calloc(1, sig_max_len);
+    if (!sk || !pk || !exported || !sig) {
+        fprintf(stderr, "FAIL: h5 handle allocation\n");
+        failures = 1;
+        goto done;
+    }
+
+    uint8_t seed[32];
+    memset(seed, 0xaa, sizeof(seed));
+
+    int rc = pqhs_keygen_stateful_from_seed(5, seed, sizeof(seed), 4, sk, sk_len, pk, pk_len);
+    if (rc != PQHS_OK) {
+        failures = fail("h5 handle keygen_stateful_from_seed", rc);
+        goto done;
+    }
+    failures += journal_provision(5, pk, pk_len);
+
+    PqhsLeafJournal journal = {
+        .ctx = NULL,
+        .commit = journal_commit,
+        .next_leaf = journal_next_leaf,
+        .bound_key = journal_bound_key,
+        .bind_key = journal_bind_key,
+    };
+
+    PqhsStatefulKey *key = NULL;
+    rc = pqhs_stateful_key_open(5, sk, sk_len, &key);
+    if (rc != PQHS_OK) {
+        failures = fail("h5 handle open", rc);
+        goto done;
+    }
+    failures += expect_true("h5 handle open returned a pointer", key != NULL);
+
+    uint8_t identity[PQHS_KEY_IDENTITY_LEN];
+    rc = pqhs_stateful_key_identity(key, identity, sizeof(identity));
+    failures += expect_rc("h5 handle identity", rc, PQHS_OK);
+
+    const uint8_t ctx[] = "ctx";
+    const uint8_t first[] = "first";
+    size_t sig_len = 0;
+    rc = pqhs_stateful_key_sign(key, &journal, first, sizeof(first), ctx, sizeof(ctx), sig,
+                                 sig_max_len, &sig_len);
+    if (rc != PQHS_OK) {
+        failures = fail("h5 handle sign first", rc);
+        pqhs_stateful_key_free(key);
+        goto done;
+    }
+    bool valid = false;
+    rc = pqhs_verify(5, pk, pk_len, first, sizeof(first), ctx, sizeof(ctx), sig, sig_len, &valid);
+    failures += expect_rc("h5 handle verify first call", rc, PQHS_OK);
+    failures += expect_true("h5 handle first signature verified", valid);
+
+    const uint8_t second[] = "second";
+    sig_len = 0;
+    rc = pqhs_stateful_key_sign(key, &journal, second, sizeof(second), ctx, sizeof(ctx), sig,
+                                 sig_max_len, &sig_len);
+    if (rc != PQHS_OK) {
+        failures = fail("h5 handle sign second", rc);
+        pqhs_stateful_key_free(key);
+        goto done;
+    }
+    valid = false;
+    rc = pqhs_verify(5, pk, pk_len, second, sizeof(second), ctx, sizeof(ctx), sig, sig_len, &valid);
+    failures += expect_rc("h5 handle verify second call", rc, PQHS_OK);
+    failures += expect_true("h5 handle second signature verified", valid);
+
+    size_t export_written = 0;
+    rc = pqhs_stateful_key_export(key, exported, sk_len, &export_written);
+    failures += expect_rc("h5 handle export", rc, PQHS_OK);
+    failures += expect_true("h5 handle export wrote the secret-key length",
+                            export_written == sk_len);
+    failures += expect_true("h5 handle export advanced past the spent leaves",
+                            memcmp(sk, exported, sk_len) != 0);
+    pqhs_stateful_key_free(key);
+
+    PqhsStatefulKey *reopened = NULL;
+    rc = pqhs_stateful_key_open(5, exported, export_written, &reopened);
+    if (rc != PQHS_OK) {
+        failures = fail("h5 handle reopen", rc);
+        goto done;
+    }
+
+    const uint8_t third[] = "third";
+    sig_len = 0;
+    rc = pqhs_stateful_key_sign(reopened, &journal, third, sizeof(third), ctx, sizeof(ctx), sig,
+                                 sig_max_len, &sig_len);
+    if (rc != PQHS_OK) {
+        failures = fail("h5 handle sign after reopen", rc);
+        pqhs_stateful_key_free(reopened);
+        goto done;
+    }
+    valid = false;
+    rc = pqhs_verify(5, pk, pk_len, third, sizeof(third), ctx, sizeof(ctx), sig, sig_len, &valid);
+    failures += expect_rc("h5 handle verify third call", rc, PQHS_OK);
+    failures += expect_true("h5 handle signature after reopen verified", valid);
+    pqhs_stateful_key_free(reopened);
+
+    /* A null handle is a documented no-op. */
+    pqhs_stateful_key_free(NULL);
+
+done:
+    free(sk);
+    free(pk);
+    free(exported);
+    free(sig);
+    return failures;
+}
+
+/* ------------------------------------------------------------------ */
 /* Error cases on the stateless entry points                           */
 /* ------------------------------------------------------------------ */
 
@@ -964,6 +1086,7 @@ int main(void) {
     int failures = 0;
     failures += check_h1();
     failures += check_h5();
+    failures += check_h5_handle();
     failures += check_stateless_error_cases();
     failures += check_stateful_error_cases();
     failures += check_journal_key_binding();

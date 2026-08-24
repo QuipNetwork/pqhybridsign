@@ -120,7 +120,7 @@ documentation_style = "doxy"
 style = "type"
 
 [export]
-item_types = ["functions", "constants", "structs", "enums"]
+item_types = ["functions", "constants", "structs", "enums", "opaque"]
 
 [enum]
 prefix_with_name = true

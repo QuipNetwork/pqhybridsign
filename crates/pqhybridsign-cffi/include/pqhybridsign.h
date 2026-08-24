@@ -319,6 +319,37 @@
 #define PQHS_BUDGET_KEY_LEN 32
 
 /**
+ * An imported stateful secret key, held across signing calls.
+ *
+ * Opaque. Create one with [`pqhs_stateful_key_open`], release it with
+ * [`pqhs_stateful_key_free`], and never copy or free the pointer any
+ * other way.
+ *
+ * # Why this exists
+ *
+ * `pqhs_sign_stateful` imports the exported blob on every call.
+ * `SecretKey::import` re-derives the hypertree root, which at
+ * `profile-128s-q18` and `profile-128s-q20` costs about 47 seconds, the
+ * same walk as keygen. A signer that takes more than one signature from a
+ * key should open a handle once and sign through it: the import is paid
+ * at `pqhs_stateful_key_open` and every later signature costs under 0.01
+ * seconds.
+ *
+ * # The durability contract is unchanged
+ *
+ * A handle holds the key in memory and persists nothing. After every
+ * `pqhs_stateful_key_sign` call, **including one that returned an
+ * error**, call `pqhs_stateful_key_export` and persist the result before
+ * relying on the signature. A leaf can be durably committed to the
+ * journal and the signature still fail, and a stored key that did not
+ * advance with the journal is refused for the rest of the key's life.
+ *
+ * Not thread-safe. `pqhs_stateful_key_sign` takes a mutable pointer and
+ * advances the key. One handle belongs to one thread at a time.
+ */
+typedef struct PqhsStatefulKey PqhsStatefulKey;
+
+/**
  * A caller-owned durable log of spent one-time leaves, passed to
  * [`pqhs_sign_stateful`].
  *
@@ -1176,6 +1207,206 @@ int pqhs_verify_with_stored_public_key_stateless(uint8_t suite,
                                                  const uint8_t *sig,
                                                  size_t sig_len,
                                                  bool *valid_out);
+
+/**
+ * Import `sk` once and return an opaque handle through `out`.
+ *
+ * This is the call that costs about 47 seconds at the 128s profiles.
+ * Every later [`pqhs_stateful_key_sign`] taken through the handle costs
+ * under 0.01 seconds. See [`PqhsStatefulKey`].
+ *
+ * `sk` is the exported secret key blob from
+ * [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
+ * or a previous [`pqhs_stateful_key_export`].
+ *
+ * On success, `*out` is a pointer the caller must later pass to
+ * [`pqhs_stateful_key_free`]. On failure, `*out` is left untouched.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4.
+ * `PQHS_ERR_BAD_LENGTH` if `sk` is not
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
+ * `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null, or if `sk` is null while
+ * `sk_len` is nonzero. `PQHS_ERR_INVALID_SUITE` if `suite` is not
+ * `1..=6`.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `sk`, a write of one `*mut PqhsStatefulKey` for
+ * `out`) for exactly its paired length in bytes, and must not be aliased
+ * by another live pointer for the duration of this call. A null pointer
+ * is only valid when its paired length is `0`; `out` has no paired length
+ * and must be a valid, non-null, writable `*mut PqhsStatefulKey` pointer.
+ */
+int pqhs_stateful_key_open(uint8_t suite, const uint8_t *sk, size_t sk_len, PqhsStatefulKey **out);
+
+/**
+ * Release a handle previously returned by [`pqhs_stateful_key_open`].
+ *
+ * A null `key` is a no-op. After this call returns, `key` must not be
+ * used again.
+ *
+ * # Safety
+ *
+ * `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not already been freed, or null.
+ * The pointer must not be used after this call returns.
+ */
+void pqhs_stateful_key_free(PqhsStatefulKey *key);
+
+/**
+ * Write the current exported blob of `key` into `sk_out`.
+ *
+ * Writes the number of bytes written through `written`, which is
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) for this handle's
+ * suite. Persist this after every [`pqhs_stateful_key_sign`] call,
+ * including one that returned an error. See [`PqhsStatefulKey`].
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `sk_out` is not exactly
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes.
+ * `PQHS_ERR_COMPONENT_FAILURE` if the key does not export.
+ * `PQHS_ERR_NULL_POINTER` if `key` or `written` is null, or if `sk_out`
+ * is null while `sk_out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`, writes for `sk_out`/`written`) for exactly
+ * its paired length in bytes, and must not be aliased by another live
+ * pointer for the duration of this call. A null pointer is only valid
+ * when its paired length is `0`; `written` has no paired length and must
+ * be a valid, non-null, writable `usize` pointer. `key` must be a
+ * pointer previously returned by [`pqhs_stateful_key_open`] that has not
+ * been freed.
+ */
+int pqhs_stateful_key_export(const PqhsStatefulKey *key,
+                             uint8_t *sk_out,
+                             size_t sk_out_len,
+                             size_t *written);
+
+/**
+ * Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key `key`
+ * holds into `out`.
+ *
+ * The same value [`pqhs_key_identity`] writes for the matching public
+ * key. Derived from the cached post-quantum verify key, which is public;
+ * no secret byte reaches it.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+ * `PQHS_ERR_NULL_POINTER` if `key` is null, or if `out` is null while
+ * `out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`, writes for `out`) for exactly its paired
+ * length in bytes, and must not be aliased by another live pointer for
+ * the duration of this call. A null pointer is only valid when its
+ * paired length is `0`. `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not been freed.
+ */
+int pqhs_stateful_key_identity(const PqhsStatefulKey *key, uint8_t *out, size_t out_len);
+
+/**
+ * Sign `msg` under `ctx` with `key`, spending one leaf recorded through
+ * `journal`.
+ *
+ * The handle-held counterpart of [`pqhs_sign_stateful`]. Identical in
+ * every respect except that the key is already imported and the advanced
+ * key stays in `key` instead of being written to an `sk_out` buffer.
+ *
+ * `journal` must already be bound to this key ([`pqhs_adopt_key`]). That
+ * is checked before its counter is read and before anything is committed.
+ *
+ * **The handle advances on every outcome that reaches the component
+ * signer, including a failed one.** Export and persist it either way.
+ * See [`PqhsStatefulKey`].
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal` is not bound to this key;
+ * nothing was spent and the key is intact. `PQHS_ERR_LEAVES_EXHAUSTED`
+ * if the key's leaf budget is spent, checked before the journal is
+ * touched. `PQHS_ERR_JOURNAL_FAILED` if `journal` could not durably
+ * commit; nothing was spent. `PQHS_ERR_NULL_POINTER` if `key` is null,
+ * if `journal` is null or any of its four callbacks is null, if
+ * `written` is null, or if any buffer pointer paired with a nonzero
+ * length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`/`journal`/`msg`/`ctx`, writes for
+ * `sig_out`/`written`) for exactly its paired length in bytes, and must
+ * not be aliased by another live pointer for the duration of this call.
+ * A null pointer is only valid when its paired length is `0`; `written`
+ * has no paired length and must be a valid, non-null, writable `usize`
+ * pointer. `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not been freed. `journal`, if
+ * non-null, must point to a valid `PqhsLeafJournal` whose `ctx` is a
+ * pointer its own callbacks are prepared to receive, and whose callbacks
+ * do not call back into this library (see [`PqhsLeafJournal`]).
+ */
+int pqhs_stateful_key_sign(PqhsStatefulKey *key,
+                           const PqhsLeafJournal *journal,
+                           const uint8_t *msg,
+                           size_t msg_len,
+                           const uint8_t *ctx,
+                           size_t ctx_len,
+                           uint8_t *sig_out,
+                           size_t sig_out_len,
+                           size_t *written);
+
+/**
+ * Sign `msg` under `ctx` with `key` without spending any leaf, using
+ * SHRINCS's stateless few-time path (specification section 21), and
+ * spending one unit of the few-time stateless budget.
+ *
+ * The handle-held counterpart of [`pqhs_sign_stateless`]. `budget` is
+ * required and no leaf journal substitutes for it, on the same terms.
+ * The stateless path does not advance the key, so there is nothing new
+ * to export afterwards.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_NULL_POINTER` if `key` is null, if a pointer paired with a
+ * nonzero length is null, if `written` is null, if `budget` is null, or
+ * if either of `budget`'s callbacks is null.
+ * `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's stateless budget is
+ * spent; nothing was recorded and no signature was built.
+ * `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+ * become durable; nothing was recorded either.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`/`budget`/`msg`/`ctx`, writes for
+ * `sig_out`/`written`) for exactly its paired length in bytes, and must
+ * not be aliased by another live pointer for the duration of this call.
+ * A null pointer is only valid when its paired length is `0`; `written`
+ * has no paired length and must be a valid, non-null, writable `usize`
+ * pointer. `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not been freed. `budget` must
+ * point to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its
+ * own callbacks are prepared to receive, and whose callbacks do not call
+ * back into this library.
+ */
+int pqhs_stateful_key_sign_stateless(const PqhsStatefulKey *key,
+                                     const PqhsStatelessBudget *budget,
+                                     const uint8_t *msg,
+                                     size_t msg_len,
+                                     const uint8_t *ctx,
+                                     size_t ctx_len,
+                                     uint8_t *sig_out,
+                                     size_t sig_out_len,
+                                     size_t *written);
 
 #ifdef __cplusplus
 }  // extern "C"
