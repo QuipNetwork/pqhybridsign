@@ -359,6 +359,45 @@ def test_stateful_export_and_load_round_trips(suite):
     assert journal.committed == [0, 1]
 
 
+def test_stateful_key_signs_repeatedly_without_reimporting():
+    """A key object holds its imported form, so a second signature is cheap.
+
+    This does not time anything: a timing assertion at profile-256s would
+    measure nothing, and at a 128s profile it would take 94 seconds to fail.
+    It asserts the observable consequence instead. Two signatures from one
+    object both verify, the exported blob advances between them, and a fresh
+    object built from that blob continues rather than restarting.
+    """
+    suite = phs.Suite.H5
+    seed = bytes(range(32))
+    journal = MemoryJournal()
+    budget = MemoryBudget()
+    key, pk = phs.keygen_stateful_from_seed(suite, seed, 4, journal, budget)
+
+    before = key.export()
+
+    sig1 = key.sign_stateful(b"first", b"ctx")
+    assert phs.verify(suite, pk, b"first", b"ctx", sig1)
+
+    after = key.export()
+    assert after != before, "the key did not advance"
+
+    sig2 = key.sign_stateful(b"second", b"ctx")
+    assert phs.verify(suite, pk, b"second", b"ctx", sig2)
+    assert sig1 != sig2
+
+    reopened = phs.load_stateful_secret_key(suite, key.export(), journal, budget)
+    sig3 = reopened.sign_stateful(b"third", b"ctx")
+    assert phs.verify(suite, pk, b"third", b"ctx", sig3)
+
+
+def test_stateful_key_rejects_a_stateless_suite():
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.load_stateful_secret_key(
+            phs.Suite.H1, bytes(32), MemoryJournal(), MemoryBudget()
+        )
+
+
 @pytest.mark.parametrize("suite", STATEFUL_SUITES)
 def test_two_loads_of_one_blob_sharing_a_journal_refuse_the_fork(suite):
     """The confirmed pqhs-aww hazard: export() + load_stateful_secret_key()

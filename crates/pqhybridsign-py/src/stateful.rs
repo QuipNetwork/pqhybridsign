@@ -288,6 +288,15 @@ struct BudgetCallFailed;
 
 /// A loaded H5 or H6 secret key.
 ///
+/// Holds the imported key, so the hypertree root is derived once when the
+/// object is constructed rather than once per signature. At profile-128s-q18
+/// and profile-128s-q20 that derivation costs about 47 seconds. Constructing
+/// this object is where you now pay it.
+///
+/// The durability contract is unchanged. After every sign_stateful call,
+/// including one that raised, call export() and persist the result before
+/// relying on the signature.
+///
 /// Bound to a journal object at construction, by [`keygen_stateful_from_seed`]
 /// or [`load_stateful_secret_key`]. Signing through [`Self::sign_stateful`]
 /// advances this object in place and always spends the leaf through that
@@ -299,15 +308,9 @@ struct BudgetCallFailed;
 #[pyclass(module = "pqhybridsign", name = "StatefulSecretKey")]
 pub(crate) struct StatefulSecretKey {
     suite: PySuite,
-    bytes: Vec<u8>,
+    handle: pqhybridsign_abi::StatefulKeyHandle,
     journal: Py<PyAny>,
     budget: Py<PyAny>,
-}
-
-impl Drop for StatefulSecretKey {
-    fn drop(&mut self) {
-        self.bytes.zeroize();
-    }
 }
 
 #[pymethods]
@@ -325,10 +328,11 @@ impl StatefulSecretKey {
     /// The journal must implement `commit(leaf: int) -> None` and
     /// `next_leaf() -> int`, and `commit` must not return until the write
     /// is durable: returning early there is the one way this method could
-    /// let a leaf be reissued after a crash. This key's internal bytes are
-    /// updated in place to the advanced key on every outcome that reaches
-    /// the component signer, including a failed one -- see
-    /// `pqhybridsign_abi::sign_stateful` for why.
+    /// let a leaf be reissued after a crash. The held key advances on
+    /// every outcome that reaches the component signer, including a failed
+    /// one -- see `pqhybridsign_abi::sign_stateful_with_handle` for why.
+    /// After this call, including one that raised, persist [`Self::export`]
+    /// before relying on the signature.
     ///
     /// Returns the signature as `bytes`.
     ///
@@ -351,28 +355,18 @@ impl StatefulSecretKey {
     ) -> PyResult<Py<PyBytes>> {
         let msg = extract_bytes(py, msg)?;
         let ctx = extract_bytes(py, ctx)?;
-        let suite: pqhybridsign_abi::Suite = self.suite.into();
+        let suite = self.handle.suite();
 
-        let mut sk_out = self.bytes.clone();
         let mut sig_out = vec![0u8; pqhybridsign_abi::signature_len(suite)];
         let mut journal = PyJournal::new(self.journal.bind(py).clone());
 
-        let outcome = pqhybridsign_abi::sign_stateful(
-            suite,
-            &self.bytes,
+        let outcome = pqhybridsign_abi::sign_stateful_with_handle(
+            &mut self.handle,
             &mut journal,
             &msg,
             &ctx,
-            &mut sk_out,
             &mut sig_out,
         );
-
-        // `sk_out` reflects the advanced key on every outcome that reached
-        // the component signer, and is an unchanged copy of `self.bytes`
-        // otherwise: adopting it unconditionally is always correct, never
-        // a silent leaf-drift risk.
-        self.bytes.zeroize();
-        self.bytes = sk_out;
 
         if let Some(err) = journal.take_error() {
             return Err(err);
@@ -417,13 +411,12 @@ impl StatefulSecretKey {
     ) -> PyResult<Py<PyBytes>> {
         let msg = extract_bytes(py, msg)?;
         let ctx = extract_bytes(py, ctx)?;
-        let suite: pqhybridsign_abi::Suite = self.suite.into();
+        let suite = self.handle.suite();
 
         let mut sig_out = vec![0u8; pqhybridsign_abi::signature_len(suite)];
         let mut budget = PyBudget::new(self.budget.bind(py).clone());
-        let outcome = pqhybridsign_abi::sign_stateless(
-            suite,
-            &self.bytes,
+        let outcome = pqhybridsign_abi::sign_stateless_with_handle(
+            &self.handle,
             &mut budget,
             &msg,
             &ctx,
@@ -451,8 +444,12 @@ impl StatefulSecretKey {
     /// `load_stateful_secret_key` has to notice they now hold two
     /// independent objects over the same leaf budget, the exact hazard
     /// `__copy__` and `__reduce__` refuse to hand out silently.
-    fn export<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.bytes)
+    fn export<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let mut sk_out = vec![0u8; pqhybridsign_abi::secret_key_len(self.handle.suite())];
+        let n = self.handle.export(&mut sk_out).map_err(to_py_err)?;
+        let out = PyBytes::new(py, &sk_out[..n]);
+        sk_out.zeroize();
+        Ok(out)
     }
 
     fn __copy__(&self) -> PyResult<Py<Self>> {
@@ -589,14 +586,11 @@ fn adopt_key(
     outcome.map_err(to_py_err)
 }
 
-/// Refuse `journal` unless it already carries the identity of the key in
-/// `blob`.
+/// Refuse `journal` unless it already carries `identity`.
 ///
-/// Shared by `keygen_stateful_from_seed` -- which adopts first, so the check
-/// always passes -- and `load_stateful_secret_key`, which does not.
-fn require_journal_owns(suite: PySuite, blob: &[u8], journal: &Bound<'_, PyAny>) -> PyResult<()> {
-    let identity =
-        pqhybridsign_abi::key_identity_from_secret_key(suite.into(), blob).map_err(to_py_err)?;
+/// Used by `load_stateful_secret_key`. `keygen_stateful_from_seed` adopts
+/// first instead, so the matching check always passes there.
+fn require_journal_owns(identity: KeyIdentity, journal: &Bound<'_, PyAny>) -> PyResult<()> {
     let py_journal = PyJournal::new(journal.clone());
     let outcome = pqhybridsign_abi::require_bound_key(&py_journal, identity);
     if let Some(err) = py_journal.take_error() {
@@ -667,10 +661,14 @@ fn keygen_stateful_from_seed(
     );
     adopt_key(py, journal, identity.as_any())?;
 
+    let opened = pqhybridsign_abi::StatefulKeyHandle::open(abi_suite, &sk);
+    sk.zeroize();
+    let handle = opened.map_err(to_py_err)?;
+
     Ok((
         StatefulSecretKey {
             suite,
-            bytes: sk,
+            handle,
             journal: journal.clone().unbind(),
             budget: budget.clone().unbind(),
         },
@@ -729,23 +727,13 @@ fn load_stateful_secret_key(
     journal: &Bound<'_, PyAny>,
     budget: &Bound<'_, PyAny>,
 ) -> PyResult<StatefulSecretKey> {
-    let abi_suite: pqhybridsign_abi::Suite = suite.into();
-    if !abi_suite.is_stateful() {
-        return Err(to_py_err(
-            pqhybridsign_abi::AbiError::WrongEntryPointForSuite,
-        ));
-    }
-    let mut blob = extract_bytes(py, blob)?;
-    if blob.len() != pqhybridsign_abi::secret_key_len(abi_suite) {
-        return Err(to_py_err(pqhybridsign_abi::AbiError::BadLength));
-    }
-    require_journal_owns(suite, &blob, journal)?;
-    // Take the bytes out of the `Zeroizing` wrapper so this type's
-    // `Drop` owns the only remaining copy. The wrapper then drops an
-    // empty `Vec`.
+    let blob = extract_bytes(py, blob)?;
+    let handle =
+        pqhybridsign_abi::StatefulKeyHandle::open(suite.into(), &blob).map_err(to_py_err)?;
+    require_journal_owns(handle.key_identity(), journal)?;
     Ok(StatefulSecretKey {
         suite,
-        bytes: std::mem::take(&mut *blob),
+        handle,
         journal: journal.clone().unbind(),
         budget: budget.clone().unbind(),
     })
