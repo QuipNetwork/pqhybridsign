@@ -4,10 +4,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## 0.0.0-rc6
 
-rc6 adds one type-level guarantee and one accessor to the public surface, and
-otherwise closes gaps in how this project verifies itself. The signature suites
-and the wire format do not change. The only breaking change is the
-`sign_stateless` signature, which is behind the non-default `vrf` feature.
+rc6 adds a stateful key handle to the ABI and all three bindings, so that
+importing a key costs once rather than on every signature. It also adds VRF
+proving and BIP39 mnemonic and hard-junction derivation across all four
+surfaces. The remaining changes close gaps in how this project verifies
+itself. The signature suites and the wire format do not change. The only
+breaking change is the `sign_stateless` signature, which is behind the
+non-default `vrf` feature.
 
 ### Added
 
@@ -41,6 +44,10 @@ and the wire format do not change. The only breaking change is the
   test suite exercises the reload under Node. In a browser the reload depends
   on a cache-busting re-import that the suite does not run, so treat a retry
   there as best-effort.
+- `stored_public_key` in the Python package, a module-level function that
+  recomputes the stored form of a verify-form public key the same way
+  `PublicKey::stored_form` does. The C crate and the npm package gain no
+  matching function in this release.
 - A wasm key handle poisons itself after a trap. Once any call on a handle
   throws `PqHybridSignPanic`, every later call on that handle throws the
   same error instead of reaching the dead instance, including `free`.
@@ -71,8 +78,9 @@ and the wire format do not change. The only breaking change is the
   catchable `WebAssembly.RuntimeError`, and catching it does not make the
   instance sound. Every export was audited for a panic reachable from
   caller-controlled input, and none was found.
-- The C and Python test helpers that built a stored public key by slicing the
-  bundle at a fixed offset now recompute it through `PublicKey::stored_form`.
+- The C crate's test helper that built a stored public key by slicing the
+  bundle at a fixed offset now recomputes it through `PublicKey::stored_form`.
+  The new Python `stored_public_key` function does the same.
 - The stateful durability rule gains its one exception. A caller still
   exports and persists the advanced key after every signing call, including
   a call that failed, because a stateful signer advances its leaf counter on
@@ -101,8 +109,9 @@ and the wire format do not change. The only breaking change is the
   four rotation rows. It holds 13 rows, and rotation is one templated row
   whose four byte counts are one per profile and cover all eight composed
   labels.
-- `cargo test --workspace` now fails when the checked-in wasm TypeScript
-  definitions are stale. The check ran only in the `wasm-npm` CI job before.
+- `cargo test --workspace` now fails when `src/lib.rs` in the wasm crate has
+  changed since the checked-in TypeScript definitions were last regenerated.
+  The check ran only in the `wasm-npm` CI job before.
 - CI runs the `wasm32-unknown-unknown` test target. Nothing ran it before.
 
 ## 0.0.0-rc5
