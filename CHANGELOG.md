@@ -2,6 +2,73 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc6
+
+rc6 adds one type-level guarantee and one accessor to the public surface, and
+otherwise closes gaps in how this project verifies itself. The signature suites
+and the wire format do not change. The only breaking change is the
+`sign_stateless` signature, which is behind the non-default `vrf` feature.
+
+### Added
+
+- `CommittedVerifyKey::compute_committed_key`, the inverse of
+  `verify_committed_key`, and `PublicKey::stored_form`, which builds the small
+  on-storage form of a stateful public key from a verify-form key. Callers who
+  held a verify-form key had to slice the classical prefix and the commitment
+  at a hard-coded component offset, which put component layout into
+  application code. `bundle::commitment` is factored out of `verify_bundle`,
+  so the side that computes a commitment and the side that checks one share
+  one implementation and cannot drift apart.
+- `vrf::DedicatedVrfKey` and `DedicatedVrfKey::adopt_unchecked` (behind the
+  `vrf` feature). The type does not prove disjointness, and no type could:
+  disjointness is a property of where key material came from, not of its
+  shape. It makes the claim explicit and greppable.
+
+### Changed
+
+- **Breaking, behind the `vrf` feature.** `vrf::sign_stateless` takes a
+  `DedicatedVrfKey` rather than a `SecretKey`. Nothing previously stopped a
+  caller passing one key to both `rotation::sign_rotation` and the VRF, which
+  spends on ordinary VRF evaluation the stateless reserve that rotation and
+  recovery depend on. Documentation and one isolation test were the only
+  things standing between a caller and that. `derive_stateless_key` now
+  returns a `DedicatedVrfKey`, so the derived path needs no change at the call
+  site. Key material of any other provenance enters through
+  `adopt_unchecked`, whose name puts the claim in front of a reviewer.
+- `DESIGN.md` records why rotation is offered for the stateful suites only.
+  This is an exception to the principle that every algorithm should support
+  every mechanism, and it is recorded as one rather than left to look like an
+  unfilled gap. `RotationKind::StatefulGraft` grafts a fresh stateful tree
+  onto the unchanged stateless-verify half, and a suite with no tree has no
+  target for it. `RotationKind::FullSwap` replaces the stateless material that
+  `PqStatefulScheme::stateless_key_material` exposes, and a lattice suite's
+  post-quantum type never implements that trait.
+- The WebAssembly crate documents that a panic traps the instance.
+  `wasm32-unknown-unknown` builds its standard library with `panic = "abort"`,
+  so `catch_unwind` cannot contain a panic there and the C ABI's
+  per-entry-point guard has no equivalent. The trap does reach JavaScript as a
+  catchable `WebAssembly.RuntimeError`, and catching it does not make the
+  instance sound. Every export was audited for a panic reachable from
+  caller-controlled input, and none was found.
+
+### Fixed
+
+- `adopt_key` refuses adoption when the journal binding read faults. A bridge
+  reports a throwing `boundKey` to the abi as `None`, which the abi reads as
+  never-bound: it would call `bindKey` and only then let the deferred
+  exception surface, silently replacing an existing binding on a journal whose
+  `bindKey` is not write-once. The read now happens once, before anything can
+  write, and the fault surfaces first.
+- Both journal bridges clear their memoized binding read when `bindKey`
+  succeeds, so a read after a write cannot return a cached `None`. No current
+  caller reads the binding again after binding it, so this maintains an
+  invariant rather than repairing a reachable fault.
+- Every continuous integration job now runs in merge-request pipelines. A job
+  that declares no rules is excluded from one by GitLab's own default,
+  whatever the `workflow` block allows, so a merge-request pipeline contained
+  one job, and that job is allowed to fail. The merge widget showed green over
+  a pipeline that had compiled nothing.
+
 ## 0.0.0-rc5
 
 rc5 completes the hybrid VRF across every suite and closes two ways the

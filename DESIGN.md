@@ -611,6 +611,27 @@ either alone. A single-component rotation path would let one compromised
 component redirect all future authority, which drops the composite below its
 own guarantee at the worst possible moment.
 
+Rotation is offered for the stateful suites only. Every signing and
+`M'_rotation` entry point in `rotation` is bounded on `StatefulSuite`, so the
+four lattice variations (`hybrid-{ed25519,sr25519}-{mldsa44,falcon512}-v1`)
+have no rotation label, no `M'_rotation`, and no authorization signature.
+
+This is an exception the maintainer recorded on 2026-08-22. Completeness
+does not require rotation on a suite with no leaf budget. Leaf exhaustion
+forces a stateful key to hand over its authority.
+`RotationKind::StatefulGraft` grafts a fresh stateful tree onto the
+unchanged stateless-verify half. A suite with no tree has no target for
+that graft. `RotationKind::FullSwap` also replaces the stateless material that
+`PqStatefulScheme::stateless_key_material` exposes. A lattice suite's `Pq`
+type never implements that trait, so it has no stateless material for
+`FullSwap` to replace. It also has no commitment for `NextStoredPublicKey`
+to carry. Installing a new lattice public key is a deployment step rather
+than a construction this library authorizes.
+
+The label grammar allows an optional `-rotate` suffix on any suite. In
+code, only the eight SHRINCS suites set `rotate_label`
+(`crates/pqhybridsign/src/shrincs/suites.rs`). No lattice suite does.
+
 Each suite carries a second compile-time label, `ROTATE_LABEL`, composed as
 `"hybrid-" classical "-" pq "-rotate-v1"` plus the null byte and checked
 against the registry the same way the ordinary label is. An ordinary signature
@@ -896,8 +917,9 @@ seconds in total.
 
 What this gives up: no per-commit run produces a 128s stateless signature, so
 the FORS-C grind, the WOTS-C grind and hypertree signing wait for the
-scheduled `regenerate-fixtures` job. That job is also the only detector of
-fixture staleness on the signing paths.
+`regenerate-fixtures` jobs. Those jobs run on a merge request that touches
+the signing crates or the lockfile, and on every default-branch pipeline.
+They are also the only detector of fixture staleness on the signing paths.
 
 ## Findings from the specification review
 

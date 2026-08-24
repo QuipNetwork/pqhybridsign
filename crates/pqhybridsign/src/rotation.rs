@@ -797,6 +797,25 @@ mod tests {
                 Err(Error::ComponentFailure)
             }
         }
+
+        // Mirrors `fake_commitment` exactly, matching `verify_committed_key`
+        // above: whatever this writes is what that accepts.
+        fn compute_committed_key(verify_key: &[u8], out: &mut [u8]) -> Result<()> {
+            if verify_key.len() != <Self as PqStatefulScheme>::VERIFY_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: <Self as PqStatefulScheme>::VERIFY_KEY_LEN,
+                    actual: verify_key.len(),
+                });
+            }
+            if out.len() != <Self as PqStatefulScheme>::PUBLIC_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: <Self as PqStatefulScheme>::PUBLIC_KEY_LEN,
+                    actual: out.len(),
+                });
+            }
+            out.copy_from_slice(&fake_commitment(verify_key));
+            Ok(())
+        }
     }
 
     #[cfg(feature = "alloc")]

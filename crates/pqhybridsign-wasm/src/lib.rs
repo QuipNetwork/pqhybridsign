@@ -3,8 +3,9 @@
 // workspace `[lints.rust] unsafe-code = "deny"` and, unlike `deny`,
 // cannot be relaxed by a downstream `#![allow(unsafe_code)]` -- which
 // `clippy::allow_attributes` would not flag, because it does not fire on
-// crate-scope inner attributes. The `# No panics` section below names
-// this attribute, so removing it silently falsifies published rustdoc.
+// crate-scope inner attributes. The `# Panics and instance loss` section
+// below names this attribute, so removing it silently falsifies published
+// rustdoc.
 #![forbid(unsafe_code)]
 // Test-only fixtures use `unwrap` freely; test failure is the desired
 // outcome of a bad input.
@@ -91,12 +92,45 @@
 //! [`pqhybridsign_abi::AbiError`] message. Nothing here returns an
 //! integer error code or a Rust `Result` to JavaScript.
 //!
-//! # No panics
+//! # Panics and instance loss
 //!
-//! `#![forbid(unsafe_code)]` and no `unwrap`/`expect` outside
-//! `#[cfg(test)]`: a panic unwinding across the WebAssembly boundary is
-//! undefined behaviour, and every export here is written to be called
-//! from JavaScript.
+//! This module is built for `wasm32-unknown-unknown`, whose standard library
+//! uses `panic = "abort"`. A panic there compiles to an `unreachable`
+//! instruction, which traps the WebAssembly instance. The host engine
+//! surfaces that trap to JavaScript as a `WebAssembly.RuntimeError`, and an
+//! ordinary `try`/`catch` around the call does catch it -- but catching it
+//! says nothing about whether the instance is safe to call again. A trap is
+//! not one of this crate's ordinary thrown `Error` values, and a caller that
+//! treats it as one and keeps using the instance is trusting state this
+//! crate never vouched for. `catch_unwind` cannot contain a panic on this
+//! target -- confirmed directly against the `wasm-bindgen` build this crate
+//! ships, not only against a bare `cdylib` -- so this crate does not attempt
+//! it: the C ABI's per-entry-point guard has no equivalent here.
+//!
+//! Every export in this module has been audited for a panic reachable from
+//! caller-controlled input, and none was found: `#![forbid(unsafe_code)]`
+//! and no `unwrap`/`expect` outside `#[cfg(test)]`; every suite name and
+//! length is validated and reported as a thrown `Error` rather than indexed
+//! or unwrapped; and every buffer this crate slices with a length read back
+//! from elsewhere -- most prominently the signature buffers [`sign`],
+//! [`sign_deterministic`], [`sign_stateful`] and [`sign_stateless`] return --
+//! is bounds-checked inside `pqhybridsign-abi` before that length is ever
+//! used to slice. Ordinary misuse -- a wrong-length key, an unknown suite
+//! name, a malformed signature -- returns an error and leaves the instance
+//! usable; a panic here would indicate a defect in this crate rather than
+//! bad input.
+//!
+//! A trap skips Rust's normal unwind cleanup, so a host cannot assume the
+//! instance's internal state is sound afterward. This crate holds no state
+//! of its own across calls -- every export is a plain function over its
+//! arguments, with no `static` or thread-local data -- so a trap here
+//! cannot leave one of this crate's own locks or half-built values behind
+//! for a later call to observe; that says nothing about the wasm allocator
+//! or the `wasm-bindgen` runtime the instance also carries, which this
+//! crate does not own and cannot vouch for. A host that must survive a
+//! panic here should still instantiate the module in a context it can
+//! discard and recreate, such as a dedicated worker, rather than rely on
+//! the instance remaining usable.
 //!
 //! # Secret key handling
 //!
@@ -697,9 +731,30 @@ fn js_to_key_identity(value: &JsValue) -> Option<KeyIdentity> {
 /// so a JavaScript exception thrown from either is captured in `error` and
 /// reported as the fail-closed value (`u32::MAX` or `None`); the WASM entry
 /// point re-throws it in preference to whatever the abi reported.
+///
+/// `bound_key` is memoized in `bound_key_cache`: the first call reaches
+/// `boundKey()`, and every later call on the same `JsJournal` returns the
+/// cached answer without calling back into JavaScript. A caller that needs
+/// a read fault to be visible before the ABI's own read -- see `adoptKey`
+/// below -- gets that only if a transient fault has exactly one place to
+/// land; two independent calls into the same JavaScript method would give
+/// it two, and a fault that lands on the second would go unnoticed by a
+/// guard checked after the first.
+///
+/// `bind_key` clears `bound_key_cache` on success, so a `bound_key` read
+/// after a `bind_key` write on the same instance sees the new binding rather
+/// than a `None` cached from before it. No current caller reads
+/// `bound_key` again after `bind_key` on one `JsJournal` -- `adopt_key`
+/// reads it once, before its own single call to `bind_key`, and
+/// `sign_stateful` never calls `bind_key` at all -- but the type does not
+/// enforce that ordering, and a future entry point that adopts and then
+/// re-reads must not see a stale `None`: that is exactly the never-bound
+/// condition `JournalKeyMismatch` exists to catch. Any method added to this
+/// `impl` that writes through to JavaScript must maintain this invariant.
 struct JsJournal<'a> {
     obj: &'a JsValue,
     error: RefCell<Option<JsValue>>,
+    bound_key_cache: RefCell<Option<Option<KeyIdentity>>>,
 }
 
 impl<'a> JsJournal<'a> {
@@ -707,6 +762,7 @@ impl<'a> JsJournal<'a> {
         Self {
             obj,
             error: RefCell::new(None),
+            bound_key_cache: RefCell::new(None),
         }
     }
 
@@ -747,32 +803,46 @@ impl LeafJournal for JsJournal<'_> {
         }
     }
 
+    /// Memoized (see `bound_key_cache` on the struct): `boundKey()` is
+    /// called at most once per `JsJournal` between calls to `bind_key`,
+    /// however many times this method is called. `bind_key` clears the
+    /// cache on success, so a call after a successful bind reaches
+    /// `boundKey()` again rather than returning a stale answer.
     fn bound_key(&self) -> Option<KeyIdentity> {
-        let value = match call0(self.obj, "boundKey") {
-            Ok(value) => value,
+        if let Some(cached) = *self.bound_key_cache.borrow() {
+            return cached;
+        }
+        let result = match call0(self.obj, "boundKey") {
+            Ok(value) if value.is_null() || value.is_undefined() => None,
+            Ok(value) => match js_to_key_identity(&value) {
+                Some(identity) => Some(identity),
+                None => {
+                    self.record_error(js_error(
+                        "boundKey() must return a 32-byte Uint8Array or null",
+                    ));
+                    None
+                }
+            },
             Err(err) => {
                 self.record_error(err);
-                return None;
-            }
-        };
-        if value.is_null() || value.is_undefined() {
-            return None;
-        }
-        match js_to_key_identity(&value) {
-            Some(identity) => Some(identity),
-            None => {
-                self.record_error(js_error(
-                    "boundKey() must return a 32-byte Uint8Array or null",
-                ));
                 None
             }
-        }
+        };
+        *self.bound_key_cache.borrow_mut() = Some(result);
+        result
     }
 
     fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
         let arg = Uint8Array::from(&key.as_bytes()[..]);
         match call1(self.obj, "bindKey", arg.as_ref()) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Invalidate `bound_key_cache`: a stale `None` cached from a
+                // read before this write would read back as never-bound,
+                // which is the exact condition `JournalKeyMismatch` exists
+                // to catch. The next `bound_key()` call re-reads `boundKey()`.
+                *self.bound_key_cache.borrow_mut() = None;
+                Ok(())
+            }
             Err(err) => {
                 self.record_error(err);
                 Err(CallbackFailed)
@@ -992,11 +1062,24 @@ pub fn key_identity_from_secret_key(
 /// belongs to another key (the abi's `JournalKeyMismatch`), or if `bindKey`
 /// could not durably record the binding. Any exception a journal method
 /// itself threw is re-thrown unchanged.
+///
+/// A `boundKey()` that throws prevents `bindKey` from being called at all,
+/// so a read fault can never replace an existing binding.
 #[wasm_bindgen(js_name = adoptKey)]
 pub fn adopt_key(journal: &JsValue, identity: &[u8]) -> Result<(), JsValue> {
     let bytes = <[u8; KEY_IDENTITY_LEN]>::try_from(identity)
         .map_err(|_| js_error(pqhybridsign_abi::AbiError::BadLength))?;
     let mut journal = JsJournal::new(journal);
+    // Read the binding once, and surface a read fault, before anything can
+    // write. The bridge reports a throwing `boundKey` to the abi as `None`,
+    // which the abi reads as never-bound: it would call `bindKey` and only
+    // then let the deferred exception surface. Against an already-bound
+    // journal whose `bindKey` is not write-once, that silently replaces the
+    // binding, which is what the JournalKeyMismatch guard exists to prevent.
+    let _ = journal.bound_key();
+    if let Some(err) = journal.take_error() {
+        return Err(err);
+    }
     let result = pqhybridsign_abi::adopt_key(&mut journal, KeyIdentity::from_bytes(bytes));
     if let Some(err) = journal.take_error() {
         return Err(err);
@@ -1171,5 +1254,68 @@ mod tests {
     fn any_suite_rejects_unknown_names() {
         assert!(any_suite("H7").is_err());
         assert!(any_suite("").is_err());
+    }
+}
+
+/// Tests that call into a real JavaScript object through `JsJournal`.
+///
+/// `js_sys`'s wasm-bindgen imports panic with "cannot call wasm-bindgen
+/// imported functions on non-wasm targets" outside `wasm32`, so this module
+/// only compiles for that target and only runs under `wasm-bindgen-test`,
+/// against Node by default:
+///
+/// ```text
+/// CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+///   cargo test -p pqhybridsign-wasm --target wasm32-unknown-unknown --lib
+/// ```
+///
+/// Never runs under plain `cargo test`, and the installed
+/// `wasm-bindgen-test-runner` must match this crate's `wasm-bindgen` version
+/// exactly (`cargo install wasm-bindgen-cli --version <version> --locked`).
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    /// A `bound_key()` read cached before a successful `bind_key()` must not
+    /// be handed back after it: that cached `None` reads as never-bound,
+    /// which is the exact condition `JournalKeyMismatch` exists to catch.
+    /// No current entry point re-reads `bound_key()` after `bind_key()` on
+    /// one `JsJournal` (`adopt_key` reads it once, before its own single
+    /// `bind_key` call, and `sign_stateful` never calls `bind_key` at all),
+    /// so this constructs the sequence directly against a real JavaScript
+    /// object instead of going through an entry point.
+    #[wasm_bindgen_test]
+    fn bind_key_invalidates_the_bound_key_cache() {
+        // `js_sys::eval` here runs a fixed, hardcoded source string compiled
+        // into this test binary, not any externally supplied or runtime-built
+        // text; it stands in for a JavaScript-authored journal object, which
+        // is exactly what `JsJournal` wraps in production. No untrusted input
+        // reaches it.
+        let obj = js_sys::eval(
+            "(function () {
+                let bound = null;
+                return {
+                    boundKey: function () { return bound; },
+                    bindKey: function (k) { bound = new Uint8Array(k); },
+                };
+            })()",
+        )
+        .expect("eval the fake journal object");
+
+        let mut journal = JsJournal::new(&obj);
+
+        // Populate the cache with the pre-bind answer.
+        assert_eq!(journal.bound_key(), None, "a fresh journal owns no key");
+
+        let key = KeyIdentity::from_bytes([7u8; KEY_IDENTITY_LEN]);
+        journal.bind_key(key).expect("bind_key");
+
+        assert_eq!(
+            journal.bound_key(),
+            Some(key),
+            "bound_key() after bind_key() must reflect the new binding, not \
+             the None cached from before it"
+        );
     }
 }

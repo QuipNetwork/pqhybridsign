@@ -18,7 +18,7 @@
 //! `verifyWithStoredPublicKey`/`storedPublicKeyLen` against.
 //!
 //! Ignored by default, following the convention of
-//! `pqhybridsign-shrincs/tests/generate_fixtures.rs`. Run explicitly and
+//! `pqhybridsign/tests/generate_fixtures.rs`. Run explicitly and
 //! commit the result after any change to the fixture's shape:
 //!
 //! ```text
@@ -27,10 +27,11 @@
 //! ```
 //!
 //! `pqhybridsign-wasm` builds against exactly one SHRINCS profile feature
-//! (see `pqhybridsign-shrincs/Cargo.toml`'s `default = ["profile-256s"]`,
-//! which this crate does not override), the same one the checked-in
-//! fixture records. Unlike the shrincs crate's own multi-profile
-//! generator, there is only one profile to regenerate against here.
+//! (see `pqhybridsign/Cargo.toml`'s `stateful = ["profile-256s"]`, on by
+//! default and not overridden along the `pqhybridsign-abi` dependency this
+//! crate builds against), the same one the checked-in fixture records.
+//! Unlike `pqhybridsign`'s own multi-profile generator, there is only one
+//! profile to regenerate against here.
 //!
 //! Writes the JSON file itself, using no dependency beyond what this
 //! crate's own `Cargo.toml` already declares -- no `serde_json`, so the
@@ -92,17 +93,21 @@ impl LeafJournal for MemoryJournal {
 
 /// Offset of the 32-byte commitment inside a SHRINCS bundle
 /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`),
-/// mirroring the private `BUNDLE_COMMITMENT_OFFSET` constant at
-/// `crates/pqhybridsign-shrincs/src/scheme.rs:45`, identical for H5 and H6
+/// matching the private `BUNDLE_COMMITMENT_OFFSET` constant at
+/// `crates/pqhybridsign/src/shrincs/scheme.rs:48`, identical for H5 and H6
 /// and independent of the active profile (see that constant's own
-/// documentation and `crates/pqhybridsign-shrincs/src/bundle.rs`).
+/// documentation and `crates/pqhybridsign/src/shrincs/bundle.rs`).
 const COMMITMENT_AT: usize = 68;
 
 /// The small form a verifier installs: the classical public key and the
 /// commitment, lifted out of a verify-form public key its own keygen
-/// produced. Mirrors the equivalent test-only helpers in
-/// `pqhybridsign-abi::stateful_suites::tests`,
-/// `pqhybridsign-cffi::stateful::tests` and the Python test suite.
+/// produced. `pqhybridsign_abi::stateful_suites::tests` no longer builds
+/// this the same way -- it calls
+/// `stateful_composite::PublicKey::stored_form` instead, which computes the
+/// commitment rather than assuming it sits at a fixed offset in the verify
+/// form. This generator still assumes the fixed offset, the same way
+/// `pqhybridsign-cffi::stateful::tests` and the Python test suite do,
+/// deliberately parked for separate bindings work (`pqhs-0d2`).
 fn stored_form(suite: Suite, verify_public_key: &[u8]) -> Vec<u8> {
     let classical_len = pqhybridsign_abi::stored_public_key_len(suite) - 32;
     let mut stored = verify_public_key[..classical_len].to_vec();

@@ -168,6 +168,32 @@ pub trait CommittedVerifyKey: PqStatefulScheme {
     /// uninstalled (for example all-zero) `stored_public_key` that no key
     /// may ever match.
     fn verify_committed_key(stored_public_key: &[u8], verify_key: &[u8]) -> Result<()>;
+
+    /// Compute the stored form `verify_key` commits to.
+    ///
+    /// The inverse of [`verify_committed_key`](Self::verify_committed_key):
+    /// what this writes is exactly what that accepts for the same key. It
+    /// exists so a caller who holds only the verify form can produce the
+    /// stored form to install, without knowing where a component keeps its
+    /// commitment. Slicing at a hard-coded offset is the alternative, and
+    /// it puts component layout into application code.
+    ///
+    /// `out` receives [`PqStatefulScheme::PUBLIC_KEY_LEN`] bytes.
+    ///
+    /// This computes; it does not verify. The result is trustworthy only
+    /// insofar as `verify_key` is: a caller who computes a stored form from
+    /// an attacker-supplied verify key and then installs it has installed
+    /// the attacker's key. Install a stored form obtained out of band, and
+    /// use [`verify_committed_key`](Self::verify_committed_key) to check a
+    /// verify key against it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] if `verify_key` is not
+    /// [`PqStatefulScheme::VERIFY_KEY_LEN`] bytes or `out` is not
+    /// [`PqStatefulScheme::PUBLIC_KEY_LEN`] bytes.
+    /// [`Error::ComponentFailure`] if `verify_key` is malformed.
+    fn compute_committed_key(verify_key: &[u8], out: &mut [u8]) -> Result<()>;
 }
 
 impl<S: StatefulSuite> PublicKey<S>
@@ -245,6 +271,42 @@ where
             bytes,
             _suite: PhantomData,
         })
+    }
+
+    /// The stored form of this key: the classical public key followed by the
+    /// component's commitment.
+    ///
+    /// This is the form a verifier installs, and the form
+    /// [`from_stored_commitment_and_bundle`](Self::from_stored_commitment_and_bundle)
+    /// takes as its trusted side. Computing it here is what keeps component
+    /// layout out of application code: the alternative is slicing the
+    /// classical prefix and the commitment at an offset the caller has to
+    /// know.
+    ///
+    /// This computes; it does not verify. `self` is whatever verify key its
+    /// caller built it from, and this method trusts that key completely: it
+    /// is not this method's job to ask whether `self` is the key a verifier
+    /// should be installing. A caller who computes a stored form from an
+    /// attacker-supplied verify key and then installs it has installed the
+    /// attacker's key. Call this only on a key you already trust -- one
+    /// [`keygen`] handed back, or one read from your own storage -- and
+    /// never on a verify key that arrived from the wire or from an
+    /// untrusted peer.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::BadLength`] or [`Error::ComponentFailure`] as
+    /// [`CommittedVerifyKey::compute_committed_key`] reports them.
+    pub fn stored_form(&self) -> Result<Vec<u8>> {
+        let classical = self.classical();
+        let mut out =
+            alloc::vec![0u8; classical.len() + <S::Pq as PqStatefulScheme>::PUBLIC_KEY_LEN];
+        out[..classical.len()].copy_from_slice(classical);
+        <S::Pq as CommittedVerifyKey>::compute_committed_key(
+            self.pq_verify_key(),
+            &mut out[classical.len()..],
+        )?;
+        Ok(out)
     }
 }
 
@@ -887,24 +949,42 @@ mod tests {
     use crate::budget::BudgetKey;
     use crate::stateful::LeafJournal;
     use alloc::rc::Rc;
-    use core::cell::RefCell;
+    use core::cell::{Cell, RefCell};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use subtle::Choice;
 
-    /// Counts calls into `FakePq::verify_stateful`, so a test can prove the
-    /// post-quantum half is evaluated even when the classical half already
-    /// failed (no short circuit). Global rather than per-instance because
-    /// `FakePq` is a unit struct; other tests in this module also drive it,
-    /// so assertions against this counter only ever check for an increase
-    /// across a call, never an exact value.
-    static VERIFY_STATEFUL_CALLS: AtomicUsize = AtomicUsize::new(0);
+    // Both counters below are thread-local, not global, and that is the whole
+    // point of them. `FakePq` and `FakeSecretKey` are unit structs with no
+    // instance to hang state off, and many tests in this module drive them.
+    // A process-global counter therefore mixes calls from tests that cargo is
+    // running in parallel on other threads, which makes any assertion about
+    // an exact value or an absence of calls fail for reasons unrelated to
+    // what it tests. A `#[test]` body runs on one thread and drives these
+    // fakes synchronously, so a thread-local counter observes that test's own
+    // calls and nothing else.
+    std::thread_local! {
+        /// Counts calls into `FakePq::verify_stateful` made by the current
+        /// test, so a test can prove the post-quantum half is evaluated even
+        /// when the classical half already failed (no short circuit), or that
+        /// it is never reached at all.
+        static VERIFY_STATEFUL_CALLS: Cell<usize> = const { Cell::new(0) };
 
-    /// Counts calls into `FakeSecretKey::zeroize`. Dropping a `SecretKey`
-    /// is the only way a test can observe that the wipe ran, because reading
-    /// the freed buffer afterwards is undefined behaviour. Global for the
-    /// same reason as `VERIFY_STATEFUL_CALLS`, and read the same way: as a
-    /// delta across one drop, never as an exact value.
-    static COMPONENT_WIPES: AtomicUsize = AtomicUsize::new(0);
+        /// Counts calls into `FakeSecretKey::zeroize` made by the current
+        /// test. Dropping a `SecretKey` is the only way a test can observe
+        /// that the wipe ran, because reading the freed buffer afterwards is
+        /// undefined behaviour.
+        static COMPONENT_WIPES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Read a thread-local call counter.
+    fn counter(slot: &'static std::thread::LocalKey<Cell<usize>>) -> usize {
+        slot.with(Cell::get)
+    }
+
+    /// Add one to a thread-local call counter.
+    fn bump(slot: &'static std::thread::LocalKey<Cell<usize>>) {
+        slot.with(|n| n.set(n.get() + 1));
+    }
 
     // A minimal fake `PqStatefulScheme` + `StatefulSuite`, to prove the
     // generic driver's ordering (commit the leaf, then attempt the
@@ -924,7 +1004,7 @@ mod tests {
 
     impl Zeroize for FakeSecretKey {
         fn zeroize(&mut self) {
-            COMPONENT_WIPES.fetch_add(1, Ordering::SeqCst);
+            bump(&COMPONENT_WIPES);
             if let Some(leaf) = self.leaf.as_mut() {
                 leaf.zeroize();
             }
@@ -1043,7 +1123,7 @@ mod tests {
             Ok(1)
         }
         fn verify_stateful(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
-            VERIFY_STATEFUL_CALLS.fetch_add(1, Ordering::SeqCst);
+            bump(&VERIFY_STATEFUL_CALLS);
             Choice::from(1u8)
         }
         fn verify_stateless(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
@@ -1098,6 +1178,21 @@ mod tests {
                     actual: stored_public_key.len(),
                 }),
             }
+        }
+
+        // Mirrors `fake_commitment` exactly, so whatever this writes is what
+        // `verify_committed_key` above accepts. A fake that computed
+        // something else would make the accessor's round-trip tests pass for
+        // the wrong reason.
+        fn compute_committed_key(verify_key: &[u8], out: &mut [u8]) -> Result<()> {
+            if out.len() != Self::PUBLIC_KEY_LEN {
+                return Err(Error::BadLength {
+                    expected: Self::PUBLIC_KEY_LEN,
+                    actual: out.len(),
+                });
+            }
+            out[0] = fake_commitment(verify_key)?;
+            Ok(())
         }
     }
 
@@ -1776,6 +1871,60 @@ mod tests {
         );
     }
 
+    /// The computed stored form must be exactly what the checking side
+    /// accepts. These two are inverses, and a commitment that
+    /// `verify_committed_key` rejects would make the accessor worse than the
+    /// manual slicing it replaces -- callers would install a value that
+    /// never verifies.
+    #[test]
+    fn the_computed_stored_form_is_the_one_verification_accepts() {
+        let (_sk, pk) = keygen::<FakeH>(&[7u8; 32], 4).expect("keygen");
+
+        let stored = pk
+            .stored_form()
+            .expect("a committed suite computes its stored form");
+
+        assert_eq!(
+            stored.len(),
+            <FakeH as StatefulSuite>::STORED_PUBLIC_KEY_LEN
+        );
+        <FakePq as CommittedVerifyKey>::verify_committed_key(
+            &stored[pk.classical().len()..],
+            pk.pq_verify_key(),
+        )
+        .expect("the computed commitment must verify against the key it came from");
+    }
+
+    /// A commitment computed from one key must not verify another. Without
+    /// this the test above would still pass for a function that returns a
+    /// constant.
+    #[test]
+    fn a_computed_stored_form_does_not_verify_another_key() {
+        let (_sk_a, pk_a) = keygen::<FakeH>(&[7u8; 32], 4).expect("keygen a");
+        let (_sk_b, pk_b) = keygen::<FakeH>(&[8u8; 32], 4).expect("keygen b");
+
+        let stored_a = pk_a.stored_form().expect("stored form a");
+        let stored_b = pk_b.stored_form().expect("stored form b");
+
+        // Pins that `stored_form` is a function of its receiver: without
+        // this, a `stored_form` that always returned the same constant bytes
+        // would still pass the check below, since a constant does not
+        // verify key B either.
+        assert_ne!(
+            stored_a, stored_b,
+            "two different keys must not compute the same stored form"
+        );
+
+        assert!(
+            <FakePq as CommittedVerifyKey>::verify_committed_key(
+                &stored_a[pk_a.classical().len()..],
+                pk_b.pq_verify_key(),
+            )
+            .is_err(),
+            "one key's commitment must not accept another key"
+        );
+    }
+
     /// Dropping a key wipes it, without anybody remembering to ask.
     ///
     /// The classical half rides the same `self.zeroize()` call as the
@@ -1784,12 +1933,12 @@ mod tests {
     /// undefined behaviour.
     #[test]
     fn dropping_a_key_wipes_it() {
-        let before = COMPONENT_WIPES.load(Ordering::SeqCst);
+        let before = counter(&COMPONENT_WIPES);
         {
             let (_sk, _pk) = keygen::<FakeH>(&[11u8; 32], 4).expect("keygen");
         }
         assert!(
-            COMPONENT_WIPES.load(Ordering::SeqCst) > before,
+            counter(&COMPONENT_WIPES) > before,
             "the composite key's Drop must wipe the component half"
         );
     }
@@ -1825,9 +1974,9 @@ mod tests {
         let mut tampered = sig.clone();
         tampered[0] ^= 0x01; // corrupt the classical half only
 
-        let before = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let before = counter(&VERIFY_STATEFUL_CALLS);
         let outcome = FakeH::verify_stateful(&pk, b"ok", b"", &tampered);
-        let after = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let after = counter(&VERIFY_STATEFUL_CALLS);
 
         assert!(!outcome, "a tampered classical half must fail verification");
         assert!(
@@ -1982,15 +2131,43 @@ mod tests {
             .last_mut()
             .expect("a stateless signature is non-empty") ^= 0xFF;
 
-        let before = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let before = counter(&VERIFY_STATEFUL_CALLS);
         assert!(!FakeH::verify_stateful(&pk, b"ok", b"", &valid));
         assert!(!FakeH::verify_stateful(&pk, b"ok", b"", &invalid));
-        let after = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let after = counter(&VERIFY_STATEFUL_CALLS);
 
         assert_eq!(
             before, after,
             "verify_stateful must reject a stateless-path signature by its selector alone, \
              never by running the stateful component check"
+        );
+    }
+
+    /// The assertion above is an exact one: it reads the counter, makes two
+    /// calls, and requires the count not to have moved. That only means
+    /// anything if no other test can move the counter while it runs, and
+    /// cargo runs tests in parallel. This pins the isolation the assertion
+    /// rests on, so a later change back to a process-global counter fails
+    /// here rather than as an intermittent failure somewhere else.
+    #[test]
+    fn a_fake_call_counter_is_private_to_the_thread_that_drove_it() {
+        let before = counter(&VERIFY_STATEFUL_CALLS);
+
+        let counted_elsewhere = std::thread::spawn(|| {
+            bump(&VERIFY_STATEFUL_CALLS);
+            counter(&VERIFY_STATEFUL_CALLS)
+        })
+        .join()
+        .expect("the probe thread must not panic");
+
+        assert_eq!(
+            counted_elsewhere, 1,
+            "the probe thread must see its own call, starting from its own zero"
+        );
+        assert_eq!(
+            counter(&VERIFY_STATEFUL_CALLS),
+            before,
+            "a call counted on another thread must not be visible on this one"
         );
     }
 

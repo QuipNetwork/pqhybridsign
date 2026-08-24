@@ -61,7 +61,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use zeroize::Zeroize;
 
-use pqhybridsign_abi::{BudgetKey, KeyIdentity, KEY_IDENTITY_LEN};
+use pqhybridsign_abi::{BudgetKey, KeyIdentity, LeafJournal, KEY_IDENTITY_LEN};
 
 use crate::bytes_in::extract_bytes;
 use crate::errors::{to_py_err, StatefulKeyNotCloneableError};
@@ -78,9 +78,30 @@ use crate::suite::PySuite;
 /// call itself still fails rather than proceeding on bad data; the caller
 /// checks `take_error` after the ABI call returns and re-raises the
 /// original Python exception in preference to whatever the ABI reported.
+///
+/// `bound_key` is memoized in `bound_key_cache`: the first call reaches
+/// `journal.bound_key()`, and every later call on the same `PyJournal`
+/// returns the cached answer without calling back into Python. A caller
+/// that needs a read fault to be visible before the ABI's own read -- see
+/// `adopt_key` below -- gets that only if a transient fault has exactly one
+/// place to land; two independent calls into the same Python method would
+/// give it two, and a fault that lands on the second would go unnoticed by
+/// a guard checked after the first.
+///
+/// `bind_key` clears `bound_key_cache` on success, so a `bound_key` read
+/// after a `bind_key` write on the same instance sees the new binding rather
+/// than a `None` cached from before it. No current caller reads
+/// `bound_key` again after `bind_key` on one `PyJournal` -- `adopt_key`
+/// reads it once, before its own single call to `bind_key`, and
+/// `sign_stateful` never calls `bind_key` at all -- but the type does not
+/// enforce that ordering, and a future entry point that adopts and then
+/// re-reads must not see a stale `None`: that is exactly the never-bound
+/// condition `JournalKeyMismatch` exists to catch. Any method added to this
+/// `impl` that writes through to Python must maintain this invariant.
 struct PyJournal<'py> {
     journal: Bound<'py, PyAny>,
     error: RefCell<Option<PyErr>>,
+    bound_key_cache: RefCell<Option<Option<KeyIdentity>>>,
 }
 
 impl<'py> PyJournal<'py> {
@@ -88,6 +109,7 @@ impl<'py> PyJournal<'py> {
         Self {
             journal,
             error: RefCell::new(None),
+            bound_key_cache: RefCell::new(None),
         }
     }
 
@@ -100,7 +122,7 @@ impl<'py> PyJournal<'py> {
     }
 }
 
-impl pqhybridsign_abi::LeafJournal for PyJournal<'_> {
+impl LeafJournal for PyJournal<'_> {
     /// The Python exception is recorded on `self` and re-raised by the
     /// caller; this marker only tells the ABI layer that the commit did
     /// not happen, which maps to `AbiError::JournalFailed`.
@@ -137,30 +159,46 @@ impl pqhybridsign_abi::LeafJournal for PyJournal<'_> {
     /// recorded on `self` and reported here as `None`. `None` is the
     /// fail-closed answer for signing, which refuses it. The caller re-raises
     /// the recorded exception in preference to whatever the ABI reported.
+    ///
+    /// Memoized (see `bound_key_cache` on the struct): `journal.bound_key`
+    /// is called at most once per `PyJournal` between calls to `bind_key`,
+    /// however many times this method is called. `bind_key` clears the
+    /// cache on success, so a call after a successful bind reaches
+    /// `journal.bound_key` again rather than returning a stale answer.
     fn bound_key(&self) -> Option<KeyIdentity> {
-        let value = match self.journal.call_method0("bound_key") {
-            Ok(value) => value,
-            Err(err) => {
-                self.record(err);
-                return None;
-            }
-        };
-        if value.is_none() {
-            return None;
+        if let Some(cached) = *self.bound_key_cache.borrow() {
+            return cached;
         }
-        match value.extract::<[u8; KEY_IDENTITY_LEN]>() {
-            Ok(bytes) => Some(KeyIdentity::from_bytes(bytes)),
+        let result = match self.journal.call_method0("bound_key") {
+            Ok(value) if value.is_none() => None,
+            Ok(value) => match value.extract::<[u8; KEY_IDENTITY_LEN]>() {
+                Ok(bytes) => Some(KeyIdentity::from_bytes(bytes)),
+                Err(err) => {
+                    self.record(err);
+                    None
+                }
+            },
             Err(err) => {
                 self.record(err);
                 None
             }
-        }
+        };
+        *self.bound_key_cache.borrow_mut() = Some(result);
+        result
     }
 
     fn bind_key(&mut self, key: KeyIdentity) -> Result<(), Self::Error> {
         let bytes = PyBytes::new(self.journal.py(), key.as_bytes());
         match self.journal.call_method1("bind_key", (bytes,)) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Invalidate `bound_key_cache`: a stale `None` cached from a
+                // read before this write would read back as never-bound,
+                // which is the exact condition `JournalKeyMismatch` exists
+                // to catch. The next `bound_key()` call re-reads
+                // `journal.bound_key`.
+                *self.bound_key_cache.borrow_mut() = None;
+                Ok(())
+            }
             Err(err) => {
                 self.record(err);
                 Err(JournalCallFailed)
@@ -521,6 +559,9 @@ fn key_identity_from_secret_key<'py>(
 /// nothing is written. `JournalFailedError` if `journal.bind_key` reported
 /// the write did not become durable. Any exception `journal.bound_key` or
 /// `journal.bind_key` itself raised is re-raised unchanged.
+///
+/// A `journal.bound_key` that raises prevents `bind_key` from being called
+/// at all, so a read fault can never replace an existing binding.
 #[pyfunction]
 fn adopt_key(
     py: Python<'_>,
@@ -531,6 +572,16 @@ fn adopt_key(
     let bytes = <[u8; KEY_IDENTITY_LEN]>::try_from(&identity[..])
         .map_err(|_| to_py_err(pqhybridsign_abi::AbiError::BadLength))?;
     let mut journal = PyJournal::new(journal.clone());
+    // Read the binding once, and surface a read fault, before anything can
+    // write. The bridge reports a raising `bound_key` to the abi as `None`,
+    // which the abi reads as never-bound: it would call `bind_key` and only
+    // then let the deferred exception surface. Against an already-bound
+    // journal whose `bind_key` is not write-once, that silently replaces the
+    // binding, which is what the JournalKeyMismatch guard exists to prevent.
+    let _ = journal.bound_key();
+    if let Some(err) = journal.take_error() {
+        return Err(err);
+    }
     let outcome = pqhybridsign_abi::adopt_key(&mut journal, KeyIdentity::from_bytes(bytes));
     if let Some(err) = journal.take_error() {
         return Err(err);

@@ -16,6 +16,11 @@
 /target
 Cargo.lock.bak
 
+# cargo-mutants output: written at the repository root, rotated into
+# mutants.out.old/ on each run. Build output, never committed.
+/mutants.out/
+/mutants.out.old/
+
 # Python packaging build output (maturin/twine)
 /dist/
 

@@ -248,14 +248,19 @@ fn encoding_path_rejects_declared_u32_max_without_allocating() {
 fn encoding_path_rejects_trailing_bytes() {
     let classical = classical();
 
+    // Two trailing bytes, not one: at this signature length (192 bytes for
+    // `leaf_count = 3`), `body.len() - signature_len` and
+    // `body.len() / signature_len` both equal 1 when there is only a single
+    // trailing byte, so that count cannot distinguish the two operators. Two
+    // bytes disambiguates them (2 vs. 1).
     let mut stateful = raw_stateful(&classical, 3, &stateful_body(3));
     let stateful_len = stateful.len();
-    stateful.push(0xaa);
+    stateful.extend_from_slice(&[0xaa, 0xbb]);
     assert_eq!(
         decode_path_selected(&stateful, trusted(), &PROFILE).map(|_| ()),
         Err(Error::TrailingBytes {
             expected: stateful_len,
-            actual: stateful_len + 1,
+            actual: stateful_len + 2,
         })
     );
 
@@ -411,4 +416,43 @@ fn encoding_path_write_reports_a_buffer_that_is_too_small() {
         Ok(needed)
     );
     assert_eq!(&longer[..needed], raw_stateless(&classical, &body));
+}
+
+/// `encoding_path_write_reports_a_buffer_that_is_too_small` above only
+/// exercises `PathBody::Stateless`. `encode_path_selected` calls
+/// `write_path_selected` but discards its returned length in favour of the
+/// pre-sized buffer, so the Stateful arm's return value needs its own
+/// direct check.
+#[test]
+fn encoding_path_write_reports_written_length_for_stateful() {
+    let classical = classical();
+    let body = stateful_body(3);
+    let signature = PathSelectedSig {
+        classical: &classical,
+        body: PathBody::Stateful {
+            leaf_count: 3,
+            signature: &body,
+        },
+    };
+    let needed = path_selected_len(&signature);
+
+    let mut exact = vec![0u8; needed];
+    assert_eq!(
+        write_path_selected(&mut exact, &signature, &PROFILE),
+        Ok(needed)
+    );
+    assert_eq!(
+        &exact[..needed],
+        raw_stateful(&classical, 3, &body).as_slice()
+    );
+
+    let mut longer = vec![0u8; needed + 8];
+    assert_eq!(
+        write_path_selected(&mut longer, &signature, &PROFILE),
+        Ok(needed)
+    );
+    assert_eq!(
+        &longer[..needed],
+        raw_stateful(&classical, 3, &body).as_slice()
+    );
 }

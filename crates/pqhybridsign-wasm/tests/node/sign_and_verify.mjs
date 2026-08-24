@@ -445,6 +445,72 @@ for (const [i, suite] of STATEFUL_SUITES.entries()) {
     });
 }
 
+// A boundKey() read fault during adoption must not reach bindKey. The bridge
+// reports a throwing boundKey() to the abi as null, which reads as
+// never-bound; proceeding on that would overwrite an already-bound journal
+// and defeat the JournalKeyMismatch guard.
+check("adoptKey does not bind when boundKey throws", () => {
+    const bindCalls = [];
+    const journal = {
+        commit(_leaf) {},
+        nextLeaf() {
+            return 0;
+        },
+        boundKey() {
+            throw new Error("transient read fault");
+        },
+        bindKey(identity) {
+            bindCalls.push(identity);
+        },
+    };
+
+    assert.throws(
+        () => pqhs.adoptKey(journal, new Uint8Array(32)),
+        /transient read fault/,
+    );
+    assert.deepEqual(bindCalls, [], "bindKey must never be reached");
+});
+
+// The always-throwing fixture above only exercises the case where the very
+// first read of an adoption fails. It cannot tell a guard that reads
+// boundKey() once apart from one that reads it twice: if adoptKey read
+// boundKey() a second time -- once for its own guard, once inside the abi --
+// a transient fault landing on that second read would still overwrite an
+// already-bound journal, after the guard's first read had already reported
+// it safely bound. This journal succeeds once and then throws, so it only
+// fails the test if boundKey is read more than once. Which error surfaces
+// depends on how many reads happen: a fault on a second read throws the
+// fixture's Error; a single, cached read instead correctly reports the
+// existing binding and adoptKey throws the JournalKeyMismatch error. Either
+// way, bindKey must never be reached and the existing binding must survive.
+check("adoptKey does not bind when boundKey succeeds once then throws on a later read", () => {
+    const bindCalls = [];
+    const otherIdentity = new Uint8Array(32).fill(1);
+    let boundKeyCalls = 0;
+    const journal = {
+        commit(_leaf) {},
+        nextLeaf() {
+            return 0;
+        },
+        boundKey() {
+            boundKeyCalls += 1;
+            if (boundKeyCalls >= 2) {
+                throw new Error("transient read fault");
+            }
+            return otherIdentity.slice();
+        },
+        bindKey(identity) {
+            bindCalls.push(identity);
+        },
+    };
+
+    assert.throws(
+        () => pqhs.adoptKey(journal, new Uint8Array(32)),
+        /transient read fault|does not belong to this key/,
+    );
+    assert.deepEqual(bindCalls, [], "bindKey must never be reached");
+});
+
 if (failures > 0) {
     console.error(`${failures} check(s) failed`);
     process.exit(1);

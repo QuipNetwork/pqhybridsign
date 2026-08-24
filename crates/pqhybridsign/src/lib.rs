@@ -43,6 +43,16 @@ when the `stateful` feature is on.
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+// Test-only. The crate is `no_std` whenever the `std` feature is off, so
+// `std` is not otherwise in scope here, but the test harness links it in
+// every configuration `cargo test` can build. Test fakes use it for
+// `thread_local!`, which `core` does not provide and which is what keeps a
+// fake's call counters private to the test that drives them. `cargo build`
+// does not compile `cfg(test)` code, so the `thumbv7em-none-eabi` builds
+// that prove the `no_std` claim never see this.
+#[cfg(test)]
+extern crate std;
+
 // Composite foundation. Generic over the classical and post-quantum halves,
 // `no_std`, no signature backend of its own.
 pub mod budget;

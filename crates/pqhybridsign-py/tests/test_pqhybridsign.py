@@ -218,18 +218,22 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
 
 # Offset of the 32-byte commitment inside a SHRINCS bundle
 # (statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot),
-# mirroring the private BUNDLE_COMMITMENT_OFFSET constant at
-# crates/pqhybridsign-shrincs/src/scheme.rs:45 and
-# pqhybridsign_abi::stateful_suites::tests::COMMITMENT_AT. This is
-# spec-fixed layout shared by every SHRINCS instance (H5 and H6 alike), not
-# a per-profile detail.
+# matching the private BUNDLE_COMMITMENT_OFFSET constant at
+# crates/pqhybridsign/src/shrincs/scheme.rs:48. This is spec-fixed layout
+# shared by every SHRINCS instance (H5 and H6 alike), not a per-profile
+# detail.
 #
 # No binding exposes an accessor that derives the small stored form from a
 # verify-form public key -- see the task-4 report for why -- so this test
-# reconstructs it the same way the ABI crate's own unit test does. A real
-# deployment installs the stored form once, at provisioning time, from
-# whatever produced the key; it does not slice it out of the verify form
-# the way this helper does for test setup.
+# reconstructs it by slicing the offset out directly. pqhybridsign_abi's own
+# unit tests no longer do this the same way: they call
+# stateful_composite::PublicKey::stored_form instead, which computes the
+# commitment rather than assuming it sits at a fixed offset in the verify
+# form. This helper still assumes the fixed offset, deliberately parked for
+# separate bindings work (pqhs-0d2). A real deployment installs the stored
+# form once, at provisioning time, from whatever produced the key; it does
+# not slice it out of the verify form the way this helper does for test
+# setup.
 _COMMITMENT_AT = 68
 
 
@@ -481,6 +485,87 @@ def test_adopt_key_rejects_an_identity_of_the_wrong_length():
     with pytest.raises(phs.BadLengthError):
         phs.adopt_key(journal, identity[:-1])
     assert journal.bound_key() is None
+
+
+def test_adopt_key_does_not_bind_when_bound_key_raises():
+    """A read fault during adoption must not reach bind_key.
+
+    The bridge reports a raising bound_key() to the abi as None, which reads
+    as never-bound. If adopt_key proceeded on that, it would overwrite the
+    binding of an already-bound journal and defeat the JournalKeyMismatch
+    guard."""
+
+    class FaultyJournal:
+        def __init__(self):
+            self.bind_calls = []
+
+        def commit(self, leaf):
+            return None
+
+        def next_leaf(self):
+            return 0
+
+        def bound_key(self):
+            raise OSError("transient read fault")
+
+        def bind_key(self, identity):
+            self.bind_calls.append(identity)
+
+    journal = FaultyJournal()
+    identity = bytes(32)
+
+    with pytest.raises(OSError, match="transient read fault"):
+        phs.adopt_key(journal, identity)
+
+    assert journal.bind_calls == [], "bind_key must never be reached"
+
+
+def test_adopt_key_does_not_overwrite_a_bound_journal_when_a_later_read_faults():
+    """The always-raising fixture above only exercises the case where the
+    very first read of an adoption fails. It cannot tell a guard that reads
+    bound_key() once apart from one that reads it twice: if adopt_key read
+    bound_key() a second time -- once for its own guard, once inside the
+    abi -- a transient fault landing on that second read would still
+    overwrite an already-bound journal, after the guard's first read had
+    already reported it safely bound. This journal succeeds once and then
+    raises, so it only fails the test if bound_key is read more than once.
+
+    Which exception surfaces depends on how many reads happen: a fault on a
+    second read raises the fixture's OSError; a single, cached read instead
+    correctly reports the existing binding and adopt_key raises
+    JournalKeyMismatchError. Either way, bind_key must never be reached and
+    the existing binding must survive."""
+
+    class SucceedsOnceThenFaultsJournal:
+        def __init__(self, bound):
+            self.bound = bound
+            self.bind_calls = []
+            self.bound_key_calls = 0
+
+        def commit(self, leaf):
+            return None
+
+        def next_leaf(self):
+            return 0
+
+        def bound_key(self):
+            self.bound_key_calls += 1
+            if self.bound_key_calls >= 2:
+                raise OSError("transient read fault")
+            return self.bound
+
+        def bind_key(self, identity):
+            self.bind_calls.append(identity)
+
+    other_identity = bytes(range(32))
+    new_identity = bytes(32)
+    journal = SucceedsOnceThenFaultsJournal(bound=other_identity)
+
+    with pytest.raises((OSError, phs.JournalKeyMismatchError)):
+        phs.adopt_key(journal, new_identity)
+
+    assert journal.bind_calls == [], "bind_key must never be reached"
+    assert journal.bound == other_identity, "the existing binding must survive"
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
