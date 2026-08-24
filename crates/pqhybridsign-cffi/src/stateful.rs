@@ -263,7 +263,7 @@ pub struct PqhsStatelessBudget {
 /// [`FfiJournal`].
 ///
 /// `pub(crate)` rather than private: [`crate::vrf`] reuses this exact
-/// wrapper for `pqhs_prove_stateless`, which spends the same few-time
+/// wrapper for `pqhs_vrf_prove_stateless`, which spends the same few-time
 /// budget through the same [`PqhsStatelessBudget`] vtable, so the callback
 /// logic has one implementation rather than two that could drift apart.
 pub(crate) struct FfiBudget<'a>(pub(crate) &'a PqhsStatelessBudget);

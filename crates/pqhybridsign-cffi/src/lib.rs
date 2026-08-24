@@ -80,7 +80,7 @@ pub use stateful::{
     PQHS_KEY_IDENTITY_LEN,
 };
 pub use vrf::{
-    pqhs_prove_stateless, pqhs_vrf_key_derive, pqhs_vrf_key_free, pqhs_vrf_make_bytes,
-    pqhs_vrf_proof_len, pqhs_vrf_prove, pqhs_vrf_prove_deterministic, pqhs_vrf_verify, PqhsVrfKey,
-    PQHS_VRF_OUTPUT_LEN,
+    pqhs_vrf_key_derive, pqhs_vrf_key_free, pqhs_vrf_make_bytes, pqhs_vrf_proof_len,
+    pqhs_vrf_prove, pqhs_vrf_prove_deterministic, pqhs_vrf_prove_stateless, pqhs_vrf_verify,
+    PqhsVrfKey, PQHS_VRF_OUTPUT_LEN,
 };

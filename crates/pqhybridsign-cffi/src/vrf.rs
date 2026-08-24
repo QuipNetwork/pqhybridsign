@@ -56,14 +56,14 @@ pub unsafe extern "C" fn pqhs_vrf_proof_len(suite: u8, out: *mut usize) -> c_int
 ///
 /// H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
 /// budget on every evaluation and need a durable store to record it, so
-/// they prove through [`pqhs_prove_stateless`] instead, on the same terms
+/// they prove through [`pqhs_vrf_prove_stateless`] instead, on the same terms
 /// [`crate::pqhs_sign`] refuses them: a call that looks free and is not is
 /// the worst failure mode this crate could offer.
 ///
 /// # Errors
 ///
 /// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
-/// [`pqhs_prove_stateless`] instead. `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if
+/// [`pqhs_vrf_prove_stateless`] instead. `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if
 /// `proof_out` is smaller than [`pqhs_vrf_proof_len`] needs for this input.
 /// `PQHS_ERR_BAD_LENGTH` if `sk` is not the suite's secret-key length.
 /// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
@@ -126,7 +126,7 @@ pub unsafe extern "C" fn pqhs_vrf_prove(
 /// `*proof_written`.
 ///
 /// H1 through H4 only, on the same terms as [`pqhs_vrf_prove`]: H5 and H6
-/// spend a few-time budget unit and prove through [`pqhs_prove_stateless`].
+/// spend a few-time budget unit and prove through [`pqhs_vrf_prove_stateless`].
 ///
 /// # Errors
 ///
@@ -340,7 +340,7 @@ pub unsafe extern "C" fn pqhs_vrf_make_bytes(
 /// derived from the master seed when it is needed, not stored.
 ///
 /// Not thread-safe in the general sense every opaque handle in this crate
-/// is not: nothing stops two threads from calling [`pqhs_prove_stateless`]
+/// is not: nothing stops two threads from calling [`pqhs_vrf_prove_stateless`]
 /// against one handle concurrently, and the caller's own `budget` vtable,
 /// not this handle, is what must serialise the spends that follow.
 pub struct PqhsVrfKey {
@@ -497,7 +497,7 @@ pub unsafe extern "C" fn pqhs_vrf_key_free(key: *mut PqhsVrfKey) {
 /// callbacks are prepared to receive, and whose callbacks do not call back
 /// into this library.
 #[no_mangle]
-pub unsafe extern "C" fn pqhs_prove_stateless(
+pub unsafe extern "C" fn pqhs_vrf_prove_stateless(
     key: *const PqhsVrfKey,
     budget: *const PqhsStatelessBudget,
     input: *const u8,
@@ -1111,7 +1111,7 @@ mod tests {
         // above and has not been freed; every other pointer is a live
         // local buffer.
         let rc = unsafe {
-            pqhs_prove_stateless(
+            pqhs_vrf_prove_stateless(
                 key_out,
                 &budget,
                 INPUT.as_ptr(),
