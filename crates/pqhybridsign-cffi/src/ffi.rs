@@ -142,10 +142,15 @@ pub(crate) fn guard(body: impl FnOnce() -> c_int + std::panic::UnwindSafe) -> c_
     catch_unwind(AssertUnwindSafe(body)).unwrap_or(PQHS_ERR_PANIC)
 }
 
-/// As [`guard`], for the handful of entry points ([`crate::pqhs_profile_name`])
-/// that have no error channel to report a caught panic through. Falls back
-/// to `T::default()` -- a null pointer, for the one caller this has today --
-/// rather than ever unwinding across the boundary.
+/// As [`guard`], for the entry points that have no error channel to report a
+/// caught panic through: [`crate::pqhs_profile_name`], which falls back to a
+/// null pointer, and the two handle-free functions,
+/// [`crate::pqhs_stateful_key_free`] and [`crate::pqhs_vrf_key_free`], which
+/// fall back to `()` -- a caught panic during either leaves the handle's
+/// `Box` unfreed and its secret key material unzeroized, silently, because
+/// neither function has a return value to report it through. Falls back to
+/// `T::default()` in every case, rather than ever unwinding across the
+/// boundary.
 pub(crate) fn guard_infallible<T: Default>(body: impl FnOnce() -> T + std::panic::UnwindSafe) -> T {
     catch_unwind(AssertUnwindSafe(body)).unwrap_or_default()
 }

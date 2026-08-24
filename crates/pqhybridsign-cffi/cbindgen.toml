@@ -16,7 +16,7 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * --- Every entry point returns an error code ---
  *
  * `0` (PQHS_OK) is success. A nonzero return is one of the PQHS_ERR_*
- * constants below: 1..=18 mirror the Rust `pqhybridsign_abi::AbiError`
+ * constants below: 1..=21 mirror the Rust `pqhybridsign_abi::AbiError`
  * codes one for one, and 100 and above are this binding's own codes for
  * situations that only exist at a raw-pointer boundary. pqhs_error_message
  * turns any of them into a human-readable string. pqhs_verify is the one
@@ -31,7 +31,8 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * fixed-size buffer. A call rejected on one of those has changed nothing
  * the caller can observe, so it is safe to fix the argument and call again.
  *
- * Two cases on the stateful path are different, and both are deliberate.
+ * Three cases on the stateful path are different, and all three are
+ * deliberate.
  *
  * First, once pqhs_sign_stateful has durably committed a one-time leaf to
  * the caller's journal, `sk_out` is written even if signing then fails,
@@ -47,28 +48,53 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * pqhs_signature_len, pqhs_secret_key_len and pqhs_public_key_len avoids
  * this case altogether, and is what an integration should do.
  *
+ * Third, once pqhs_stateful_key_sign has durably committed a one-time leaf,
+ * the PqhsStatefulKey handle it advances stays advanced even if the
+ * signature itself then fails -- the same asymmetry as the first case,
+ * moved from `sk_out` into the handle. Export the handle with
+ * pqhs_stateful_key_export and persist the result after every call,
+ * whether or not that call succeeded.
+ *
  * --- The caller owns every buffer ---
  *
- * Every buffer parameter is a pointer plus a length. This library never
- * allocates a buffer it hands back, and never retains one after a call
- * returns. A length is always checked against what the call needs before
- * anything is written -- a caller-supplied length is never trusted past
- * that check -- and a buffer that is too small comes back as an error code,
- * never a partial write past its bound. A null pointer is likewise always
- * an error code and never a dereference; a null pointer paired with a
- * length of 0 is read as an empty buffer, not an error.
+ * Every buffer parameter is a pointer plus a length. Passed this way, this
+ * library never allocates a buffer it hands back, and never retains one
+ * after a call returns. A length is always checked against what the call
+ * needs before anything is written -- a caller-supplied length is never
+ * trusted past that check -- and a buffer that is too small comes back as
+ * an error code, never a partial write past its bound. A null pointer is
+ * likewise always an error code and never a dereference; a null pointer
+ * paired with a length of 0 is read as an empty buffer, not an error.
  *
  * No two pointer arguments to one call may refer to overlapping memory.
  * pqhs_sign_stateful detects and refuses the one overlap a C integrator is
  * most likely to write by accident, `sk_out == sk`; every other pair is the
  * caller's obligation to keep apart.
  *
+ * The opaque handles, PqhsStatefulKey and PqhsVrfKey, are not passed this
+ * way and are the one exception: pqhs_stateful_key_open and
+ * pqhs_vrf_key_derive DO allocate, and the pointer they hand back through
+ * `out` stays allocated until the caller passes it to
+ * pqhs_stateful_key_free or pqhs_vrf_key_free. Forgetting that call leaks
+ * the secret key material the handle holds for the rest of the process's
+ * life; see "Zeroizing secret key material is the caller's job" below.
+ *
  * --- Zeroizing secret key material is the caller's job ---
  *
- * Because this library holds no secret key material of its own between
- * calls -- keys live only in the caller's buffers, passed in and read back
- * out -- there is nothing here for it to wipe on shutdown. Wiping a secret
- * key buffer once you are done with it is your own responsibility.
+ * Every secret key buffer this library reads or writes -- `sk`, `sk_out`,
+ * the mnemonic-derived seed -- lives only in the caller's own buffers,
+ * passed in and read back out, and there is nothing here for this library
+ * to wipe on shutdown for those. Wiping a secret key buffer once you are
+ * done with it is your own responsibility.
+ *
+ * An open PqhsStatefulKey or PqhsVrfKey is the exception, and the one
+ * place this library does hold secret key material between calls: the
+ * handle keeps the imported secret key, including the leaf counter for
+ * PqhsStatefulKey, in memory for as long as it stays open. That material
+ * IS wiped, through Rust's zeroize-on-drop, but only when
+ * pqhs_stateful_key_free or pqhs_vrf_key_free actually runs. A handle
+ * that is never freed is never wiped, on top of leaking the memory it
+ * occupies.
  *
  * --- H5 and H6 keep their guardrails ---
  *
@@ -76,26 +102,43 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * loss of the key's post-quantum security. This library offers no call
  * shaped like an ordinary stateless sign that can reach either suite:
  * pqhs_sign and pqhs_sign_deterministic reject them with
- * PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, and the only way to spend a leaf is
- * pqhs_sign_stateful, which requires a PqhsLeafJournal -- a durable,
- * caller-owned log of spent leaves -- as an argument, not an option.
+ * PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE. The only two calls that spend a
+ * leaf, pqhs_sign_stateful and its opaque-handle counterpart
+ * pqhs_stateful_key_sign (see PqhsStatefulKey), each require a
+ * PqhsLeafJournal -- a durable, caller-owned log of spent leaves -- as an
+ * argument, not an option.
  *
  * That journal must also be bound to the key it is spending for, once, by
  * pqhs_adopt_key. A journal records both how far a key has spent and which
  * key it belongs to, because the counter alone cannot tell a journal
  * correctly reopened for its own key from a brand-new one handed the same
  * key by mistake: both report leaf 0 for a key that has spent nothing.
- * pqhs_sign_stateful refuses an unbound or wrongly bound journal with
- * PQHS_ERR_JOURNAL_KEY_MISMATCH, having spent nothing.
+ * pqhs_sign_stateful and pqhs_stateful_key_sign each refuse an unbound or
+ * wrongly bound journal with PQHS_ERR_JOURNAL_KEY_MISMATCH, having spent
+ * nothing.
  *
  * --- Threading ---
  *
- * Every entry point is stateless: key, signature and leaf state live only
- * in the caller's buffers for the duration of one call, so calls on
- * different threads over different buffers do not interact. The only
- * process-wide state is the string cached by pqhs_profile_name, which is
- * initialised once and never mutated. The caller's own journal is the part
- * that is not thread-safe: see PqhsLeafJournal.
+ * Every buffer-based entry point is stateless: key, signature and leaf
+ * state live only in the caller's buffers for the duration of one call, so
+ * calls on different threads over different buffers do not interact. The
+ * only process-wide state is the string cached by pqhs_profile_name, which
+ * is initialised once and never mutated. The caller's own journal is the
+ * part that is not thread-safe: see PqhsLeafJournal.
+ *
+ * PqhsStatefulKey breaks that isolation on purpose: its leaf state lives
+ * inside the open handle, not in a caller buffer, for as long as the
+ * handle stays open. It therefore belongs to one thread at a time. Two
+ * threads sharing one PqhsStatefulKey, each with its own correctly bound
+ * journal, each satisfy the buffer-based rule above and can still be
+ * handed the same leaf. Serialising access to one handle across threads
+ * is the caller's responsibility, on the same terms as serialising access
+ * to one journal.
+ *
+ * PqhsVrfKey holds no comparable state of its own: its few-time budget
+ * count lives entirely in the caller's PqhsStatelessBudget store, the same
+ * as pqhs_sign_stateless and pqhs_stateful_key_sign_stateless. What is not
+ * thread-safe there is the store, not the handle: see PqhsStatelessBudget.
  *
  * --- No panics cross this boundary ---
  *
@@ -120,7 +163,7 @@ documentation_style = "doxy"
 style = "type"
 
 [export]
-item_types = ["functions", "constants", "structs", "enums"]
+item_types = ["functions", "constants", "structs", "enums", "opaque"]
 
 [enum]
 prefix_with_name = true

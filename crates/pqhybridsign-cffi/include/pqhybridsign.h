@@ -14,7 +14,7 @@
  * --- Every entry point returns an error code ---
  *
  * `0` (PQHS_OK) is success. A nonzero return is one of the PQHS_ERR_*
- * constants below: 1..=18 mirror the Rust `pqhybridsign_abi::AbiError`
+ * constants below: 1..=21 mirror the Rust `pqhybridsign_abi::AbiError`
  * codes one for one, and 100 and above are this binding's own codes for
  * situations that only exist at a raw-pointer boundary. pqhs_error_message
  * turns any of them into a human-readable string. pqhs_verify is the one
@@ -29,7 +29,8 @@
  * fixed-size buffer. A call rejected on one of those has changed nothing
  * the caller can observe, so it is safe to fix the argument and call again.
  *
- * Two cases on the stateful path are different, and both are deliberate.
+ * Three cases on the stateful path are different, and all three are
+ * deliberate.
  *
  * First, once pqhs_sign_stateful has durably committed a one-time leaf to
  * the caller's journal, `sk_out` is written even if signing then fails,
@@ -45,28 +46,53 @@
  * pqhs_signature_len, pqhs_secret_key_len and pqhs_public_key_len avoids
  * this case altogether, and is what an integration should do.
  *
+ * Third, once pqhs_stateful_key_sign has durably committed a one-time leaf,
+ * the PqhsStatefulKey handle it advances stays advanced even if the
+ * signature itself then fails -- the same asymmetry as the first case,
+ * moved from `sk_out` into the handle. Export the handle with
+ * pqhs_stateful_key_export and persist the result after every call,
+ * whether or not that call succeeded.
+ *
  * --- The caller owns every buffer ---
  *
- * Every buffer parameter is a pointer plus a length. This library never
- * allocates a buffer it hands back, and never retains one after a call
- * returns. A length is always checked against what the call needs before
- * anything is written -- a caller-supplied length is never trusted past
- * that check -- and a buffer that is too small comes back as an error code,
- * never a partial write past its bound. A null pointer is likewise always
- * an error code and never a dereference; a null pointer paired with a
- * length of 0 is read as an empty buffer, not an error.
+ * Every buffer parameter is a pointer plus a length. Passed this way, this
+ * library never allocates a buffer it hands back, and never retains one
+ * after a call returns. A length is always checked against what the call
+ * needs before anything is written -- a caller-supplied length is never
+ * trusted past that check -- and a buffer that is too small comes back as
+ * an error code, never a partial write past its bound. A null pointer is
+ * likewise always an error code and never a dereference; a null pointer
+ * paired with a length of 0 is read as an empty buffer, not an error.
  *
  * No two pointer arguments to one call may refer to overlapping memory.
  * pqhs_sign_stateful detects and refuses the one overlap a C integrator is
  * most likely to write by accident, `sk_out == sk`; every other pair is the
  * caller's obligation to keep apart.
  *
+ * The opaque handles, PqhsStatefulKey and PqhsVrfKey, are not passed this
+ * way and are the one exception: pqhs_stateful_key_open and
+ * pqhs_vrf_key_derive DO allocate, and the pointer they hand back through
+ * `out` stays allocated until the caller passes it to
+ * pqhs_stateful_key_free or pqhs_vrf_key_free. Forgetting that call leaks
+ * the secret key material the handle holds for the rest of the process's
+ * life; see "Zeroizing secret key material is the caller's job" below.
+ *
  * --- Zeroizing secret key material is the caller's job ---
  *
- * Because this library holds no secret key material of its own between
- * calls -- keys live only in the caller's buffers, passed in and read back
- * out -- there is nothing here for it to wipe on shutdown. Wiping a secret
- * key buffer once you are done with it is your own responsibility.
+ * Every secret key buffer this library reads or writes -- `sk`, `sk_out`,
+ * the mnemonic-derived seed -- lives only in the caller's own buffers,
+ * passed in and read back out, and there is nothing here for this library
+ * to wipe on shutdown for those. Wiping a secret key buffer once you are
+ * done with it is your own responsibility.
+ *
+ * An open PqhsStatefulKey or PqhsVrfKey is the exception, and the one
+ * place this library does hold secret key material between calls: the
+ * handle keeps the imported secret key, including the leaf counter for
+ * PqhsStatefulKey, in memory for as long as it stays open. That material
+ * IS wiped, through Rust's zeroize-on-drop, but only when
+ * pqhs_stateful_key_free or pqhs_vrf_key_free actually runs. A handle
+ * that is never freed is never wiped, on top of leaking the memory it
+ * occupies.
  *
  * --- H5 and H6 keep their guardrails ---
  *
@@ -74,26 +100,43 @@
  * loss of the key's post-quantum security. This library offers no call
  * shaped like an ordinary stateless sign that can reach either suite:
  * pqhs_sign and pqhs_sign_deterministic reject them with
- * PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, and the only way to spend a leaf is
- * pqhs_sign_stateful, which requires a PqhsLeafJournal -- a durable,
- * caller-owned log of spent leaves -- as an argument, not an option.
+ * PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE. The only two calls that spend a
+ * leaf, pqhs_sign_stateful and its opaque-handle counterpart
+ * pqhs_stateful_key_sign (see PqhsStatefulKey), each require a
+ * PqhsLeafJournal -- a durable, caller-owned log of spent leaves -- as an
+ * argument, not an option.
  *
  * That journal must also be bound to the key it is spending for, once, by
  * pqhs_adopt_key. A journal records both how far a key has spent and which
  * key it belongs to, because the counter alone cannot tell a journal
  * correctly reopened for its own key from a brand-new one handed the same
  * key by mistake: both report leaf 0 for a key that has spent nothing.
- * pqhs_sign_stateful refuses an unbound or wrongly bound journal with
- * PQHS_ERR_JOURNAL_KEY_MISMATCH, having spent nothing.
+ * pqhs_sign_stateful and pqhs_stateful_key_sign each refuse an unbound or
+ * wrongly bound journal with PQHS_ERR_JOURNAL_KEY_MISMATCH, having spent
+ * nothing.
  *
  * --- Threading ---
  *
- * Every entry point is stateless: key, signature and leaf state live only
- * in the caller's buffers for the duration of one call, so calls on
- * different threads over different buffers do not interact. The only
- * process-wide state is the string cached by pqhs_profile_name, which is
- * initialised once and never mutated. The caller's own journal is the part
- * that is not thread-safe: see PqhsLeafJournal.
+ * Every buffer-based entry point is stateless: key, signature and leaf
+ * state live only in the caller's buffers for the duration of one call, so
+ * calls on different threads over different buffers do not interact. The
+ * only process-wide state is the string cached by pqhs_profile_name, which
+ * is initialised once and never mutated. The caller's own journal is the
+ * part that is not thread-safe: see PqhsLeafJournal.
+ *
+ * PqhsStatefulKey breaks that isolation on purpose: its leaf state lives
+ * inside the open handle, not in a caller buffer, for as long as the
+ * handle stays open. It therefore belongs to one thread at a time. Two
+ * threads sharing one PqhsStatefulKey, each with its own correctly bound
+ * journal, each satisfy the buffer-based rule above and can still be
+ * handed the same leaf. Serialising access to one handle across threads
+ * is the caller's responsibility, on the same terms as serialising access
+ * to one journal.
+ *
+ * PqhsVrfKey holds no comparable state of its own: its few-time budget
+ * count lives entirely in the caller's PqhsStatelessBudget store, the same
+ * as pqhs_sign_stateless and pqhs_stateful_key_sign_stateless. What is not
+ * thread-safe there is the store, not the handle: see PqhsStatelessBudget.
  *
  * --- No panics cross this boundary ---
  *
@@ -143,9 +186,11 @@
  * A path-selected signature (H5/H6) carried an unknown selector. Mirrors
  * `AbiError::BadPathSelector`.
  *
- * Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: junction
- * derivation has no entry point in this crate, so no library code could
- * ever return it. The number is left unassigned rather than reused by the
+ * Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: the `AbiError`
+ * variant it mirrored no longer exists. Only hard-junction derivation
+ * crosses this boundary ([`crate::pqhs_derive_hard_junction`],
+ * [`crate::pqhs_derive_hard_junction_path`]); soft junctions have no entry
+ * point here. The number is left unassigned rather than reused by the
  * next code added, so a caller already compiled against an older header
  * that still branches on `4` keeps reading it as unknown rather than
  * colliding with a future code's meaning.
@@ -264,6 +309,15 @@
 #define PQHS_ERR_BUDGET_STORE_FAILED 20
 
 /**
+ * A phrase passed to [`crate::pqhs_master_seed_from_mnemonic`] was not a
+ * valid English BIP39 mnemonic: a wrong word count, an unknown word, a bad
+ * checksum, or bytes that are not valid UTF-8. The four are not
+ * distinguished, because telling an attacker which part of a guessed
+ * phrase was wrong narrows the search. Mirrors `AbiError::InvalidMnemonic`.
+ */
+#define PQHS_ERR_INVALID_MNEMONIC 21
+
+/**
  * A required pointer argument was null while its paired length was
  * nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
  * raw pointer, so it has no code for a null one. A null pointer paired
@@ -293,6 +347,30 @@
 #define PQHS_ERR_ALIASED_BUFFERS 102
 
 /**
+ * Width in bytes of a master seed, everywhere one crosses this boundary:
+ * [`pqhs_master_seed_from_mnemonic`]'s `out`,
+ * [`pqhs_derive_hard_junction`]'s `parent` and `out`, and
+ * [`pqhs_derive_hard_junction_path`]'s `parent` and `out`.
+ *
+ * Written as a literal for the same reason as
+ * [`crate::PQHS_BUDGET_KEY_LEN`]: cbindgen copies the initialising
+ * expression into the header verbatim, and a C compiler has no Rust
+ * constant to expand. The assertion below keeps it in step with the
+ * library.
+ */
+#define PQHS_MASTER_SEED_LEN 32
+
+/**
+ * Width in bytes of a junction chain code:
+ * [`pqhs_derive_hard_junction`]'s `chain_code`, and one element of the
+ * flat array [`pqhs_derive_hard_junction_path`]'s `chain_codes` packs.
+ *
+ * See [`PQHS_MASTER_SEED_LEN`] for why this is a literal rather than a
+ * reference to the Rust constant it mirrors.
+ */
+#define PQHS_CHAIN_CODE_LEN 32
+
+/**
  * Width in bytes of a key identity: the value
  * [`PqhsLeafJournal::bound_key`] reports, [`PqhsLeafJournal::bind_key`]
  * stores, and [`pqhs_key_identity`] writes.
@@ -317,6 +395,67 @@
  * in step with the library.
  */
 #define PQHS_BUDGET_KEY_LEN 32
+
+/**
+ * Width in bytes of the output [`pqhs_vrf_make_bytes`] writes.
+ *
+ * See [`crate::PQHS_BUDGET_KEY_LEN`] for why this is a literal rather than
+ * a reference to the Rust constant it mirrors.
+ */
+#define PQHS_VRF_OUTPUT_LEN 32
+
+/**
+ * An imported stateful secret key, held across signing calls.
+ *
+ * Opaque. Create one with [`pqhs_stateful_key_open`], release it with
+ * [`pqhs_stateful_key_free`], and never copy or free the pointer any
+ * other way.
+ *
+ * # Why this exists
+ *
+ * `pqhs_sign_stateful` imports the exported blob on every call.
+ * `SecretKey::import` re-derives the hypertree root, which at
+ * `profile-128s-q18` and `profile-128s-q20` costs about 47 seconds, the
+ * same walk as keygen. A signer that takes more than one signature from a
+ * key should open a handle once and sign through it: the import is paid
+ * at `pqhs_stateful_key_open` and every later signature costs under 0.01
+ * seconds.
+ *
+ * # The durability contract is unchanged
+ *
+ * A handle holds the key in memory and persists nothing. After every
+ * `pqhs_stateful_key_sign` call, **including one that returned an
+ * error**, call `pqhs_stateful_key_export` and persist the result before
+ * relying on the signature. A leaf can be durably committed to the
+ * journal and the signature still fail, and a stored key that did not
+ * advance with the journal is refused for the rest of the key's life.
+ *
+ * Not thread-safe. `pqhs_stateful_key_sign` takes a mutable pointer and
+ * advances the key. One handle belongs to one thread at a time.
+ */
+typedef struct PqhsStatefulKey PqhsStatefulKey;
+
+/**
+ * A SHRINCS key dedicated to VRF evaluation under H5 or H6, held across
+ * calls.
+ *
+ * H5 and H6 evaluate the VRF through their post-quantum half's few-time
+ * stateless path, which draws on a budget shared with rotation and
+ * recovery. The key that carries an identity's rotation and recovery
+ * authority must not also spend that budget on VRF evaluations, so this
+ * handle always wraps a **separate** key: [`pqhs_vrf_key_derive`] derives
+ * it from the master seed under a label disjoint from the identity key's,
+ * so the two never collide.
+ *
+ * The key lives only in memory. There is no export: a dedicated VRF key is
+ * derived from the master seed when it is needed, not stored.
+ *
+ * Not thread-safe in the general sense every opaque handle in this crate
+ * is not: nothing stops two threads from calling [`pqhs_vrf_prove_stateless`]
+ * against one handle concurrently, and the caller's own `budget` vtable,
+ * not this handle, is what must serialise the spends that follow.
+ */
+typedef struct PqhsVrfKey PqhsVrfKey;
 
 /**
  * A caller-owned durable log of spent one-time leaves, passed to
@@ -362,19 +501,31 @@
  * [`pqhs_sign_stateful`]; this library starts no threads and hands the
  * `ctx` pointer to nothing else.
  *
- * Every entry point in this library is stateless -- keys, signatures and
- * leaf state live only in the caller's own buffers, for the duration of
- * one call -- so calls on different threads over different buffers do not
- * interact. The one piece of process-wide state is the cached string
- * behind [`pqhs_profile_name`](crate::pqhs_profile_name), which is
- * initialised once and never mutated.
+ * Every buffer-based entry point in this library is stateless -- keys,
+ * signatures and leaf state live only in the caller's own buffers, for the
+ * duration of one call -- so calls on different threads over different
+ * buffers do not interact. The one piece of process-wide state is the
+ * cached string behind [`pqhs_profile_name`](crate::pqhs_profile_name),
+ * which is initialised once and never mutated.
  *
- * What is *not* thread-safe is the caller's own journal. Two threads
- * signing with the same journal, or with two copies of the same stateful
- * secret key, can be handed the same leaf. Serialising access to a journal
- * and to the key blob it tracks is the caller's responsibility, and it is
- * not optional: a reused leaf is a total loss of the key's post-quantum
- * security.
+ * [`PqhsStatefulKey`] breaks that isolation on purpose: an open handle
+ * keeps its leaf state inside itself rather than in a caller buffer, for
+ * as long as it stays open, so it belongs to one thread at a time. See
+ * [`PqhsStatefulKey`]'s own documentation.
+ *
+ * [`crate::PqhsVrfKey`] holds no comparable state of its own: its
+ * few-time budget count lives entirely in the caller's
+ * [`PqhsStatelessBudget`] store, the same as [`pqhs_sign_stateless`] and
+ * [`pqhs_stateful_key_sign_stateless`]. What is not thread-safe there is
+ * the store, not the handle: see [`PqhsStatelessBudget`]'s own
+ * documentation.
+ *
+ * What is *not* thread-safe otherwise is the caller's own journal. Two
+ * threads signing with the same journal, or with two copies of the same
+ * stateful secret key, can be handed the same leaf. Serialising access to
+ * a journal and to the key blob or handle it tracks is the caller's
+ * responsibility, and it is not optional: a reused leaf is a total loss of
+ * the key's post-quantum security.
  */
 typedef struct {
   /**
@@ -414,10 +565,11 @@ typedef struct {
 /**
  * A caller-owned durable record of how much of the few-time stateless
  * budget each stateless key material has consumed, passed to
- * [`pqhs_sign_stateless`].
+ * [`pqhs_sign_stateless`], [`pqhs_stateful_key_sign_stateless`] and
+ * [`crate::pqhs_vrf_prove_stateless`].
  *
  * The stateless counterpart of [`PqhsLeafJournal`], and required on the
- * same terms: [`pqhs_sign_stateless`] cannot be called without one. The
+ * same terms: none of the three can be called without one. The
  * stateless path has a hard security bound of its own -- `2^20` signatures,
  * `2^18` under the low-budget profile -- shared with rotation and recovery,
  * and exceeding it degrades the security assumption of the underlying
@@ -446,14 +598,19 @@ typedef struct {
  *
  * `consumed` and `record` MUST NOT call any `pqhs_*` function, directly or
  * indirectly, on the same terms as [`PqhsLeafJournal`]'s callbacks: they
- * run while [`pqhs_sign_stateless`] holds live references to the caller's
- * `sk` and `sig_out` buffers.
+ * run while the entry point that took them holds live references to its
+ * own caller buffers -- `sk`, `msg`, `ctx` and `sig_out` for
+ * [`pqhs_sign_stateless`]; `msg`, `ctx` and `sig_out` for
+ * [`pqhs_stateful_key_sign_stateless`], whose key is a handle rather than
+ * a buffer; `input` and `proof_out` for
+ * [`crate::pqhs_vrf_prove_stateless`].
  *
  * # Threading
  *
  * As with [`PqhsLeafJournal`], the callbacks are plain C calls on the
  * calling thread, and serialising access to the store is the caller's
- * responsibility. Two threads signing against one unserialised store can
+ * responsibility, whichever of the three entry points above is spending
+ * against it. Two threads spending against one unserialised store can
  * each read the same count and each write back the same increment, which
  * loses one spend per race and lets the bound be exceeded.
  */
@@ -589,6 +746,136 @@ int pqhs_keygen_stateful_from_seed(uint8_t suite,
  * unknown.
  */
 const char *pqhs_profile_name(void);
+
+/**
+ * Turn an English BIP39 recovery phrase into a `PQHS_MASTER_SEED_LEN`-byte
+ * master seed.
+ *
+ * This is Substrate's seed derivation, not standard BIP39: PBKDF2-HMAC-
+ * SHA512 runs over the mnemonic's **entropy**, not over the phrase text,
+ * salted with `"mnemonic" || password`, for 2048 rounds, and the first
+ * `PQHS_MASTER_SEED_LEN` bytes are the master seed. A caller that
+ * reproduces this with a stock BIP39 library gets a different seed and
+ * therefore a different key.
+ *
+ * `phrase` is a required NUL-terminated C string. `password` is optional:
+ * a null `password` is the empty string, matching Substrate's
+ * `Pair::from_phrase`.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_MNEMONIC` if `phrase` is not valid UTF-8, or is not a
+ * valid English BIP39 mnemonic: a wrong word count, an unknown word, or a
+ * bad checksum. `PQHS_ERR_INVALID_MNEMONIC` also if `password` is
+ * non-null and not valid UTF-8. None of these are distinguished, because
+ * telling an attacker which part of a guessed phrase was wrong narrows the
+ * search. `PQHS_ERR_BAD_LENGTH` if `out_len` is not
+ * `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_NULL_POINTER` if `phrase` is null, or
+ * if `out` is null while `out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * `phrase` and `password`, if non-null, must each point at a byte sequence
+ * valid for reads up to and including its first NUL byte, for the
+ * duration of this call. `out`, if non-null, must be valid for a write of
+ * exactly `out_len` bytes for the duration of this call, and must not be
+ * aliased by another live pointer.
+ */
+int pqhs_master_seed_from_mnemonic(const char *phrase,
+                                   const char *password,
+                                   uint8_t *out,
+                                   size_t out_len);
+
+/**
+ * Derive a hard-junction child master seed.
+ *
+ * `[a, b]` applied through [`pqhs_derive_hard_junction_path`] means
+ * `pqhs_derive_hard_junction(pqhs_derive_hard_junction(parent, a), b)`.
+ * Order is part of the derivation.
+ *
+ * # The re-keygen hazard
+ *
+ * Derivation is deterministic, so the same parent and the same chain code
+ * reach the same child seed on every host that computes it, and therefore
+ * the same stateful tree starting at leaf 1. Deriving one child twice on
+ * two hosts is the same failure as importing one key twice: both hosts
+ * spend leaf 1, and the post-quantum security of that key is gone.
+ *
+ * A derived child must be derived once, then persisted and restored
+ * through the validating import path. A key pool spanning several nodes
+ * must give each node its own distinct junction. Never re-derive one
+ * junction on a second host.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `parent_len` is not `PQHS_MASTER_SEED_LEN`, if
+ * `chain_code_len` is not `PQHS_CHAIN_CODE_LEN`, or if `out_len` is not
+ * `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_COMPONENT_FAILURE` if the key
+ * derivation function fails. `PQHS_ERR_NULL_POINTER` if a pointer paired
+ * with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `parent`/`chain_code`, a write for `out`) for exactly
+ * its paired length in bytes, and must not be aliased by another live
+ * pointer for the duration of this call. A null pointer is only valid
+ * when its paired length is `0`.
+ */
+int pqhs_derive_hard_junction(const uint8_t *parent,
+                              size_t parent_len,
+                              const uint8_t *chain_code,
+                              size_t chain_code_len,
+                              uint8_t *out,
+                              size_t out_len);
+
+/**
+ * Apply a sequence of chain codes in order, each child becoming the next
+ * parent. `chain_codes` is a flat array of `chain_codes_len /
+ * PQHS_CHAIN_CODE_LEN` codes, each `PQHS_CHAIN_CODE_LEN` bytes,
+ * concatenated -- a C caller has no way to pass a slice of arrays, so the
+ * boundary is one buffer and its total length.
+ *
+ * See [`pqhs_derive_hard_junction`] for the re-keygen hazard, which
+ * applies to every seed this function returns.
+ *
+ * # The empty-path trap
+ *
+ * **A `chain_codes_len` of `0` returns `parent` unchanged, and this
+ * succeeds -- it is not an error.** That is the identity a path of no
+ * junctions should have, and it is a trap for a caller building the path
+ * from parsed input: a parse that silently yielded no junctions hands back
+ * the parent key rather than failing. A caller that requires at least one
+ * junction must check for that itself, before calling this function.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `parent_len` is not `PQHS_MASTER_SEED_LEN`, if
+ * `chain_codes_len` is not a multiple of `PQHS_CHAIN_CODE_LEN`, or if
+ * `out_len` is not `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_COMPONENT_FAILURE` if
+ * the key derivation function fails. `PQHS_ERR_NULL_POINTER` if a pointer
+ * paired with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `parent`/`chain_codes`, a write for `out`) for exactly
+ * its paired length in bytes, and must not be aliased by another live
+ * pointer for the duration of this call. A null pointer is only valid
+ * when its paired length is `0`.
+ */
+int pqhs_derive_hard_junction_path(const uint8_t *parent,
+                                   size_t parent_len,
+                                   const uint8_t *chain_codes,
+                                   size_t chain_codes_len,
+                                   uint8_t *out,
+                                   size_t out_len);
 
 /**
  * Hedged (randomized) signing for `suite`. Writes the signature into
@@ -1176,6 +1463,492 @@ int pqhs_verify_with_stored_public_key_stateless(uint8_t suite,
                                                  const uint8_t *sig,
                                                  size_t sig_len,
                                                  bool *valid_out);
+
+/**
+ * Import `sk` once and return an opaque handle through `out`.
+ *
+ * This is the call that costs about 47 seconds at the 128s profiles.
+ * Every later [`pqhs_stateful_key_sign`] taken through the handle costs
+ * under 0.01 seconds. See [`PqhsStatefulKey`].
+ *
+ * `sk` is the exported secret key blob from
+ * [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
+ * or a previous [`pqhs_stateful_key_export`].
+ *
+ * On success, `*out` is a pointer the caller must later pass to
+ * [`pqhs_stateful_key_free`]. On failure, `*out` is left untouched.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4.
+ * `PQHS_ERR_BAD_LENGTH` if `sk` is not
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
+ * `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null, or if `sk` is null while
+ * `sk_len` is nonzero. `PQHS_ERR_INVALID_SUITE` if `suite` is not
+ * `1..=6`.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `sk`, a write of one `*mut PqhsStatefulKey` for
+ * `out`) for exactly its paired length in bytes, and must not be aliased
+ * by another live pointer for the duration of this call. A null pointer
+ * is only valid when its paired length is `0`; `out` has no paired length
+ * and must be a valid, non-null, writable `*mut PqhsStatefulKey` pointer.
+ */
+int pqhs_stateful_key_open(uint8_t suite, const uint8_t *sk, size_t sk_len, PqhsStatefulKey **out);
+
+/**
+ * Release a handle previously returned by [`pqhs_stateful_key_open`].
+ *
+ * A null `key` is a no-op. After this call returns, `key` must not be
+ * used again.
+ *
+ * # Safety
+ *
+ * `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not already been freed, or null.
+ * The pointer must not be used after this call returns.
+ */
+void pqhs_stateful_key_free(PqhsStatefulKey *key);
+
+/**
+ * Write the current exported blob of `key` into `sk_out`.
+ *
+ * Writes the number of bytes written through `written`, which is
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) for this handle's
+ * suite. Persist this after every [`pqhs_stateful_key_sign`] call,
+ * including one that returned an error. See [`PqhsStatefulKey`].
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `sk_out` is not exactly
+ * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes.
+ * `PQHS_ERR_COMPONENT_FAILURE` if the key does not export.
+ * `PQHS_ERR_NULL_POINTER` if `key` or `written` is null, or if `sk_out`
+ * is null while `sk_out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`, writes for `sk_out`/`written`) for exactly
+ * its paired length in bytes, and must not be aliased by another live
+ * pointer for the duration of this call. A null pointer is only valid
+ * when its paired length is `0`; `written` has no paired length and must
+ * be a valid, non-null, writable `usize` pointer. `key` must be a
+ * pointer previously returned by [`pqhs_stateful_key_open`] that has not
+ * been freed.
+ */
+int pqhs_stateful_key_export(const PqhsStatefulKey *key,
+                             uint8_t *sk_out,
+                             size_t sk_out_len,
+                             size_t *written);
+
+/**
+ * Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key `key`
+ * holds into `out`.
+ *
+ * The same value [`pqhs_key_identity`] writes for the matching public
+ * key. Derived from the cached post-quantum verify key, which is public;
+ * no secret byte reaches it.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_BAD_LENGTH` if `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+ * `PQHS_ERR_NULL_POINTER` if `key` is null, or if `out` is null while
+ * `out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`, writes for `out`) for exactly its paired
+ * length in bytes, and must not be aliased by another live pointer for
+ * the duration of this call. A null pointer is only valid when its
+ * paired length is `0`. `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not been freed.
+ */
+int pqhs_stateful_key_identity(const PqhsStatefulKey *key, uint8_t *out, size_t out_len);
+
+/**
+ * Sign `msg` under `ctx` with `key`, spending one leaf recorded through
+ * `journal`.
+ *
+ * The handle-held counterpart of [`pqhs_sign_stateful`]. Identical in
+ * every respect except that the key is already imported and the advanced
+ * key stays in `key` instead of being written to an `sk_out` buffer.
+ *
+ * `journal` must already be bound to this key ([`pqhs_adopt_key`]). That
+ * is checked before its counter is read and before anything is committed.
+ *
+ * **The handle advances on every outcome that reaches the component
+ * signer, including a failed one.** Export and persist it either way.
+ * See [`PqhsStatefulKey`].
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal` is not bound to this key;
+ * nothing was spent and the key is intact. `PQHS_ERR_LEAVES_EXHAUSTED`
+ * if the key's leaf budget is spent, checked before the journal is
+ * touched. `PQHS_ERR_JOURNAL_FAILED` if `journal` could not durably
+ * commit; nothing was spent. `PQHS_ERR_NULL_POINTER` if `key` is null,
+ * if `journal` is null or any of its four callbacks is null, if
+ * `written` is null, or if any buffer pointer paired with a nonzero
+ * length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`/`journal`/`msg`/`ctx`, writes for
+ * `sig_out`/`written`) for exactly its paired length in bytes, and must
+ * not be aliased by another live pointer for the duration of this call.
+ * A null pointer is only valid when its paired length is `0`; `written`
+ * has no paired length and must be a valid, non-null, writable `usize`
+ * pointer. `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not been freed. `journal`, if
+ * non-null, must point to a valid `PqhsLeafJournal` whose `ctx` is a
+ * pointer its own callbacks are prepared to receive, and whose callbacks
+ * do not call back into this library (see [`PqhsLeafJournal`]).
+ */
+int pqhs_stateful_key_sign(PqhsStatefulKey *key,
+                           const PqhsLeafJournal *journal,
+                           const uint8_t *msg,
+                           size_t msg_len,
+                           const uint8_t *ctx,
+                           size_t ctx_len,
+                           uint8_t *sig_out,
+                           size_t sig_out_len,
+                           size_t *written);
+
+/**
+ * Sign `msg` under `ctx` with `key` without spending any leaf, using
+ * SHRINCS's stateless few-time path (specification section 21), and
+ * spending one unit of the few-time stateless budget.
+ *
+ * The handle-held counterpart of [`pqhs_sign_stateless`]. `budget` is
+ * required and no leaf journal substitutes for it, on the same terms.
+ * The stateless path does not advance the key, so there is nothing new
+ * to export afterwards.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_NULL_POINTER` if `key` is null, if a pointer paired with a
+ * nonzero length is null, if `written` is null, if `budget` is null, or
+ * if either of `budget`'s callbacks is null.
+ * `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's stateless budget is
+ * spent; nothing was recorded and no signature was built.
+ * `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+ * become durable; nothing was recorded either.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`/`budget`/`msg`/`ctx`, writes for
+ * `sig_out`/`written`) for exactly its paired length in bytes, and must
+ * not be aliased by another live pointer for the duration of this call.
+ * A null pointer is only valid when its paired length is `0`; `written`
+ * has no paired length and must be a valid, non-null, writable `usize`
+ * pointer. `key` must be a pointer previously returned by
+ * [`pqhs_stateful_key_open`] that has not been freed. `budget` must
+ * point to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its
+ * own callbacks are prepared to receive, and whose callbacks do not call
+ * back into this library.
+ */
+int pqhs_stateful_key_sign_stateless(const PqhsStatefulKey *key,
+                                     const PqhsStatelessBudget *budget,
+                                     const uint8_t *msg,
+                                     size_t msg_len,
+                                     const uint8_t *ctx,
+                                     size_t ctx_len,
+                                     uint8_t *sig_out,
+                                     size_t sig_out_len,
+                                     size_t *written);
+
+/**
+ * Write the hybrid VRF proof length for `suite`, in bytes, into `*out`.
+ *
+ * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+ * delta-length binding can occupy. For H5 and H6 this is exact.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null.
+ *
+ * # Safety
+ *
+ * `out`, if non-null, must be a valid, writable `usize` pointer.
+ */
+int pqhs_vrf_proof_len(uint8_t suite, size_t *out);
+
+/**
+ * Evaluate the hybrid VRF for `suite`, hedged with the process's secure
+ * random source. Writes the proof into `proof_out` and the number of bytes
+ * written into `*proof_written`.
+ *
+ * H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
+ * budget on every evaluation and need a durable store to record it, so
+ * they prove through [`pqhs_vrf_prove_stateless`] instead, on the same terms
+ * [`crate::pqhs_sign`] refuses them: a call that looks free and is not is
+ * the worst failure mode this crate could offer.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+ * [`pqhs_vrf_prove_stateless`] instead. `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if
+ * `proof_out` is smaller than [`pqhs_vrf_proof_len`] needs for this input.
+ * `PQHS_ERR_BAD_LENGTH` if `sk` is not the suite's secret-key length.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+ * null, or if `proof_written` is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `sk`/`input`, writes for `proof_out`/`proof_written`)
+ * for exactly its paired length in bytes, and must not be aliased by
+ * another live pointer for the duration of this call. A null pointer is
+ * only valid when its paired length is `0`; `proof_written` has no paired
+ * length and must be a valid, non-null, writable `usize` pointer.
+ */
+int pqhs_vrf_prove(uint8_t suite,
+                   const uint8_t *sk,
+                   size_t sk_len,
+                   const uint8_t *input,
+                   size_t input_len,
+                   uint8_t *proof_out,
+                   size_t proof_out_len,
+                   size_t *proof_written);
+
+/**
+ * Evaluate the hybrid VRF for `suite` with a reproducible classical proof.
+ * Writes the proof into `proof_out` and the number of bytes written into
+ * `*proof_written`.
+ *
+ * H1 through H4 only, on the same terms as [`pqhs_vrf_prove`]: H5 and H6
+ * spend a few-time budget unit and prove through [`pqhs_vrf_prove_stateless`].
+ *
+ * # Errors
+ *
+ * The same as [`pqhs_vrf_prove`].
+ *
+ * # Safety
+ *
+ * The same as [`pqhs_vrf_prove`].
+ */
+int pqhs_vrf_prove_deterministic(uint8_t suite,
+                                 const uint8_t *sk,
+                                 size_t sk_len,
+                                 const uint8_t *input,
+                                 size_t input_len,
+                                 uint8_t *proof_out,
+                                 size_t proof_out_len,
+                                 size_t *proof_written);
+
+/**
+ * Verify a hybrid VRF `proof` over `input` for `suite`, against `pk`.
+ * Covers all six suites: verifying never spends anything, so there is
+ * nothing to keep apart by statefulness.
+ *
+ * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
+ * cases: an invalid proof is not a call failure. A malformed `pk` or
+ * `proof` simply fails to verify, on the same terms as
+ * [`crate::pqhs_verify`].
+ *
+ * `*valid_out` is set to `false` before anything else happens, so it is
+ * `false` on every path that returns a code other than `PQHS_OK` too. The
+ * one case that cannot fail closed is a null `valid_out` itself, which is
+ * rejected before any other check.
+ *
+ * `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
+ * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
+ * the capacity of the buffer that held it. For H1, H3, H5 and H6 those are
+ * the same number, because [`crate::pqhs_vrf_proof_len`] is exact for
+ * those suites. For H2 and H4, [`crate::pqhs_vrf_proof_len`] reports only a
+ * maximum, and passing that maximum here instead of `*proof_written`
+ * verifies a proof that is not the one produced: this function fails
+ * closed on it, the same as any other malformed `proof`, with no error
+ * code naming the cause.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
+ * null, or if `valid_out` is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `pk`/`input`/`proof`, a write for `valid_out`) for
+ * exactly its paired length in bytes, and must not be aliased by another
+ * live pointer for the duration of this call. A null pointer is only
+ * valid when its paired length is `0`; `valid_out` has no paired length
+ * and must be a valid, non-null, writable `bool` pointer.
+ */
+int pqhs_vrf_verify(uint8_t suite,
+                    const uint8_t *pk,
+                    size_t pk_len,
+                    const uint8_t *input,
+                    size_t input_len,
+                    const uint8_t *proof,
+                    size_t proof_len,
+                    bool *valid_out);
+
+/**
+ * Derive `PQHS_VRF_OUTPUT_LEN` output bytes from a verified `proof`.
+ *
+ * **Verify the proof first**, with [`pqhs_vrf_verify`]. That is what
+ * establishes that the pre-output belongs to this key and this input.
+ * Deriving bytes from an unverified proof derives bytes from whatever an
+ * attacker supplied, and this function performs no verification of its
+ * own.
+ *
+ * `context` separates two uses of one proof: the same proof under
+ * `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
+ * evaluation can feed two consumers without either learning the other's
+ * value early.
+ *
+ * `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
+ * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
+ * the capacity of the buffer that held it, on the same terms as
+ * [`pqhs_vrf_verify`]'s `proof_len`. Passing
+ * [`crate::pqhs_vrf_proof_len`]'s maximum for H2 or H4 instead derives
+ * bytes from the wrong proof.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_BAD_LENGTH` if `out_len` is not `PQHS_VRF_OUTPUT_LEN`, if
+ * `proof` is shorter than the proof header, or if `pk` is shorter than
+ * the classical public key. `PQHS_ERR_COMPONENT_FAILURE` if `pk` or the
+ * pre-output does not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired
+ * with a nonzero length is null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `pk`/`input`/`proof`/`context`, a write for `out`) for
+ * exactly its paired length in bytes, and must not be aliased by another
+ * live pointer for the duration of this call. A null pointer is only
+ * valid when its paired length is `0`.
+ */
+int pqhs_vrf_make_bytes(uint8_t suite,
+                        const uint8_t *pk,
+                        size_t pk_len,
+                        const uint8_t *input,
+                        size_t input_len,
+                        const uint8_t *proof,
+                        size_t proof_len,
+                        const uint8_t *context,
+                        size_t context_len,
+                        uint8_t *out,
+                        size_t out_len);
+
+/**
+ * Derive a dedicated VRF key from `master` for `suite`, writing its public
+ * key into `pk_out` and returning an opaque handle through `out`.
+ *
+ * `master` is a `PQHS_MASTER_SEED_LEN`-byte master seed, the same one
+ * [`crate::pqhs_master_seed_from_mnemonic`] or
+ * [`crate::pqhs_derive_hard_junction`] produces. `pk_out` must be exactly
+ * [`crate::pqhs_public_key_len`] bytes for `suite`.
+ *
+ * **This key is not the identity key.** Deriving it under the same master
+ * seed as an H5/H6 identity key produces a different key, disjoint from
+ * the identity's rotation and recovery authority, by construction of the
+ * derivation label. Do not adopt an identity key here: doing so would
+ * spend the identity's rotation and recovery budget on VRF evaluations.
+ *
+ * On success, `*out` is a pointer the caller must later pass to
+ * [`pqhs_vrf_key_free`]. On failure, `*out` is left untouched.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: they have no stateful
+ * half and therefore no dedicated stateless VRF key.
+ * `PQHS_ERR_BAD_LENGTH` if `master_len` is not `PQHS_MASTER_SEED_LEN`, or
+ * `pk_out_len` is not [`crate::pqhs_public_key_len`] for `suite`.
+ * `PQHS_ERR_COMPONENT_FAILURE` if derivation fails.
+ * `PQHS_ERR_NULL_POINTER` if `out` is null, or if `master` is null while
+ * `master_len` is nonzero. `PQHS_ERR_INVALID_SUITE` if `suite` is not
+ * `1..=6`.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `master`, writes for `pk_out` and one `*mut
+ * PqhsVrfKey` for `out`) for exactly its paired length in bytes, and must
+ * not be aliased by another live pointer for the duration of this call. A
+ * null pointer is only valid when its paired length is `0`; `out` has no
+ * paired length and must be a valid, non-null, writable `*mut PqhsVrfKey`
+ * pointer.
+ */
+int pqhs_vrf_key_derive(uint8_t suite,
+                        const uint8_t *master,
+                        size_t master_len,
+                        uint8_t *pk_out,
+                        size_t pk_out_len,
+                        PqhsVrfKey **out);
+
+/**
+ * Release a handle previously returned by [`pqhs_vrf_key_derive`].
+ *
+ * A null `key` is a no-op. After this call returns, `key` must not be
+ * used again.
+ *
+ * # Safety
+ *
+ * `key` must be a pointer previously returned by [`pqhs_vrf_key_derive`]
+ * that has not already been freed, or null. The pointer must not be used
+ * after this call returns.
+ */
+void pqhs_vrf_key_free(PqhsVrfKey *key);
+
+/**
+ * Evaluate the hybrid VRF under H5 or H6 through `key`, spending one unit
+ * of the few-time stateless budget. Writes the proof into `proof_out` and
+ * the number of bytes written into `*proof_written`.
+ *
+ * [`pqhs_vrf_prove`] refuses these suites because a call that looks free
+ * and is not is the worst failure mode this crate could offer. This entry
+ * point takes the dedicated key and the durable store the spend needs, on
+ * the same terms as [`crate::pqhs_sign_stateless`]. See
+ * [`PqhsStatelessBudget`] for the durability contract the callbacks must
+ * honour.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's few-time budget is
+ * spent; nothing was recorded and no proof was built.
+ * `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+ * become durable; nothing was recorded either.
+ * `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if `proof_out` is shorter than
+ * [`pqhs_vrf_proof_len`] needs. `PQHS_ERR_COMPONENT_FAILURE` if a
+ * component rejects the key. `PQHS_ERR_NULL_POINTER` if `key` is null, if
+ * a pointer paired with a nonzero length is null, if `proof_written` is
+ * null, if `budget` is null, or if either of `budget`'s callbacks is
+ * null.
+ *
+ * # Safety
+ *
+ * Every pointer parameter, if non-null, must be valid for the documented
+ * access (reads for `key`/`input`, writes for
+ * `proof_out`/`proof_written`) for exactly its paired length in bytes,
+ * and must not be aliased by another live pointer for the duration of
+ * this call. A null pointer is only valid when its paired length is `0`;
+ * `proof_written` has no paired length and must be a valid, non-null,
+ * writable `usize` pointer. `key` must be a pointer previously returned
+ * by [`pqhs_vrf_key_derive`] that has not been freed. `budget` must point
+ * to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its own
+ * callbacks are prepared to receive, and whose callbacks do not call back
+ * into this library.
+ */
+int pqhs_vrf_prove_stateless(const PqhsVrfKey *key,
+                             const PqhsStatelessBudget *budget,
+                             const uint8_t *input,
+                             size_t input_len,
+                             uint8_t *proof_out,
+                             size_t proof_out_len,
+                             size_t *proof_written);
 
 #ifdef __cplusplus
 }  // extern "C"
