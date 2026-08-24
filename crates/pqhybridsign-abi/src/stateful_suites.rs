@@ -1162,8 +1162,16 @@ mod tests {
     fn the_stored_form_is_recomputed_not_copied() {
         // The point of this test. Corrupting the commitment the bundle CARRIES
         // must change nothing about the commitment this function DERIVES, so the
-        // two stop matching. A helper that sliced the carried field at a fixed
-        // offset would return the corrupted bytes and this assertion would pass.
+        // two stop matching. On this path the carried-commitment corruption DOES
+        // discriminate a recomputing helper from a slicing one: this crate
+        // compares the helper's output directly, with no guard in between.
+        // Temporarily reverting `PublicKey::stored_form` (the function this
+        // helper calls) to slice the bundle at a fixed offset instead of
+        // recomputing it, then running this exact test, fails on the
+        // assertion below with the honest and tampered outputs differing
+        // only at the tampered byte -- the same regression
+        // `task-12-report.md:317-333` and `task-9b-report.md:218-236`
+        // record failing for the equivalent C-crate test.
         for suite in [Suite::H5, Suite::H6] {
             let mut sk = vec![0u8; crate::secret_key_len(suite)];
             let mut pk = vec![0u8; crate::public_key_len(suite)];
@@ -1180,18 +1188,20 @@ mod tests {
             tampered_pk[classical_len + 68] ^= 0x01;
 
             let mut from_tampered = vec![0u8; crate::stored_public_key_len(suite)];
-            let result = stored_public_key(suite, &tampered_pk, &mut from_tampered);
+            // No length check on this path can reject a correct-length
+            // bundle with one flipped byte today, so this must decode. Left
+            // unguarded rather than matched on `Err`, so that a future
+            // hardening which does start rejecting the tampered bundle
+            // fails this test loudly instead of skipping the assertion
+            // below in silence.
+            stored_public_key(suite, &tampered_pk, &mut from_tampered)
+                .expect("a correct-length bundle with one flipped byte must decode");
 
-            // Either the bundle is rejected outright, or it decodes and the
-            // recomputed commitment still differs from the corrupted carried one.
-            match result {
-                Err(_) => {}
-                Ok(_) => assert_eq!(
-                    honest, from_tampered,
-                    "{suite:?}: the helper read the carried commitment instead of \
-                     recomputing it"
-                ),
-            }
+            assert_eq!(
+                honest, from_tampered,
+                "{suite:?}: the helper read the carried commitment instead of \
+                 recomputing it"
+            );
         }
     }
 
