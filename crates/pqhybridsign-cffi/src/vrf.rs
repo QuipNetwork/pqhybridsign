@@ -418,6 +418,18 @@ pub unsafe extern "C" fn pqhs_vrf_key_derive(
             Ok(s) => s,
             Err(e) => return e,
         };
+        // Checked here, before the master or pk_out lengths are examined,
+        // because the suite determines which length is even correct: a
+        // length verdict on a suite this entry point does not serve tells
+        // the caller nothing true. Written in terms of the suites this
+        // entry point DOES serve, so a seventh suite added later is
+        // refused by default rather than admitted by default.
+        if !matches!(
+            suite,
+            pqhybridsign_abi::Suite::H5 | pqhybridsign_abi::Suite::H6
+        ) {
+            return crate::error::PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE;
+        }
         let master = match unsafe { borrow_slice(master, master_len) } {
             Ok(s) => s,
             Err(e) => return e,
@@ -1312,6 +1324,34 @@ mod tests {
                     pqhybridsign_abi::Suite::from_code(code).unwrap(),
                 )
             ];
+            let mut key_out: *mut PqhsVrfKey = std::ptr::null_mut();
+            let master = [7u8; 32];
+            // SAFETY: every pointer below is a live local buffer of the
+            // length passed.
+            let rc = unsafe {
+                pqhs_vrf_key_derive(
+                    code,
+                    master.as_ptr(),
+                    master.len(),
+                    pk.as_mut_ptr(),
+                    pk.len(),
+                    &mut key_out,
+                )
+            };
+            assert_eq!(rc, PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE, "suite {code}");
+            assert!(key_out.is_null(), "suite {code} left *out untouched");
+        }
+    }
+
+    #[test]
+    fn the_vrf_key_handle_rejects_the_lattice_suites_before_judging_the_buffer() {
+        for code in 1u8..=4 {
+            // The length is arbitrary: the suite gate fires before any
+            // length is examined, so no real public key length would make
+            // this case discriminate any better. It is deliberately not
+            // sized for any suite, so a passing test cannot be explained
+            // by an accidental length match.
+            let mut pk = vec![0u8; 3];
             let mut key_out: *mut PqhsVrfKey = std::ptr::null_mut();
             let master = [7u8; 32];
             // SAFETY: every pointer below is a live local buffer of the
