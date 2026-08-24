@@ -212,7 +212,7 @@ pub fn require_bound_key(journal: &impl LeafJournal, key: KeyIdentity) -> Result
 /// as keygen: about 47 seconds, paid on every call. The in-process Rust API
 /// keeps a `SecretKey` in memory and signs in under 0.01 seconds. A caller
 /// on a 128s profile that signs more than occasionally wants the Rust API
-/// or an opaque key handle, not this entry point.
+/// or [`crate::StatefulKeyHandle`], not this entry point.
 ///
 /// # Errors
 ///
@@ -559,7 +559,10 @@ fn write_exact(out: &mut [u8], src: &[u8]) -> Result<(), AbiError> {
     Ok(())
 }
 
-fn write_sig(sig_out: &mut [u8], sig: &[u8]) -> Result<usize, AbiError> {
+/// Copy `sig` into `sig_out` and return the number of bytes written.
+///
+/// [`AbiError::OutputBufferTooSmall`] if `sig_out` is shorter than `sig`.
+pub(crate) fn write_sig(sig_out: &mut [u8], sig: &[u8]) -> Result<usize, AbiError> {
     if sig.len() > sig_out.len() {
         return Err(AbiError::OutputBufferTooSmall);
     }

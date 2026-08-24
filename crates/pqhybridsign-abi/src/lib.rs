@@ -70,6 +70,7 @@ behaviour, and every function here is written to be called from one.
 "]
 
 mod error;
+mod handle;
 mod sizes;
 mod stateful_suites;
 mod stateless_suites;
@@ -77,6 +78,7 @@ mod suite;
 mod verify;
 
 pub use error::AbiError;
+pub use handle::{sign_stateful_with_handle, sign_stateless_with_handle, StatefulKeyHandle};
 pub use sizes::{public_key_len, secret_key_len, signature_len, stored_public_key_len};
 pub use stateful_suites::{
     adopt_key, key_identity, key_identity_from_secret_key, keygen_stateful_from_seed,
