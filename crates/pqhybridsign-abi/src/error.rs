@@ -131,6 +131,12 @@ pub enum AbiError {
     /// the same terms: nothing was recorded, so the same unit of budget is
     /// still available once the storage fault is repaired.
     BudgetStoreFailed = 20,
+    /// A phrase passed to [`crate::master_seed_from_mnemonic`] was not a
+    /// valid English BIP39 mnemonic: a wrong word count, an unknown word, or
+    /// a bad checksum. The three are not distinguished, because telling an
+    /// attacker which part of a guessed phrase was wrong narrows the search.
+    /// Mirrors [`CoreError::InvalidMnemonic`].
+    InvalidMnemonic = 21,
 }
 
 impl AbiError {
@@ -173,6 +179,7 @@ impl fmt::Display for AbiError {
             Self::BudgetStoreFailed => {
                 "the stateless budget store could not durably record; nothing consumed"
             }
+            Self::InvalidMnemonic => "not a valid English BIP39 mnemonic phrase",
         };
         f.write_str(msg)
     }
@@ -194,6 +201,7 @@ impl From<CoreError> for AbiError {
             CoreError::DeltaLengthOutOfRange { .. } => Self::DeltaLengthOutOfRange,
             CoreError::StatelessBudgetExhausted => Self::StatelessBudgetExhausted,
             CoreError::BudgetStoreFailed => Self::BudgetStoreFailed,
+            CoreError::InvalidMnemonic => Self::InvalidMnemonic,
             // `CoreError` is `#[non_exhaustive]`: only a variant added after
             // this crate was written can reach this arm, since every
             // variant that exists today has its own arm above.
@@ -251,6 +259,7 @@ mod tests {
         assert_eq!(AbiError::JournalKeyMismatch.code(), 18);
         assert_eq!(AbiError::StatelessBudgetExhausted.code(), 19);
         assert_eq!(AbiError::BudgetStoreFailed.code(), 20);
+        assert_eq!(AbiError::InvalidMnemonic.code(), 21);
     }
 
     #[test]
@@ -313,6 +322,10 @@ mod tests {
         assert_eq!(
             AbiError::from(CoreError::BudgetStoreFailed),
             AbiError::BudgetStoreFailed
+        );
+        assert_eq!(
+            AbiError::from(CoreError::InvalidMnemonic),
+            AbiError::InvalidMnemonic
         );
     }
 

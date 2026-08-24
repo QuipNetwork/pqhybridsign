@@ -323,6 +323,11 @@ profile-matrix:
         cargo test --locked -p pqhybridsign --release --no-default-features \
           --features "$p"
       done
+      # The ABI crate has no profile-* feature, so its stateful VRF tests
+      # cannot be cfg-gated. They are #[ignore]d to keep a 128s build of
+      # cargo test --workspace inside the four-minute budget, and they
+      # run here under the crate's default profile-256s.
+      cargo test --locked -p pqhybridsign-abi --release vrf:: -- --ignored
 
 # DESIGN.md line 846 specifies mutation testing over the encoding and
 # domain-separation modules, where a skipped check is the dangerous failure.
