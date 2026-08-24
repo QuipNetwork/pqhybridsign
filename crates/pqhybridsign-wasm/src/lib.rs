@@ -132,6 +132,14 @@
 //! discard and recreate, such as a dedicated worker, rather than rely on
 //! the instance remaining usable.
 //!
+//! The npm package wraps this. Its `createApi` catches a
+//! `WebAssembly.RuntimeError`, discards the instance, and rethrows a
+//! `PqHybridSignPanic`, so a JavaScript caller reaching this crate through
+//! `@quip.network/pqhybridsign` can separate a trap from an ordinary
+//! rejection and does not keep calling a crashed instance. A caller that
+//! instantiates the `.wasm` file directly gets neither and must treat any
+//! `RuntimeError` as fatal to the instance.
+//!
 //! # Secret key handling
 //!
 //! Every export that receives or produces secret key bytes, or the
