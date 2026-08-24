@@ -134,9 +134,14 @@
 //!
 //! The npm package wraps this. Its `createApi` catches a
 //! `WebAssembly.RuntimeError`, discards the instance, and rethrows a
-//! `PqHybridSignPanic`, so a JavaScript caller reaching this crate through
+//! `PqHybridSignPanic`. A JavaScript caller that reaches this crate through
 //! `@quip.network/pqhybridsign` can separate a trap from an ordinary
-//! rejection and does not keep calling a crashed instance. A caller that
+//! rejection. The next call reloads. It does not reuse the crashed instance.
+//! The Node reload is covered by the package test suite. The browser
+//! reload re-imports the glue under a cache-busting specifier, because a
+//! second `init()` on the same module record returns the instance that
+//! already trapped. The suite does not exercise that browser path, so treat
+//! a retry there as best-effort rather than guaranteed. A caller that
 //! instantiates the `.wasm` file directly gets neither and must treat any
 //! `RuntimeError` as fatal to the instance.
 //!

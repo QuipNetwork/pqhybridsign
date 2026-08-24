@@ -257,12 +257,20 @@ export interface PqHybridSignApi {
  * from "the call was rejected". The original `RuntimeError` is on
  * {@link cause}.
  *
- * The instance that trapped is discarded. The next call to any method
- * loads a fresh one, so a caller that catches this and retries is calling
- * into a clean module rather than a poisoned one. Any state the crashed
- * instance held is gone: a stateful signing call that threw this must be
- * treated as having an unknown outcome, and the caller's leaf journal, not
- * this package, is what says whether a leaf was spent.
+ * The instance that trapped is discarded. The next call to any method loads a
+ * fresh one, so a caller that catches this and retries is calling into a clean
+ * module rather than a poisoned one.
+ *
+ * Under Node this reload is exercised by the package's own test suite. In a
+ * browser the loader re-imports the glue under a cache-busting specifier to
+ * get a new module record, which is necessary because a second `init()` on the
+ * same record returns the instance that already trapped. That browser path is
+ * not covered by the test suite, so treat a retry there as best-effort rather
+ * than guaranteed.
+ *
+ * Any state the crashed instance held is gone: a stateful signing call that
+ * threw this must be treated as having an unknown outcome, and the caller's
+ * leaf journal, not this package, is what says whether a leaf was spent.
  */
 export class PqHybridSignPanic extends Error {
   override readonly cause: unknown;
@@ -270,7 +278,7 @@ export class PqHybridSignPanic extends Error {
   constructor(cause: unknown) {
     super(
       "the pqhybridsign WebAssembly module trapped and was discarded; " +
-        "the next call loads a fresh instance",
+        "the next call attempts to load a fresh instance",
     );
     this.name = "PqHybridSignPanic";
     this.cause = cause;

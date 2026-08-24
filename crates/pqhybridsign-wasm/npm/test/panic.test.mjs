@@ -81,9 +81,11 @@ test("the module is reloaded after a trap and not before", async () => {
 test("the real node loader produces a working module twice", async () => {
   // Not a trap test. It checks the mechanism the recovery in the test
   // above depends on: that the shipped loader, called a second time,
-  // hands back a module that still answers.
+  // returns a DIFFERENT module object that still answers. Asserting only
+  // that both answer would pass on a cached instance and prove nothing.
   const first = await dist.__loadForTest();
   assert.equal(typeof first.profileName(), "string");
   const second = await dist.__loadForTest();
   assert.equal(typeof second.profileName(), "string");
+  assert.notEqual(first, second, "the loader returned the cached module");
 });
