@@ -191,6 +191,7 @@ wasm-test:
   stage: test
   script:
     - apt-get update
+    - apt-get install -y --no-install-recommends python3
     - !reference [.setup-node, script]
     - rustup target add wasm32-unknown-unknown
     - |
@@ -571,6 +572,7 @@ release:validate:
     - job: test-debug
     - job: test-release
     - job: wasm-npm
+    - job: wasm-test
     - job: profile-matrix
     - job: smoke-128s-q18
     - job: c-abi
