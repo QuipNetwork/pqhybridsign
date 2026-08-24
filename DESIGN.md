@@ -30,6 +30,14 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | 5 | Noise-style combinatorial suite naming | The label registry regenerates exactly from a name grammar. See Finding 1 |
 | 6 | No H2 or H4 code this cycle | Sections 3, 4 and 22 gate both on final FIPS 206 and a stable `fn-dsa` release |
 
+Decision 3 carries a consequence worth stating where an integrator meets it.
+AGPL-3.0-or-later includes section 13. An operator who runs a public network
+service built on these crates must offer the corresponding source to the users
+of that service. `hashsigs-rs` is AGPL-3.0-or-later as well, and decision 2
+makes it optional: `stateful` and the `profile-*` features link it, and a
+lattice-only build with `default-features = false` does not. That choice
+changes which AGPL code ships, not the license of `pqhybridsign`.
+
 ## Architecture
 
 ### Crates
@@ -1081,7 +1089,12 @@ external event.
 
 - Substrate integration: `sp_core::Pair`, the keystore extension, the
   commitment registry pallet, and account identifier derivation.
-- The hybrid VRF from section 15.
+- Substrate integration of the hybrid VRF from section 15. The construction
+  itself now ships behind the `vrf` feature in
+  `crates/pqhybridsign/src/vrf.rs`, which derives every consensus-decisive
+  byte from the classical pre-output and never reads the post-quantum binding
+  into it. QUI-925 records what happens when a caller composes that output
+  itself instead.
 - A Go version and cross-language vectors.
 
 ## Open questions
