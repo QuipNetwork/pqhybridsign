@@ -181,6 +181,27 @@ wasm:
     # which could introduce a std or getrandom dependency.
     - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
 
+# The wasm-bindgen-test module in crates/pqhybridsign-wasm/src/lib.rs had no
+# job until this one. `wasm-bindgen-cli` must match the crate's own
+# `wasm-bindgen` dependency exactly -- a mismatch fails with a schema
+# version error -- so the version is read from Cargo.toml rather than
+# written here, where a dependency bump would not reach it.
+wasm-test:
+  extends: .everywhere
+  stage: test
+  script:
+    - apt-get update
+    - !reference [.setup-node, script]
+    - rustup target add wasm32-unknown-unknown
+    - |
+      set -euo pipefail
+      want=$(cargo metadata --locked --format-version 1 --no-deps \
+        | python3 -c 'import json,sys; p=[p for p in json.load(sys.stdin)["packages"] if p["name"]=="pqhybridsign-wasm"][0]; print([d for d in p["dependencies"] if d["name"]=="wasm-bindgen"][0]["req"].lstrip("^~=")) ')
+      echo "installing wasm-bindgen-cli $want"
+      cargo install wasm-bindgen-cli --version "$want" --locked
+    - export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
+    - cargo test --locked -p pqhybridsign-wasm --target wasm32-unknown-unknown --lib
+
 cross-profile:
   extends: .everywhere
   stage: check
