@@ -917,8 +917,9 @@ seconds in total.
 
 What this gives up: no per-commit run produces a 128s stateless signature, so
 the FORS-C grind, the WOTS-C grind and hypertree signing wait for the
-scheduled `regenerate-fixtures` job. That job is also the only detector of
-fixture staleness on the signing paths.
+`regenerate-fixtures` jobs. Those jobs run on a merge request that touches
+the signing crates or the lockfile, and on every default-branch pipeline.
+They are also the only detector of fixture staleness on the signing paths.
 
 ## Findings from the specification review
 
