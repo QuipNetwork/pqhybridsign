@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import ast
 import copy
 import pickle
+from pathlib import Path
 
 import pytest
 
@@ -216,34 +218,11 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
         sk.sign_stateless(b"message", b"context")
 
 
-# Offset of the 32-byte commitment inside a SHRINCS bundle
-# (statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot),
-# matching the private BUNDLE_COMMITMENT_OFFSET constant at
-# crates/pqhybridsign/src/shrincs/scheme.rs:48. This is spec-fixed layout
-# shared by every SHRINCS instance (H5 and H6 alike), not a per-profile
-# detail.
-#
-# No binding exposes an accessor that derives the small stored form from a
-# verify-form public key -- see the task-4 report for why -- so this test
-# reconstructs it by slicing the offset out directly. pqhybridsign_abi's own
-# unit tests no longer do this the same way: they call
-# stateful_composite::PublicKey::stored_form instead, which computes the
-# commitment rather than assuming it sits at a fixed offset in the verify
-# form. This helper still assumes the fixed offset, deliberately parked for
-# separate bindings work (pqhs-0d2). A real deployment installs the stored
-# form once, at provisioning time, from whatever produced the key; it does
-# not slice it out of the verify form the way this helper does for test
-# setup.
-_COMMITMENT_AT = 68
-
-
 def _stored_form(suite, verify_public_key):
     """The small form a verifier installs: the classical public key and
-    the commitment, lifted out of a verify-form public key its own keygen
-    produced."""
-    classical_len = phs.stored_public_key_len(suite) - 32
-    commitment_at = classical_len + _COMMITMENT_AT
-    return verify_public_key[:classical_len] + verify_public_key[commitment_at : commitment_at + 32]
+    the commitment, recomputed from a verify-form public key its own
+    keygen produced."""
+    return phs.stored_public_key(suite, verify_public_key)
 
 
 def _bundle(suite, verify_public_key):
@@ -357,6 +336,45 @@ def test_stateful_export_and_load_round_trips(suite):
     sig_2 = reloaded.sign_stateful(b"message two", b"context")
     assert phs.verify(suite, pk, b"message two", b"context", sig_2)
     assert journal.committed == [0, 1]
+
+
+def test_stateful_key_signs_repeatedly_without_reimporting():
+    """A key object holds its imported form, so a second signature is cheap.
+
+    This does not time anything: a timing assertion at profile-256s would
+    measure nothing, and at a 128s profile it would take 94 seconds to fail.
+    It asserts the observable consequence instead. Two signatures from one
+    object both verify, the exported blob advances between them, and a fresh
+    object built from that blob continues rather than restarting.
+    """
+    suite = phs.Suite.H5
+    seed = bytes(range(32))
+    journal = MemoryJournal()
+    budget = MemoryBudget()
+    key, pk = phs.keygen_stateful_from_seed(suite, seed, 4, journal, budget)
+
+    before = key.export()
+
+    sig1 = key.sign_stateful(b"first", b"ctx")
+    assert phs.verify(suite, pk, b"first", b"ctx", sig1)
+
+    after = key.export()
+    assert after != before, "the key did not advance"
+
+    sig2 = key.sign_stateful(b"second", b"ctx")
+    assert phs.verify(suite, pk, b"second", b"ctx", sig2)
+    assert sig1 != sig2
+
+    reopened = phs.load_stateful_secret_key(suite, key.export(), journal, budget)
+    sig3 = reopened.sign_stateful(b"third", b"ctx")
+    assert phs.verify(suite, pk, b"third", b"ctx", sig3)
+
+
+def test_stateful_key_rejects_a_stateless_suite():
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.load_stateful_secret_key(
+            phs.Suite.H1, bytes(32), MemoryJournal(), MemoryBudget()
+        )
 
 
 @pytest.mark.parametrize("suite", STATEFUL_SUITES)
@@ -740,3 +758,224 @@ def test_every_name_in_all_is_importable():
     """Every name `__all__` promises must actually resolve on the package."""
     unresolved = [n for n in phs.__all__ if not hasattr(phs, n)]
     assert not unresolved, f"__all__ names that do not resolve: {unresolved}"
+
+
+# Names the `.pyi` stub legitimately declares without exporting them
+# through the package namespace. A name earns a place here for one of two
+# reasons: it is a typing helper a signature needs but nothing ever
+# imports (there are none of those among the top-level `class`/`def`
+# nodes the check below scans -- `ReadableBuffer` is a plain assignment,
+# not a class or function, so it never reaches `stub_names` and needs no
+# entry here), or it is a structural `Protocol` class callers implement
+# against but never construct or import (`LeafJournal`,
+# `StatelessBudgetStore`). Anything else added here would hide a stale
+# stub entry a rename or removal left behind -- exactly the defect this
+# test exists to catch.
+ALLOWED_STUB_ONLY = frozenset({"LeafJournal", "StatelessBudgetStore"})
+
+
+def test_every_name_in_all_appears_in_the_type_stub():
+    """`__init__.pyi` is hand-maintained, so a name added to `__all__`
+    without a matching stub entry silently loses editor completion and
+    static type checking, with no other test in this file noticing. The
+    reverse direction matters too: a stub entry a rename or removal left
+    behind offers editor completion for a symbol that raises
+    `AttributeError` at runtime.
+    """
+    package_file = phs.__file__
+    assert package_file is not None, "pqhybridsign has no resolvable file location"
+    stub_path = Path(package_file).with_name("__init__.pyi")
+    tree = ast.parse(stub_path.read_text())
+    stub_names = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    missing = set(phs.__all__) - stub_names
+    assert not missing, f"__all__ names missing from the .pyi stub: {sorted(missing)}"
+
+    stale = stub_names - set(phs.__all__) - ALLOWED_STUB_ONLY
+    assert not stale, f"stub names with no runtime counterpart: {sorted(stale)}"
+
+
+# The standard all-zero-entropy BIP39 test vector, matching
+# pqhybridsign_abi::seed's own tests.
+BIP39_PHRASE = (
+    "abandon abandon abandon abandon abandon abandon abandon abandon "
+    "abandon abandon abandon about"
+)
+
+
+def test_master_seed_from_mnemonic_is_stable():
+    """The same phrase and password reach the same seed on every call: the
+    property a recovery flow depends on."""
+    seed = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    assert len(seed) == 32
+    assert seed != b"\x00" * 32
+    again = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    assert seed == again
+
+
+# `crates/pqhybridsign/src/mnemonic.rs`'s own `PHRASE_12` golden-vector
+# phrase, copied verbatim rather than retyped. The core crate pins that a
+# derivation over this phrase's entropy (not its text) matches
+# `quip-protocol-rs`'s own `master_seed_from_mnemonic`
+# (crates/transaction-crypto-core/src/lib.rs, on top of substrate-bip39
+# 0.6.1), generated 2026-08-21; this test pins that this binding's call
+# reaches that same derivation rather than mangling an argument along the
+# way (swapping `phrase`/`password`, truncating the result, or returning a
+# different call's output all satisfy "32 bytes, not all zeros, stable"
+# without this). Do not "fix" a failing assertion here by pasting in
+# whatever the code currently returns -- that is exactly the failure mode
+# a pinned vector exists to catch.
+PHRASE_12 = "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+
+
+def test_master_seed_from_mnemonic_matches_the_core_crates_golden_vector():
+    seed = phs.master_seed_from_mnemonic(PHRASE_12)
+    assert seed.hex() == "fac7959dbfe72f052e5a0c3c8d6530f202b02fd8f9f5ca3580ec8deb7797479e"
+
+
+def test_master_seed_from_mnemonic_rejects_an_invalid_phrase():
+    with pytest.raises(phs.InvalidMnemonicError):
+        phs.master_seed_from_mnemonic("not a mnemonic at all")
+
+
+def test_master_seed_from_mnemonic_password_changes_the_seed():
+    without = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    with_password = phs.master_seed_from_mnemonic(BIP39_PHRASE, "pw")
+    assert without != with_password
+
+
+def test_a_junction_child_differs_from_its_parent_and_its_sibling():
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    a = phs.derive_hard_junction(parent, bytes([1]) * 32)
+    b = phs.derive_hard_junction(parent, bytes([2]) * 32)
+    assert a != parent
+    assert b != parent
+    assert a != b
+
+
+def test_a_junction_path_equals_the_stepwise_derivation():
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    first = bytes([1]) * 32
+    second = bytes([2]) * 32
+
+    intermediate = phs.derive_hard_junction(parent, first)
+    stepwise = phs.derive_hard_junction(intermediate, second)
+
+    path = phs.derive_hard_junction_path(parent, [first, second])
+    assert path == stepwise
+
+    # Order is part of the derivation.
+    reversed_path = phs.derive_hard_junction_path(parent, [second, first])
+    assert reversed_path != path
+
+
+def test_an_empty_junction_path_returns_the_parent():
+    """Documented, not accidental: a caller that parsed an empty path gets
+    the parent key back rather than an error, and must check for that
+    itself."""
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    assert phs.derive_hard_junction_path(parent, []) == parent
+
+
+def test_a_wrong_length_chain_code_raises_value_error_naming_the_index():
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    good = bytes([1]) * 32
+    short = bytes([2]) * 31
+    with pytest.raises(ValueError, match="index 1"):
+        phs.derive_hard_junction_path(parent, [good, short])
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_a_vrf_proof_verifies(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    assert len(proof) <= phs.vrf_proof_len(suite)
+    assert phs.vrf_verify(suite, pk, b"input", proof)
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_a_tampered_vrf_proof_does_not_verify(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    proof[0] ^= 0x01
+    assert phs.vrf_verify(suite, pk, b"input", bytes(proof)) is False
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_is_stable_across_two_proofs_of_one_input(suite):
+    """Two evaluations of one input under one key give the same output, so
+    a prover cannot re-roll for a better value -- the property the
+    construction rests on, and it holds regardless of whether the suite
+    hedges its classical proof's nonce."""
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof_a = phs.vrf_prove(suite, sk, b"input")
+    proof_b = phs.vrf_prove(suite, sk, b"input")
+    out_a = phs.vrf_make_bytes(suite, pk, b"input", proof_a, b"context")
+    out_b = phs.vrf_make_bytes(suite, pk, b"input", proof_b, b"context")
+    assert out_a == out_b
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_context_separates_two_uses_of_one_proof(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    score = phs.vrf_make_bytes(suite, pk, b"input", proof, b"leadership")
+    randomness = phs.vrf_make_bytes(suite, pk, b"input", proof, b"randomness")
+    assert score != randomness
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_prove_deterministic_repeats_byte_for_byte(suite):
+    sk, _pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    a = phs.vrf_prove_deterministic(suite, sk, b"input")
+    b = phs.vrf_prove_deterministic(suite, sk, b"input")
+    assert a == b
+
+
+@pytest.mark.parametrize("suite", STATEFUL_SUITES)
+def test_vrf_prove_rejects_the_stateful_suites(suite):
+    """H5 and H6 spend a few-time budget unit per evaluation and prove
+    through `VrfStatelessKey.prove` instead: a call that looked free and
+    was not would be the worst failure mode this module could offer."""
+    # The suite refusal happens before any length check, so this secret
+    # key's length is irrelevant -- short and obviously a dummy on purpose.
+    dummy_secret_key = b"\x00" * 8
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.vrf_prove(suite, dummy_secret_key, b"input")
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.vrf_prove_deterministic(suite, dummy_secret_key, b"input")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_stateless_key_derive_rejects_the_stateless_suites(suite):
+    """`VrfStatelessKey.derive` has no Python test that runs a real keygen:
+    a successful call costs about 47 seconds at a 128s profile. This
+    reject path returns before that work, so it is the cheap way to prove
+    `suite` and `master` genuinely reach `pqhybridsign_abi::VrfStatelessKey::derive`
+    and that the error is mapped correctly at this call site, rather than
+    somewhere else in the module that happens to be tested. Do not delete
+    this as redundant reject-path noise: it is the only coverage `derive`
+    has."""
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.VrfStatelessKey.derive(suite, bytes(32))
+
+
+def test_vrf_stateless_key_derive_rejects_a_wrong_length_master():
+    """The companion to the suite-rejection test above: proves the 32-byte
+    length check on `master` fires, and fires before the expensive keygen,
+    for the same reason -- this is the only coverage `derive` has, and it
+    is deliberately kept even though it looks like boilerplate."""
+    with pytest.raises(phs.BadLengthError):
+        phs.VrfStatelessKey.derive(phs.Suite.H5, bytes(31))
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_stateless_key_derive_rejects_the_suite_before_the_master_length(suite):
+    """`master` is 31 bytes, not the required 32, and `suite` is one this
+    entry point does not serve. Before this fix this call raised
+    BadLengthError; it now raises WrongEntryPointForSuiteError."""
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.VrfStatelessKey.derive(suite, bytes(31))

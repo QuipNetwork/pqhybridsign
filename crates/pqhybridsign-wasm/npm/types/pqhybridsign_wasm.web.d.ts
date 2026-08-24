@@ -60,6 +60,173 @@ export class SignStatefulResult {
 }
 
 /**
+ * An imported stateful secret key, held across signing calls.
+ *
+ * [`sign_stateful`] takes the exported blob and calls
+ * `SecretKey::import` every time. `import` re-derives the hypertree
+ * root, which at the 128s profiles costs about 47 seconds, the same walk
+ * as keygen. A caller that signs more than once pays it more than once.
+ * This type pays it exactly once, in [`StatefulKey::open`], and every
+ * later signature costs what the in-process Rust API costs.
+ *
+ * # The durability contract is unchanged
+ *
+ * The handle advances the key in memory. It does not persist anything.
+ * After [`sign_stateful`](Self::sign_stateful) returns, **whether it
+ * returned a signature or threw**, this handle holds the advanced key
+ * and the caller must [`export`](Self::export) it and persist the result
+ * before relying on any signature. The reason is the one
+ * [`sign_stateful`] documents: a leaf can be durably committed to the
+ * journal and the signature still fail, and a caller whose stored key
+ * did not advance with the journal is a caller whose next call is
+ * refused for the rest of the key's life.
+ *
+ * A handle is not a substitute for the journal. The journal is the
+ * durable record of spent leaves and the only thing that survives a
+ * crash.
+ *
+ * # `free()` must be called
+ *
+ * A caller must call `free()`, call `[Symbol.dispose]()`, or declare
+ * the value with JavaScript `using`. wasm-bindgen registers every
+ * handle with a `FinalizationRegistry` that calls the free function
+ * when the wrapper becomes unreachable, but that release is not under
+ * the caller's control: it may happen at any garbage collection, and
+ * it may never happen at all. A handle dropped without `free()` cannot
+ * be relied on to release its secret key material.
+ *
+ * # Only H5 and H6
+ *
+ * H1 through H4 are stateless and have nothing to hold open;
+ * [`open`](Self::open) rejects them.
+ */
+export class StatefulKey {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * The current exported blob, exactly `secretKeyLen(suite)` bytes.
+     *
+     * Persist this after every [`sign_stateful`](Self::sign_stateful)
+     * call, including one that threw; see the type documentation.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the key does not export.
+     */
+    export(): Uint8Array;
+    /**
+     * The 32-byte identity of the key this handle holds.
+     *
+     * The value [`adopt_key`] takes. Derived from the cached post-quantum
+     * verify key, which is public; no secret byte reaches it.
+     */
+    keyIdentity(): Uint8Array;
+    /**
+     * Import `secret_key` once and hold it.
+     *
+     * This is the call that costs about 47 seconds at the 128s profiles.
+     * Every signature taken through the returned handle costs under 0.01
+     * seconds.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if
+     * `secret_key` is not `secretKeyLen(suite)` bytes, or if the blob
+     * does not import.
+     */
+    static open(suite: string, secret_key: Uint8Array): StatefulKey;
+    /**
+     * Sign `msg` under `ctx`, spending one leaf recorded through
+     * `journal`.
+     *
+     * The handle-held counterpart of [`sign_stateful`]. The signature is
+     * returned; the advanced key stays in this handle. **Export and
+     * persist it before relying on the signature**, including when this
+     * method throws.
+     *
+     * `journal` is a JavaScript object with the four synchronous methods
+     * the crate documentation describes; it must already be bound to
+     * this key ([`adopt_key`]).
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the key's leaf budget is spent
+     * (`LeavesExhausted`), if `journal` is not this key's journal
+     * (`JournalKeyMismatch`), if the key and journal counters disagree
+     * (`CountersDiverged`), or if the journal could not durably commit
+     * (`JournalFailed`). Any exception a journal method itself threw is
+     * re-thrown unchanged.
+     */
+    signStateful(journal: any, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
+    /**
+     * Sign `msg` under `ctx` without spending a leaf, spending one unit
+     * of the few-time stateless budget instead.
+     *
+     * The handle-held counterpart of [`sign_stateless`]. The key is not
+     * advanced, so there is nothing new to export afterwards. `budget`
+     * is a JavaScript object with synchronous `consumed(key)` and
+     * `record(key, count)` methods, and `record` must be durable before
+     * it returns, on the same terms `journal.commit` is.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the stateless budget is spent
+     * (`StatelessBudgetExhausted`), or if the store could not durably
+     * record (`BudgetStoreFailed`). Any exception a budget method itself
+     * threw is re-thrown unchanged.
+     */
+    signStateless(budget: any, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
+}
+
+/**
+ * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"`
+ * or `"H6"`), held across calls.
+ *
+ * Returned by
+ * [`deriveVrfStatelessKey`](derive_vrf_stateless_key). This key is
+ * disjoint from the identity key that carries an account's rotation and
+ * recovery authority (`pqhs-1l6`): it is derived under a label separate
+ * from the identity key's, so the two never collide, and it has no leaf
+ * counter to fork -- [`prove`](Self::prove) draws only on the few-time
+ * stateless budget the caller's `budget` tracks. It cannot be exported to
+ * bytes; it lives only in wasm memory for the life of the handle.
+ *
+ * # `free()` must be called
+ *
+ * A caller must call `free()`, call `[Symbol.dispose]()`, or declare the
+ * value with JavaScript `using`. wasm-bindgen registers every handle
+ * with a `FinalizationRegistry` that calls the free function when the
+ * wrapper becomes unreachable, but that release is not under the
+ * caller's control: it may happen at any garbage collection, and it may
+ * never happen at all. A handle dropped without `free()` cannot be
+ * relied on to release its key material.
+ */
+export class VrfKey {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Evaluate the hybrid VRF, spending one unit of `budget`.
+     *
+     * `budget` is a JavaScript object with synchronous `consumed(key)`
+     * and `record(key, count)` methods, on the same terms
+     * [`signStateless`](sign_stateless)'s budget is (see the crate
+     * documentation); `record` must be durable before it returns.
+     *
+     * Returns the proof.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the stateless budget is spent
+     * (`StatelessBudgetExhausted`), or if the store could not durably
+     * record (`BudgetStoreFailed`). Any exception a budget method itself
+     * threw is re-thrown unchanged.
+     */
+    prove(budget: any, input: Uint8Array): Uint8Array;
+}
+
+/**
  * Bind `journal` to the key `identity` names, unless it already belongs to a
  * different key.
  *
@@ -87,6 +254,62 @@ export class SignStatefulResult {
  * so a read fault can never replace an existing binding.
  */
 export function adoptKey(journal: any, identity: Uint8Array): void;
+
+/**
+ * Derive a hard-junction child master seed.
+ *
+ * # The re-keygen hazard
+ *
+ * See `pqhybridsign_abi::derive_hard_junction`: derivation is
+ * deterministic, so deriving one junction twice, on two different hosts,
+ * reaches the same child seed and therefore the same stateful tree
+ * starting at leaf 1 -- the same failure as importing one key twice.
+ * Derive a child once, then persist and restore it through the
+ * validating import path. Never re-derive one junction on a second host.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `parentMaster` or `chainCode` is not exactly 32
+ * bytes, or if the key derivation function fails.
+ */
+export function deriveHardJunction(parent_master: Uint8Array, chain_code: Uint8Array): Uint8Array;
+
+/**
+ * Apply a sequence of chain codes in order, each child becoming the next
+ * parent (`[a, b]` means `deriveHardJunction(deriveHardJunction(parent,
+ * a), b)`).
+ *
+ * **An empty `chainCodes` returns `parentMaster` unchanged.** That is the
+ * identity a path of no junctions should have; see
+ * `pqhybridsign_abi::derive_hard_junction_path`.
+ *
+ * See [`deriveHardJunction`](derive_hard_junction) for the re-keygen
+ * hazard, which applies to every seed this function returns.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `parentMaster` is not exactly 32 bytes, if any
+ * element of `chainCodes` is not a 32-byte `Uint8Array` -- naming its
+ * index -- or if the key derivation function fails.
+ */
+export function deriveHardJunctionPath(parent_master: Uint8Array, chain_codes: Array<any>): Uint8Array;
+
+/**
+ * Derive a dedicated VRF key for a stateful `suite` (`"H5"` or `"H6"`)
+ * from a 32-byte master seed, disjoint from the identity key
+ * (`pqhs-1l6`).
+ *
+ * Returns a plain JavaScript object with two properties: `key`, the
+ * [`VrfKey`] handle -- call `free()` on it when finished -- and
+ * `publicKey`, the verify-form public key [`vrfVerify`](vrf_verify)
+ * checks proofs against.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `master` is
+ * not exactly 32 bytes, or if derivation fails.
+ */
+export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
 
 /**
  * The 32-byte identity of the key `public_key` describes, for a stateful
@@ -154,6 +377,22 @@ export function keygenFromSeed(suite: string, seed: Uint8Array): KeyPair;
  * component's leaf capacity limit.
  */
 export function keygenStatefulFromSeed(suite: string, seed: Uint8Array, max_stateful_signatures: number): KeyPair;
+
+/**
+ * Turn an English BIP39 recovery phrase into a 32-byte master seed.
+ *
+ * This is Substrate's derivation, not standard BIP39: see
+ * `pqhybridsign_abi::master_seed_from_mnemonic` for exactly which KDF runs
+ * and over what. `password` defaults to the empty string when omitted.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `phrase` is not a valid English BIP39 mnemonic:
+ * a wrong word count, an unknown word, or a bad checksum. The three are
+ * not distinguished, because telling an attacker which part of a guessed
+ * phrase was wrong narrows the search.
+ */
+export function masterSeedFromMnemonic(phrase: string, password?: string | null): Uint8Array;
 
 /**
  * The SHRINCS profile this build links against, for example
@@ -451,6 +690,78 @@ export function verifyWithStoredPublicKeyStateful(suite: string, stored_public_k
  */
 export function verifyWithStoredPublicKeyStateless(suite: string, stored_public_key: Uint8Array, pq_verify_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
 
+/**
+ * Derive 32 output bytes from a verified hybrid VRF proof.
+ *
+ * **Verify the proof first.** [`vrfVerify`](vrf_verify) is what
+ * establishes that the pre-output belongs to this key and this input.
+ * Deriving bytes from an unverified proof derives bytes from whatever an
+ * attacker supplied.
+ *
+ * `context` separates two uses of one proof: the same proof under two
+ * different contexts gives unrelated bytes, so one evaluation can feed
+ * two consumers without either learning the other's value early.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`, if
+ * `proof` is shorter than the proof header or `publicKey` shorter than
+ * the classical public key, or if `publicKey` or the pre-output does not
+ * decode.
+ */
+export function vrfMakeBytes(suite: string, public_key: Uint8Array, input: Uint8Array, proof: Uint8Array, context: Uint8Array): Uint8Array;
+
+/**
+ * Length in bytes of a hybrid VRF proof for `suite`.
+ *
+ * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+ * delta-length binding can occupy. For H5 and H6 this is exact.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ */
+export function vrfProofLen(suite: string): number;
+
+/**
+ * Evaluate the hybrid VRF for a stateless suite. Returns the proof.
+ *
+ * H1 through H4 only; see the section documentation above for why H5 and
+ * H6 have their own entry point.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H4"`, if
+ * `suite` is `"H5"` or `"H6"` (naming `deriveVrfStatelessKey` as the entry
+ * point to use instead), if `secretKey` is not the suite's secret-key
+ * length, or if either component rejects its key.
+ */
+export function vrfProve(suite: string, secret_key: Uint8Array, input: Uint8Array): Uint8Array;
+
+/**
+ * Evaluate the hybrid VRF for a stateless suite with a reproducible
+ * classical proof. H1 through H4 only, on the same terms as
+ * [`vrfProve`](vrf_prove).
+ *
+ * # Errors
+ *
+ * The same as [`vrfProve`](vrf_prove).
+ */
+export function vrfProveDeterministic(suite: string, secret_key: Uint8Array, input: Uint8Array): Uint8Array;
+
+/**
+ * Verify a hybrid VRF proof against `publicKey`. Total over all six
+ * suites: verifying never spends anything, so there is nothing to keep
+ * apart by statefulness.
+ *
+ * Returns `false`, never throws, for a malformed `publicKey` or `proof`.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ */
+export function vrfVerify(suite: string, public_key: Uint8Array, input: Uint8Array, proof: Uint8Array): boolean;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -461,11 +772,17 @@ export interface InitOutput {
     readonly __wbg_set_keypair_publicKey: (a: number, b: any) => void;
     readonly __wbg_set_keypair_secretKey: (a: number, b: any) => void;
     readonly __wbg_signstatefulresult_free: (a: number, b: number) => void;
+    readonly __wbg_statefulkey_free: (a: number, b: number) => void;
+    readonly __wbg_vrfkey_free: (a: number, b: number) => void;
     readonly adoptKey: (a: any, b: number, c: number) => [number, number];
+    readonly deriveHardJunction: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly deriveHardJunctionPath: (a: number, b: number, c: any) => [number, number, number];
+    readonly deriveVrfStatelessKey: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keyIdentity: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keyIdentityFromSecretKey: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keygenFromSeed: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keygenStatefulFromSeed: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
+    readonly masterSeedFromMnemonic: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly profileName: () => [number, number];
     readonly publicKeyLen: (a: number, b: number) => [number, number, number];
     readonly secretKeyLen: (a: number, b: number) => [number, number, number];
@@ -474,12 +791,23 @@ export interface InitOutput {
     readonly signStateful: (a: number, b: number, c: number, d: number, e: any, f: number, g: number, h: number, i: number) => [number, number, number];
     readonly signStateless: (a: number, b: number, c: number, d: number, e: any, f: number, g: number, h: number, i: number) => [number, number, number];
     readonly signatureLen: (a: number, b: number) => [number, number, number];
+    readonly statefulkey_export: (a: number) => [number, number, number];
+    readonly statefulkey_keyIdentity: (a: number) => any;
+    readonly statefulkey_open: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly statefulkey_signStateful: (a: number, b: any, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly statefulkey_signStateless: (a: number, b: any, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly storedPublicKeyLen: (a: number, b: number) => [number, number, number];
     readonly verify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
     readonly verifyStateful: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
     readonly verifyStateless: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
     readonly verifyWithStoredPublicKeyStateful: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number];
     readonly verifyWithStoredPublicKeyStateless: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number];
+    readonly vrfMakeBytes: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
+    readonly vrfProofLen: (a: number, b: number) => [number, number, number];
+    readonly vrfProve: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly vrfProveDeterministic: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
+    readonly vrfVerify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
+    readonly vrfkey_prove: (a: number, b: any, c: number, d: number) => [number, number, number];
     readonly __wbg_set_signstatefulresult_nextSecretKey: (a: number, b: any) => void;
     readonly __wbg_set_signstatefulresult_signature: (a: number, b: any) => void;
     readonly __wbg_get_signstatefulresult_nextSecretKey: (a: number) => any;

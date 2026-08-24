@@ -18,7 +18,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc6" }
+pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc7" }
 rand_core = { workspace = true, features = ["getrandom"] }
 zeroize.workspace = true
 wasm-bindgen = "0.2.127"
@@ -33,6 +33,7 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3.77"
+sha2 = "0.10.9"
 
 [lints]
 workspace = true

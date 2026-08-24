@@ -3,11 +3,12 @@
 //!
 //! H5 and H6 pair a classical scheme with SHRINCS, whose post-quantum half
 //! spends a one-time leaf per signature (see the crate documentation).
-//! [`pqhs_sign_stateful`] is the only entry point in this crate that spends
-//! one, and it takes a [`PqhsLeafJournal`] -- a durable log of spent leaves
-//! the caller owns -- because losing track of which leaves are spent is
-//! exactly the failure this suite exists to prevent. [`pqhs_sign_stateless`]
-//! uses SHRINCS's separate few-time path instead and spends nothing.
+//! [`pqhs_sign_stateful`] and [`pqhs_stateful_key_sign`] are the entry
+//! points that spend one, and they take a [`PqhsLeafJournal`] -- a durable
+//! log of spent leaves the caller owns -- because losing track of which
+//! leaves are spent is exactly the failure this suite exists to prevent.
+//! [`pqhs_sign_stateless`] and [`pqhs_stateful_key_sign_stateless`] use
+//! SHRINCS's separate few-time path instead and spend nothing.
 
 use std::os::raw::{c_int, c_void};
 
@@ -76,19 +77,31 @@ const _: () = assert!(PQHS_KEY_IDENTITY_LEN == KEY_IDENTITY_LEN);
 /// [`pqhs_sign_stateful`]; this library starts no threads and hands the
 /// `ctx` pointer to nothing else.
 ///
-/// Every entry point in this library is stateless -- keys, signatures and
-/// leaf state live only in the caller's own buffers, for the duration of
-/// one call -- so calls on different threads over different buffers do not
-/// interact. The one piece of process-wide state is the cached string
-/// behind [`pqhs_profile_name`](crate::pqhs_profile_name), which is
-/// initialised once and never mutated.
+/// Every buffer-based entry point in this library is stateless -- keys,
+/// signatures and leaf state live only in the caller's own buffers, for the
+/// duration of one call -- so calls on different threads over different
+/// buffers do not interact. The one piece of process-wide state is the
+/// cached string behind [`pqhs_profile_name`](crate::pqhs_profile_name),
+/// which is initialised once and never mutated.
 ///
-/// What is *not* thread-safe is the caller's own journal. Two threads
-/// signing with the same journal, or with two copies of the same stateful
-/// secret key, can be handed the same leaf. Serialising access to a journal
-/// and to the key blob it tracks is the caller's responsibility, and it is
-/// not optional: a reused leaf is a total loss of the key's post-quantum
-/// security.
+/// [`PqhsStatefulKey`] breaks that isolation on purpose: an open handle
+/// keeps its leaf state inside itself rather than in a caller buffer, for
+/// as long as it stays open, so it belongs to one thread at a time. See
+/// [`PqhsStatefulKey`]'s own documentation.
+///
+/// [`crate::PqhsVrfKey`] holds no comparable state of its own: its
+/// few-time budget count lives entirely in the caller's
+/// [`PqhsStatelessBudget`] store, the same as [`pqhs_sign_stateless`] and
+/// [`pqhs_stateful_key_sign_stateless`]. What is not thread-safe there is
+/// the store, not the handle: see [`PqhsStatelessBudget`]'s own
+/// documentation.
+///
+/// What is *not* thread-safe otherwise is the caller's own journal. Two
+/// threads signing with the same journal, or with two copies of the same
+/// stateful secret key, can be handed the same leaf. Serialising access to
+/// a journal and to the key blob or handle it tracks is the caller's
+/// responsibility, and it is not optional: a reused leaf is a total loss of
+/// the key's post-quantum security.
 #[repr(C)]
 pub struct PqhsLeafJournal {
     /// Opaque caller state, passed unchanged to every callback.
@@ -179,10 +192,11 @@ const _: () = assert!(PQHS_BUDGET_KEY_LEN == 32);
 
 /// A caller-owned durable record of how much of the few-time stateless
 /// budget each stateless key material has consumed, passed to
-/// [`pqhs_sign_stateless`].
+/// [`pqhs_sign_stateless`], [`pqhs_stateful_key_sign_stateless`] and
+/// [`crate::pqhs_vrf_prove_stateless`].
 ///
 /// The stateless counterpart of [`PqhsLeafJournal`], and required on the
-/// same terms: [`pqhs_sign_stateless`] cannot be called without one. The
+/// same terms: none of the three can be called without one. The
 /// stateless path has a hard security bound of its own -- `2^20` signatures,
 /// `2^18` under the low-budget profile -- shared with rotation and recovery,
 /// and exceeding it degrades the security assumption of the underlying
@@ -211,14 +225,19 @@ const _: () = assert!(PQHS_BUDGET_KEY_LEN == 32);
 ///
 /// `consumed` and `record` MUST NOT call any `pqhs_*` function, directly or
 /// indirectly, on the same terms as [`PqhsLeafJournal`]'s callbacks: they
-/// run while [`pqhs_sign_stateless`] holds live references to the caller's
-/// `sk` and `sig_out` buffers.
+/// run while the entry point that took them holds live references to its
+/// own caller buffers -- `sk`, `msg`, `ctx` and `sig_out` for
+/// [`pqhs_sign_stateless`]; `msg`, `ctx` and `sig_out` for
+/// [`pqhs_stateful_key_sign_stateless`], whose key is a handle rather than
+/// a buffer; `input` and `proof_out` for
+/// [`crate::pqhs_vrf_prove_stateless`].
 ///
 /// # Threading
 ///
 /// As with [`PqhsLeafJournal`], the callbacks are plain C calls on the
 /// calling thread, and serialising access to the store is the caller's
-/// responsibility. Two threads signing against one unserialised store can
+/// responsibility, whichever of the three entry points above is spending
+/// against it. Two threads spending against one unserialised store can
 /// each read the same count and each write back the same increment, which
 /// loses one spend per race and lets the bound be exceeded.
 #[repr(C)]
@@ -254,7 +273,12 @@ pub struct PqhsStatelessBudget {
 /// Wraps a caller's `&PqhsStatelessBudget` as a
 /// [`pqhybridsign_abi::StatelessBudgetStore`], on the same terms as
 /// [`FfiJournal`].
-struct FfiBudget<'a>(&'a PqhsStatelessBudget);
+///
+/// `pub(crate)` rather than private: [`crate::vrf`] reuses this exact
+/// wrapper for `pqhs_vrf_prove_stateless`, which spends the same few-time
+/// budget through the same [`PqhsStatelessBudget`] vtable, so the callback
+/// logic has one implementation rather than two that could drift apart.
+pub(crate) struct FfiBudget<'a>(pub(crate) &'a PqhsStatelessBudget);
 
 impl StatelessBudgetStore for FfiBudget<'_> {
     /// The callback reported failure; no further detail crosses the FFI
@@ -1074,6 +1098,442 @@ pub unsafe extern "C" fn pqhs_verify_with_stored_public_key_stateless(
             sig,
         ) {
             Ok(valid) => match unsafe { write_out(valid_out, valid) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// An imported stateful secret key, held across signing calls.
+///
+/// Opaque. Create one with [`pqhs_stateful_key_open`], release it with
+/// [`pqhs_stateful_key_free`], and never copy or free the pointer any
+/// other way.
+///
+/// # Why this exists
+///
+/// `pqhs_sign_stateful` imports the exported blob on every call.
+/// `SecretKey::import` re-derives the hypertree root, which at
+/// `profile-128s-q18` and `profile-128s-q20` costs about 47 seconds, the
+/// same walk as keygen. A signer that takes more than one signature from a
+/// key should open a handle once and sign through it: the import is paid
+/// at `pqhs_stateful_key_open` and every later signature costs under 0.01
+/// seconds.
+///
+/// # The durability contract is unchanged
+///
+/// A handle holds the key in memory and persists nothing. After every
+/// `pqhs_stateful_key_sign` call, **including one that returned an
+/// error**, call `pqhs_stateful_key_export` and persist the result before
+/// relying on the signature. A leaf can be durably committed to the
+/// journal and the signature still fail, and a stored key that did not
+/// advance with the journal is refused for the rest of the key's life.
+///
+/// Not thread-safe. `pqhs_stateful_key_sign` takes a mutable pointer and
+/// advances the key. One handle belongs to one thread at a time.
+pub struct PqhsStatefulKey {
+    inner: pqhybridsign_abi::StatefulKeyHandle,
+}
+
+/// Import `sk` once and return an opaque handle through `out`.
+///
+/// This is the call that costs about 47 seconds at the 128s profiles.
+/// Every later [`pqhs_stateful_key_sign`] taken through the handle costs
+/// under 0.01 seconds. See [`PqhsStatefulKey`].
+///
+/// `sk` is the exported secret key blob from
+/// [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
+/// or a previous [`pqhs_stateful_key_export`].
+///
+/// On success, `*out` is a pointer the caller must later pass to
+/// [`pqhs_stateful_key_free`]. On failure, `*out` is left untouched.
+///
+/// # Errors
+///
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4.
+/// `PQHS_ERR_BAD_LENGTH` if `sk` is not
+/// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
+/// `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
+/// `PQHS_ERR_NULL_POINTER` if `out` is null, or if `sk` is null while
+/// `sk_len` is nonzero. `PQHS_ERR_INVALID_SUITE` if `suite` is not
+/// `1..=6`.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `sk`, a write of one `*mut PqhsStatefulKey` for
+/// `out`) for exactly its paired length in bytes, and must not be aliased
+/// by another live pointer for the duration of this call. A null pointer
+/// is only valid when its paired length is `0`; `out` has no paired length
+/// and must be a valid, non-null, writable `*mut PqhsStatefulKey` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stateful_key_open(
+    suite: u8,
+    sk: *const u8,
+    sk_len: usize,
+    out: *mut *mut PqhsStatefulKey,
+) -> c_int {
+    guard(move || {
+        if out.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sk = match unsafe { borrow_slice(sk, sk_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        match pqhybridsign_abi::StatefulKeyHandle::open(suite, sk) {
+            Ok(inner) => {
+                let raw = Box::into_raw(Box::new(PqhsStatefulKey { inner }));
+                // SAFETY: `out` is non-null, checked above; the caller
+                // guarantees it is valid for a write of one pointer.
+                match unsafe { write_out(out, raw) } {
+                    Ok(()) => PQHS_OK,
+                    Err(e) => {
+                        // Unreachable if the null check above holds;
+                        // recover the box so a future change to
+                        // `write_out` cannot leak the key.
+                        // SAFETY: `raw` came from `Box::into_raw` on the
+                        // line above and has not been handed out.
+                        drop(unsafe { Box::from_raw(raw) });
+                        e
+                    }
+                }
+            }
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Release a handle previously returned by [`pqhs_stateful_key_open`].
+///
+/// A null `key` is a no-op. After this call returns, `key` must not be
+/// used again.
+///
+/// # Safety
+///
+/// `key` must be a pointer previously returned by
+/// [`pqhs_stateful_key_open`] that has not already been freed, or null.
+/// The pointer must not be used after this call returns.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stateful_key_free(key: *mut PqhsStatefulKey) {
+    crate::ffi::guard_infallible(|| {
+        if key.is_null() {
+            return;
+        }
+        // SAFETY: `key` is non-null, checked above, and the caller
+        // guarantees it is a pointer previously returned by
+        // [`pqhs_stateful_key_open`] that has not already been freed.
+        drop(unsafe { Box::from_raw(key) });
+    });
+}
+
+/// Write the current exported blob of `key` into `sk_out`.
+///
+/// Writes the number of bytes written through `written`, which is
+/// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) for this handle's
+/// suite. Persist this after every [`pqhs_stateful_key_sign`] call,
+/// including one that returned an error. See [`PqhsStatefulKey`].
+///
+/// # Errors
+///
+/// `PQHS_ERR_BAD_LENGTH` if `sk_out` is not exactly
+/// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes.
+/// `PQHS_ERR_COMPONENT_FAILURE` if the key does not export.
+/// `PQHS_ERR_NULL_POINTER` if `key` or `written` is null, or if `sk_out`
+/// is null while `sk_out_len` is nonzero.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `key`, writes for `sk_out`/`written`) for exactly
+/// its paired length in bytes, and must not be aliased by another live
+/// pointer for the duration of this call. A null pointer is only valid
+/// when its paired length is `0`; `written` has no paired length and must
+/// be a valid, non-null, writable `usize` pointer. `key` must be a
+/// pointer previously returned by [`pqhs_stateful_key_open`] that has not
+/// been freed.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stateful_key_export(
+    key: *const PqhsStatefulKey,
+    sk_out: *mut u8,
+    sk_out_len: usize,
+    written: *mut usize,
+) -> c_int {
+    guard(move || {
+        if key.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if written.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        let sk_out = match unsafe { borrow_slice_mut(sk_out, sk_out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        // SAFETY: `key` is non-null, checked above; the caller guarantees
+        // it is a live handle from [`pqhs_stateful_key_open`].
+        let key_ref = unsafe { &*key };
+        match key_ref.inner.export(sk_out) {
+            Ok(n) => match unsafe { write_out(written, n) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Write the [`PQHS_KEY_IDENTITY_LEN`]-byte identity of the key `key`
+/// holds into `out`.
+///
+/// The same value [`pqhs_key_identity`] writes for the matching public
+/// key. Derived from the cached post-quantum verify key, which is public;
+/// no secret byte reaches it.
+///
+/// # Errors
+///
+/// `PQHS_ERR_BAD_LENGTH` if `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
+/// `PQHS_ERR_NULL_POINTER` if `key` is null, or if `out` is null while
+/// `out_len` is nonzero.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `key`, writes for `out`) for exactly its paired
+/// length in bytes, and must not be aliased by another live pointer for
+/// the duration of this call. A null pointer is only valid when its
+/// paired length is `0`. `key` must be a pointer previously returned by
+/// [`pqhs_stateful_key_open`] that has not been freed.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stateful_key_identity(
+    key: *const PqhsStatefulKey,
+    out: *mut u8,
+    out_len: usize,
+) -> c_int {
+    guard(move || {
+        if key.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        let out = match unsafe { borrow_slice_mut(out, out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        // SAFETY: `key` is non-null, checked above; the caller guarantees
+        // it is a live handle from [`pqhs_stateful_key_open`].
+        let key_ref = unsafe { &*key };
+        write_identity(Ok(key_ref.inner.key_identity()), out)
+    })
+}
+
+/// Sign `msg` under `ctx` with `key`, spending one leaf recorded through
+/// `journal`.
+///
+/// The handle-held counterpart of [`pqhs_sign_stateful`]. Identical in
+/// every respect except that the key is already imported and the advanced
+/// key stays in `key` instead of being written to an `sk_out` buffer.
+///
+/// `journal` must already be bound to this key ([`pqhs_adopt_key`]). That
+/// is checked before its counter is read and before anything is committed.
+///
+/// **The handle advances on every outcome that reaches the component
+/// signer, including a failed one.** Export and persist it either way.
+/// See [`PqhsStatefulKey`].
+///
+/// # Errors
+///
+/// `PQHS_ERR_JOURNAL_KEY_MISMATCH` if `journal` is not bound to this key;
+/// nothing was spent and the key is intact. `PQHS_ERR_LEAVES_EXHAUSTED`
+/// if the key's leaf budget is spent, checked before the journal is
+/// touched. `PQHS_ERR_JOURNAL_FAILED` if `journal` could not durably
+/// commit; nothing was spent. `PQHS_ERR_NULL_POINTER` if `key` is null,
+/// if `journal` is null or any of its four callbacks is null, if
+/// `written` is null, or if any buffer pointer paired with a nonzero
+/// length is null.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `key`/`journal`/`msg`/`ctx`, writes for
+/// `sig_out`/`written`) for exactly its paired length in bytes, and must
+/// not be aliased by another live pointer for the duration of this call.
+/// A null pointer is only valid when its paired length is `0`; `written`
+/// has no paired length and must be a valid, non-null, writable `usize`
+/// pointer. `key` must be a pointer previously returned by
+/// [`pqhs_stateful_key_open`] that has not been freed. `journal`, if
+/// non-null, must point to a valid `PqhsLeafJournal` whose `ctx` is a
+/// pointer its own callbacks are prepared to receive, and whose callbacks
+/// do not call back into this library (see [`PqhsLeafJournal`]).
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stateful_key_sign(
+    key: *mut PqhsStatefulKey,
+    journal: *const PqhsLeafJournal,
+    msg: *const u8,
+    msg_len: usize,
+    ctx: *const u8,
+    ctx_len: usize,
+    sig_out: *mut u8,
+    sig_out_len: usize,
+    written: *mut usize,
+) -> c_int {
+    guard(move || {
+        if key.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if journal.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // Checked with the other pointers rather than at the `write_out`
+        // that consumes it. Discovering it at the end of the success path
+        // returns an error for a call that has already spent a leaf and
+        // written a valid signature, and a caller reading that as a
+        // rejection signs the same message again -- burning a second leaf.
+        if written.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // SAFETY: `journal` is non-null, checked above; the caller
+        // guarantees it is valid for reads for the duration of this call.
+        let journal_ref = unsafe { &*journal };
+        // All four, not just the two the signing flow calls on the success
+        // path: a journal with no `bound_key` reports "never bound" for every
+        // key, which would come back as `PQHS_ERR_JOURNAL_KEY_MISMATCH` and
+        // send an integrator hunting a binding problem that is really a
+        // half-filled vtable.
+        if journal_ref.commit.is_none()
+            || journal_ref.next_leaf.is_none()
+            || journal_ref.bound_key.is_none()
+            || journal_ref.bind_key.is_none()
+        {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        let msg = match unsafe { borrow_slice(msg, msg_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let ctx = match unsafe { borrow_slice(ctx, ctx_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sig_out = match unsafe { borrow_slice_mut(sig_out, sig_out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let mut ffi_journal = FfiJournal(journal_ref);
+        // SAFETY: `key` is non-null, checked above; the caller guarantees
+        // it is a live handle from [`pqhs_stateful_key_open`].
+        let key_ref = unsafe { &mut *key };
+        match pqhybridsign_abi::sign_stateful_with_handle(
+            &mut key_ref.inner,
+            &mut ffi_journal,
+            msg,
+            ctx,
+            sig_out,
+        ) {
+            Ok(n) => match unsafe { write_out(written, n) } {
+                Ok(()) => PQHS_OK,
+                Err(e) => e,
+            },
+            Err(e) => crate::error::code_of(e),
+        }
+    })
+}
+
+/// Sign `msg` under `ctx` with `key` without spending any leaf, using
+/// SHRINCS's stateless few-time path (specification section 21), and
+/// spending one unit of the few-time stateless budget.
+///
+/// The handle-held counterpart of [`pqhs_sign_stateless`]. `budget` is
+/// required and no leaf journal substitutes for it, on the same terms.
+/// The stateless path does not advance the key, so there is nothing new
+/// to export afterwards.
+///
+/// # Errors
+///
+/// `PQHS_ERR_NULL_POINTER` if `key` is null, if a pointer paired with a
+/// nonzero length is null, if `written` is null, if `budget` is null, or
+/// if either of `budget`'s callbacks is null.
+/// `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` if this key's stateless budget is
+/// spent; nothing was recorded and no signature was built.
+/// `PQHS_ERR_BUDGET_STORE_FAILED` if `record` reported the write did not
+/// become durable; nothing was recorded either.
+///
+/// # Safety
+///
+/// Every pointer parameter, if non-null, must be valid for the documented
+/// access (reads for `key`/`budget`/`msg`/`ctx`, writes for
+/// `sig_out`/`written`) for exactly its paired length in bytes, and must
+/// not be aliased by another live pointer for the duration of this call.
+/// A null pointer is only valid when its paired length is `0`; `written`
+/// has no paired length and must be a valid, non-null, writable `usize`
+/// pointer. `key` must be a pointer previously returned by
+/// [`pqhs_stateful_key_open`] that has not been freed. `budget` must
+/// point to a valid `PqhsStatelessBudget` whose `ctx` is a pointer its
+/// own callbacks are prepared to receive, and whose callbacks do not call
+/// back into this library.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_stateful_key_sign_stateless(
+    key: *const PqhsStatefulKey,
+    budget: *const PqhsStatelessBudget,
+    msg: *const u8,
+    msg_len: usize,
+    ctx: *const u8,
+    ctx_len: usize,
+    sig_out: *mut u8,
+    sig_out_len: usize,
+    written: *mut usize,
+) -> c_int {
+    guard(move || {
+        if key.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // See `pqhs_sign_stateful` for why this is checked here and not at
+        // the `write_out` that consumes it.
+        if written.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        if budget.is_null() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        // SAFETY: `budget` is non-null, checked above; the caller
+        // guarantees it is valid for reads for the duration of this call.
+        let budget_ref = unsafe { &*budget };
+        // Both callbacks are checked here rather than at the point of use.
+        // A missing `record` would otherwise surface as
+        // `PQHS_ERR_BUDGET_STORE_FAILED`, which tells a caller their storage
+        // is broken when in fact their vtable is incomplete, and a missing
+        // `consumed` would silently read as a full budget.
+        if budget_ref.consumed.is_none() || budget_ref.record.is_none() {
+            return PQHS_ERR_NULL_POINTER;
+        }
+        let msg = match unsafe { borrow_slice(msg, msg_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let ctx = match unsafe { borrow_slice(ctx, ctx_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let sig_out = match unsafe { borrow_slice_mut(sig_out, sig_out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let mut ffi_budget = FfiBudget(budget_ref);
+        // SAFETY: `key` is non-null, checked above; the caller guarantees
+        // it is a live handle from [`pqhs_stateful_key_open`].
+        let key_ref = unsafe { &*key };
+        match pqhybridsign_abi::sign_stateless_with_handle(
+            &key_ref.inner,
+            &mut ffi_budget,
+            msg,
+            ctx,
+            sig_out,
+        ) {
+            Ok(n) => match unsafe { write_out(written, n) } {
                 Ok(()) => PQHS_OK,
                 Err(e) => e,
             },
@@ -2414,26 +2874,90 @@ mod tests {
         );
     }
 
-    /// Offset of the 32-byte commitment inside a SHRINCS bundle
-    /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`),
-    /// matching the private `BUNDLE_COMMITMENT_OFFSET` constant at
-    /// `crates/pqhybridsign/src/shrincs/scheme.rs:48`. `pqhybridsign_abi`'s
-    /// own unit tests no longer extract this by offset -- they call
-    /// `stateful_composite::PublicKey::stored_form` instead -- but this
-    /// crate still lifts it directly, deliberately parked for separate
-    /// bindings work (`pqhs-0d2`).
-    const COMMITMENT_AT: usize = 68;
-
     /// The small form a verifier installs: the classical public key and the
-    /// commitment, lifted out of a verify-form public key its own keygen
-    /// produced. Test-only: nothing in this crate's public surface derives
-    /// the stored form from a verify-form key today.
+    /// commitment, recomputed from a verify-form public key its own keygen
+    /// produced through `pqhybridsign_abi::stored_public_key`, which derives
+    /// the commitment from `pkSeed` and `hypertreeRoot` rather than reading
+    /// the value the bundle carries. Test-only: nothing in this crate's
+    /// public surface derives the stored form from a verify-form key today.
+    ///
+    /// # Which byte to corrupt, to prove this recomputes rather than reads
+    ///
+    /// The bundle this function reads is laid out `statefulPublicKey(68) ||
+    /// commitment(32) || pkSeed(32) || hypertreeRoot(32)`. Corrupting a byte
+    /// inside the carried `commitment` field (bundle offset 68, composite
+    /// offset `classical_len + 68`) DOES discriminate a recomputing helper
+    /// from a slicing one on this path: `stored_form` compares the helper's
+    /// output directly, with nothing in between to reject the tampered
+    /// bundle first. A slicing helper returns
+    /// `verify_public_key[classical_len + 68..][..32]`, and the corrupted
+    /// byte lies inside that slice, so its output moves and the comparison
+    /// against the honest output fails. Reverting `stored_form` to that
+    /// slicing shape and running this test was recorded doing exactly
+    /// that, failing with a left and right pair differing only at the
+    /// tampered byte (`task-12-report.md:317-333`, repeated at
+    /// `task-9b-report.md:218-236`).
+    ///
+    /// This differs from the Python binding, where the corresponding
+    /// corruption does not discriminate: `test_pqhybridsign.py`'s call to
+    /// `verify_with_stored_public_key_stateless` rejects the tampered
+    /// bundle before `stored` is ever compared, and that guard has no
+    /// counterpart on this path.
+    ///
+    /// Corrupting a byte inside `pkSeed` instead (bundle offset 100,
+    /// composite offset `classical_len + 100`) also discriminates: `pkSeed`
+    /// feeds the recomputation directly, so a change there must move the
+    /// output. `the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment`
+    /// below pins both directions.
     fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
+        let mut stored =
+            vec![0u8; pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5)];
+        pqhybridsign_abi::stored_public_key(
+            pqhybridsign_abi::Suite::H5,
+            verify_public_key,
+            &mut stored,
+        )
+        .expect("test-supplied verify-form key must decode");
+        stored
+    }
+
+    /// Pins `stored_form`'s recomputation against the natural regression: a
+    /// later "why allocate and call into the ABI for 32 bytes we already
+    /// have" simplification back to
+    /// `verify_public_key[classical_len + 68..][..32]`. Under that slicing
+    /// shape, both assertions below fail. The carried-commitment corruption,
+    /// which this test applies below, flows straight into the slicing
+    /// helper's output, so it no longer matches the honest, uncorrupted
+    /// output and the first assertion fails; this was recorded happening
+    /// when `stored_form` was reverted to that slicing shape and run
+    /// (`task-12-report.md:317-333`, repeated at
+    /// `task-9b-report.md:218-236`). The `pkSeed` corruption -- which the
+    /// slicing helper never reads -- would leave its output unchanged, so
+    /// the second assertion fails too. See `stored_form`'s doc comment for
+    /// why these are the two offsets that matter.
+    #[test]
+    fn the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment() {
+        let (_sk, pk) = h5_keypair(41);
         let classical_len =
             pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
-        let mut stored = verify_public_key[..classical_len].to_vec();
-        stored.extend_from_slice(&verify_public_key[classical_len + COMMITMENT_AT..][..32]);
-        stored
+
+        // The carried commitment field: recomputation must ignore it.
+        let mut carried_tampered = pk.clone();
+        carried_tampered[classical_len + 68] ^= 0x01;
+        assert_eq!(
+            stored_form(&carried_tampered),
+            stored_form(&pk),
+            "the carried commitment field must not influence the recomputed stored form"
+        );
+
+        // pkSeed: recomputation must depend on it.
+        let mut pk_seed_tampered = pk.clone();
+        pk_seed_tampered[classical_len + 100] ^= 0x01;
+        assert_ne!(
+            stored_form(&pk_seed_tampered),
+            stored_form(&pk),
+            "pkSeed feeds the recomputation, so corrupting it must move the stored form"
+        );
     }
 
     /// The signer-supplied half: everything after the classical public key.
@@ -2775,5 +3299,259 @@ mod tests {
             )
         };
         assert_eq!(rc, PQHS_ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn an_opened_handle_signs_twice_and_both_signatures_verify() {
+        let suite = 5u8; // H5
+        let (sk, pk) = h5_keypair(41);
+
+        let mut handle: *mut PqhsStatefulKey = std::ptr::null_mut();
+        // SAFETY: `sk` is a live local of `sk.len()` bytes; `handle` is a
+        // live local written through as the out-parameter.
+        let status = unsafe { pqhs_stateful_key_open(suite, sk.as_ptr(), sk.len(), &mut handle) };
+        assert_eq!(status, PQHS_OK);
+        assert!(!handle.is_null());
+
+        let mut identity = [0u8; PQHS_KEY_IDENTITY_LEN];
+        assert_eq!(
+            // SAFETY: `handle` was just opened; `identity` is a live local
+            // of `PQHS_KEY_IDENTITY_LEN` bytes.
+            unsafe { pqhs_stateful_key_identity(handle, identity.as_mut_ptr(), identity.len()) },
+            PQHS_OK
+        );
+
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        BOUND.with(|b| *b.borrow_mut() = None);
+        let journal = test_journal();
+        // SAFETY: `journal` and `identity` are live locals for the duration
+        // of the call.
+        assert_eq!(
+            unsafe { pqhs_adopt_key(&journal, identity.as_ptr(), identity.len()) },
+            PQHS_OK
+        );
+
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+
+        for msg in [b"first".as_slice(), b"second".as_slice()] {
+            let mut written = 0usize;
+            // SAFETY: `handle` is the opened pointer; `journal` and every
+            // buffer are live locals of the lengths passed alongside them.
+            let status = unsafe {
+                pqhs_stateful_key_sign(
+                    handle,
+                    &journal,
+                    msg.as_ptr(),
+                    msg.len(),
+                    b"ctx".as_ptr(),
+                    3,
+                    sig.as_mut_ptr(),
+                    sig.len(),
+                    &mut written,
+                )
+            };
+            assert_eq!(status, PQHS_OK);
+            let mut valid = false;
+            // SAFETY: as above.
+            let rc = unsafe {
+                crate::sign::pqhs_verify(
+                    suite,
+                    pk.as_ptr(),
+                    pk.len(),
+                    msg.as_ptr(),
+                    msg.len(),
+                    b"ctx".as_ptr(),
+                    3,
+                    sig.as_ptr(),
+                    written,
+                    &mut valid,
+                )
+            };
+            assert_eq!(rc, PQHS_OK);
+            assert!(valid);
+        }
+
+        // SAFETY: `handle` was opened above and has not been freed.
+        unsafe { pqhs_stateful_key_free(handle) };
+    }
+
+    #[test]
+    fn a_null_handle_out_pointer_is_rejected() {
+        let (sk, _pk) = h5_keypair(42);
+        // SAFETY: `sk` is a live local of `sk.len()` bytes; the out-pointer
+        // is the null pointer under test.
+        let status =
+            unsafe { pqhs_stateful_key_open(5, sk.as_ptr(), sk.len(), std::ptr::null_mut()) };
+        assert_eq!(status, PQHS_ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn freeing_a_null_handle_is_a_no_op() {
+        // SAFETY: a null handle is the documented no-op for this entry
+        // point.
+        unsafe { pqhs_stateful_key_free(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn the_exported_blob_reopens_and_continues() {
+        let suite = 5u8;
+        let (sk, pk) = h5_keypair(43);
+        let mut handle: *mut PqhsStatefulKey = std::ptr::null_mut();
+        // SAFETY: `sk` is a live local of `sk.len()` bytes; `handle` is a
+        // live local written through as the out-parameter.
+        unsafe {
+            pqhs_stateful_key_open(suite, sk.as_ptr(), sk.len(), &mut handle);
+        }
+
+        let mut identity = [0u8; PQHS_KEY_IDENTITY_LEN];
+        // SAFETY: `handle` was just opened; `identity` is a live local of
+        // `PQHS_KEY_IDENTITY_LEN` bytes.
+        unsafe {
+            pqhs_stateful_key_identity(handle, identity.as_mut_ptr(), identity.len());
+        }
+        COMMITTED.with(|c| c.borrow_mut().clear());
+        BOUND.with(|b| *b.borrow_mut() = None);
+        let journal = test_journal();
+        // SAFETY: `journal` and `identity` are live locals for the duration
+        // of the call.
+        unsafe {
+            pqhs_adopt_key(&journal, identity.as_ptr(), identity.len());
+        }
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut written = 0usize;
+        // SAFETY: `handle` is the opened pointer; `journal` and every
+        // buffer are live locals of the lengths passed alongside them.
+        unsafe {
+            pqhs_stateful_key_sign(
+                handle,
+                &journal,
+                b"m1".as_ptr(),
+                2,
+                b"c".as_ptr(),
+                1,
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut written,
+            );
+        }
+
+        let mut exported = vec![0u8; sk.len()];
+        let mut export_written = 0usize;
+        assert_eq!(
+            // SAFETY: `handle` is still the opened pointer; `exported` is a
+            // live local of `sk.len()` bytes.
+            unsafe {
+                pqhs_stateful_key_export(
+                    handle,
+                    exported.as_mut_ptr(),
+                    exported.len(),
+                    &mut export_written,
+                )
+            },
+            PQHS_OK
+        );
+        assert_eq!(export_written, sk.len());
+        assert_ne!(exported, sk, "the export did not advance");
+        // SAFETY: `handle` was opened above and has not been freed.
+        unsafe { pqhs_stateful_key_free(handle) };
+
+        let mut reopened: *mut PqhsStatefulKey = std::ptr::null_mut();
+        // SAFETY: `exported` is the blob just written; `reopened` is a live
+        // local written through as the out-parameter.
+        unsafe {
+            pqhs_stateful_key_open(suite, exported.as_ptr(), exported.len(), &mut reopened);
+        }
+        let mut written2 = 0usize;
+        // SAFETY: `reopened` was just opened; the journal still belongs to
+        // this key and has recorded the first spend; every buffer is a live
+        // local of the length passed alongside it.
+        let status = unsafe {
+            pqhs_stateful_key_sign(
+                reopened,
+                &journal,
+                b"m2".as_ptr(),
+                2,
+                b"c".as_ptr(),
+                1,
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut written2,
+            )
+        };
+        assert_eq!(status, PQHS_OK);
+        let mut valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            crate::sign::pqhs_verify(
+                suite,
+                pk.as_ptr(),
+                pk.len(),
+                b"m2".as_ptr(),
+                2,
+                b"c".as_ptr(),
+                1,
+                sig.as_ptr(),
+                written2,
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(valid);
+        // SAFETY: `reopened` was opened above and has not been freed.
+        unsafe { pqhs_stateful_key_free(reopened) };
+    }
+
+    /// First C-binding exercise of [`pqhybridsign_abi::sign_stateless_with_handle`],
+    /// which has no ABI-level test of its own.
+    #[test]
+    fn an_opened_handle_signs_stateless_and_the_signature_verifies() {
+        let suite = 5u8;
+        let (sk, pk) = h5_keypair(44);
+        let mut handle: *mut PqhsStatefulKey = std::ptr::null_mut();
+        // SAFETY: `sk` is a live local of `sk.len()` bytes; `handle` is a
+        // live local written through as the out-parameter.
+        assert_eq!(
+            unsafe { pqhs_stateful_key_open(suite, sk.as_ptr(), sk.len(), &mut handle) },
+            PQHS_OK
+        );
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut written = 0usize;
+        let budget = test_budget();
+        // SAFETY: `handle` is the opened pointer; `budget` and every buffer
+        // are live locals of the lengths passed alongside them.
+        let status = unsafe {
+            pqhs_stateful_key_sign_stateless(
+                handle,
+                &budget,
+                b"few".as_ptr(),
+                3,
+                b"c".as_ptr(),
+                1,
+                sig.as_mut_ptr(),
+                sig.len(),
+                &mut written,
+            )
+        };
+        assert_eq!(status, PQHS_OK);
+        let mut valid = false;
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_verify_stateless(
+                suite,
+                pk.as_ptr(),
+                pk.len(),
+                b"few".as_ptr(),
+                3,
+                b"c".as_ptr(),
+                1,
+                sig.as_ptr(),
+                written,
+                &mut valid,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert!(valid);
+        // SAFETY: `handle` was opened above and has not been freed.
+        unsafe { pqhs_stateful_key_free(handle) };
     }
 }

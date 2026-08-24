@@ -939,10 +939,17 @@ Every row of the section 7 registry regenerates from this grammar:
 label = "hybrid-" classical "-" pq [ "-rotate" ] "-v1" NUL
 ```
 
-All 16 rows match their stated byte counts under this grammar, including the
-four rotation rows. The registry is a generated name, not a hand-written
-string table. This design generates the label and checks it against the
-registry value at compile time.
+The registry holds 13 rows. Twelve are concrete labels, one for each suite
+and profile. The thirteenth is a templated row for rotation. It reads
+`hybrid-<classical>-shrincs-<profile>-rotate-v1` and states four byte
+counts, 38 / 43 / 42 / 42, one for each SHRINCS profile rather than one for
+each row. Those four counts cover all eight rotation labels this design
+composes, because `ed25519` and `sr25519` are the same width. Every row
+matches its stated byte count under the grammar. The registry is a
+generated name, not a hand-written string table. This design generates the
+label and checks it against the registry value at compile time, and
+`tests/profile_conformance.rs` checks the composed rotation labels against
+the byte counts the templated row states.
 
 ### Finding 2: The label includes a null byte
 

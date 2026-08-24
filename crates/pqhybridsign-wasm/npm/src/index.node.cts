@@ -4,16 +4,18 @@
  *
  * Loads `../node/pqhybridsign_wasm.js`, the `wasm-pack --target nodejs`
  * build assembled by `../../scripts/build-npm.sh`: its glue instantiates
- * the wasm module synchronously on `require`, so the loader below only
- * has to wrap that `require` call in a promise for {@link createApi} to
- * cache.
+ * the wasm module synchronously on `require`. The loader below wraps that
+ * `require` in a promise for {@link createApi} to cache, and drops the
+ * `require` cache entry so a reload after a trap is a new instance.
  *
  * `.cts` (rather than `.ts`) forces this file to compile to CommonJS
  * regardless of `tsconfig.json`'s `module` setting, matching
  * `package.json`'s `exports["."].node` entry point.
  */
 
-import { createApi, type RawModule } from "./api.js";
+import { createApi, PqHybridSignPanic, type RawModule } from "./api.js";
+
+export { createApi, PqHybridSignPanic };
 
 export type {
   KeyPair,
@@ -22,23 +24,66 @@ export type {
   RawKeyPair,
   RawModule,
   RawSignStatefulResult,
+  RawStatefulKey,
+  RawVrfKey,
   SignStatefulResult,
+  StatefulKeyHandle,
   StatelessBudgetStore,
   Suite,
+  VrfKeyHandle,
 } from "./api.js";
 
 function load(): Promise<RawModule> {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return Promise.resolve(require("../node/pqhybridsign_wasm.js") as RawModule);
+  const path = require.resolve("../node/pqhybridsign_wasm.js");
+  // Dropping the cache entry is what makes a reload after a trap produce a
+  // new instance rather than the crashed one. `require` keys its cache by
+  // resolved path, so without this the module returned after a trap is the
+  // same object with the same trapped memory.
+  delete require.cache[path];
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return Promise.resolve(require(path) as RawModule);
+}
+
+/**
+ * The loader, exposed for `test/panic.test.mjs`, which checks that calling
+ * it twice yields a module that still answers. Not part of the supported
+ * surface: it is prefixed and undocumented in the README for that reason.
+ */
+export function __loadForTest(): Promise<RawModule> {
+  return load();
 }
 
 const api = createApi(load);
 
 export const {
+  masterSeedFromMnemonic,
+  deriveHardJunction,
+  deriveHardJunctionPath,
+  /**
+   * Length in bytes of a hybrid VRF proof for `suite`.
+   *
+   * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+   * delta-length binding can occupy. For H5 and H6 this is exact. A caller
+   * sizing storage from this value must treat it as an upper bound.
+   *
+   * Kept in sync with the doc on {@link PqHybridSignApi.vrfProofLen} in
+   * `api.ts`: destructuring a named export off `api` does not carry that
+   * doc comment into this file's declaration output, so it is repeated
+   * here for the caller who imports `vrfProofLen` directly rather than
+   * through the default `api` export.
+   */
+  vrfProofLen,
+  vrfProve,
+  vrfProveDeterministic,
+  vrfVerify,
+  vrfMakeBytes,
+  deriveVrfStatelessKey,
   keygenFromSeed,
   sign,
   signDeterministic,
   keygenStatefulFromSeed,
+  openStatefulKey,
   keyIdentity,
   keyIdentityFromSecretKey,
   adoptKey,

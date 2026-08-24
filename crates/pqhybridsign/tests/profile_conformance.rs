@@ -23,10 +23,11 @@
 //! Profile-dependent conformance checks that must run under every active
 //! `profile-*` feature.
 //!
-//! These three tests read verify-only fixture data (`public_key` and the
-//! exported secret-key blob layout). They do not call `keygen`,
-//! `sign_stateless`, or `SecretKey::import`, so they stay under a second
-//! even at the 128s profiles.
+//! The three fixture tests below read verify-only fixture data (`public_key`
+//! and the exported secret-key blob layout). They do not call `keygen`,
+//! `sign_stateless`, or `SecretKey::import`, so they stay under a second even
+//! at the 128s profiles. `rotate_label_lengths_match_the_specification_row`
+//! reads no fixture at all -- it compares compile-time constants.
 
 mod fixture;
 
@@ -144,5 +145,45 @@ fn the_blob_layout_is_the_documented_one() {
         &blob[COUNTER_AT + 4..],
         pk.pq_verify_key(),
         "the trailing field is the same verify key the public key carries"
+    );
+}
+
+/// The section 7 registry states rotation label lengths as one templated
+/// row with four byte counts, one for each SHRINCS profile. This table is
+/// transcribed from that row by hand.
+///
+/// This is not what `hybrid_stateful_suite!` already checks. That macro
+/// compares each composed label against a `rotate_label_len` literal
+/// written in the same invocation, which proves the composition rule and
+/// the literal agree and nothing more. The table below comes from the
+/// specification instead, so a suite whose literal was changed to match a
+/// changed composition rule still fails here.
+///
+/// One profile compiles per build, so this covers two of the eight composed
+/// labels. The `profile-matrix` CI job runs the whole crate's tests under
+/// each of the four profile features in turn, which is what covers all
+/// eight. (`cross-profile` is a different job: it runs only the
+/// `cross_profile` test binary and never reaches this file.)
+#[test]
+fn rotate_label_lengths_match_the_specification_row() {
+    let expected = match <ShrincsScheme as PqStatefulScheme>::NAME {
+        "shrincs-256s" => 38,
+        "shrincs-256s-sha2" => 43,
+        "shrincs-128s-q18" => 42,
+        "shrincs-128s-q20" => 42,
+        other => panic!("no specification byte count for profile {other}"),
+    };
+
+    assert_eq!(
+        <H5 as StatefulSuite>::ROTATE_LABEL.len(),
+        expected,
+        "H5 rotate label under {} is not the length section 7 states",
+        <ShrincsScheme as PqStatefulScheme>::NAME
+    );
+    assert_eq!(
+        <H6 as StatefulSuite>::ROTATE_LABEL.len(),
+        expected,
+        "H6 rotate label under {} is not the length section 7 states",
+        <ShrincsScheme as PqStatefulScheme>::NAME
     );
 }

@@ -70,22 +70,35 @@ behaviour, and every function here is written to be called from one.
 "]
 
 mod error;
+mod handle;
+mod seed;
 mod sizes;
 mod stateful_suites;
 mod stateless_suites;
 mod suite;
 mod verify;
+mod vrf;
 
 pub use error::AbiError;
+pub use handle::{sign_stateful_with_handle, sign_stateless_with_handle, StatefulKeyHandle};
+pub use seed::{
+    derive_hard_junction, derive_hard_junction_path, master_seed_from_mnemonic, CHAIN_CODE_LEN,
+    MASTER_SEED_LEN,
+};
 pub use sizes::{public_key_len, secret_key_len, signature_len, stored_public_key_len};
 pub use stateful_suites::{
     adopt_key, key_identity, key_identity_from_secret_key, keygen_stateful_from_seed,
-    require_bound_key, sign_stateful, sign_stateless, verify_stateful, verify_stateless,
-    verify_with_stored_public_key_stateful, verify_with_stored_public_key_stateless,
+    require_bound_key, sign_stateful, sign_stateless, stored_public_key, verify_stateful,
+    verify_stateless, verify_with_stored_public_key_stateful,
+    verify_with_stored_public_key_stateless,
 };
 pub use stateless_suites::{keygen_from_seed, sign, sign_deterministic};
 pub use suite::Suite;
 pub use verify::verify;
+pub use vrf::{
+    vrf_make_bytes, vrf_proof_len, vrf_prove, vrf_prove_deterministic, vrf_prove_stateless,
+    vrf_verify, VrfStatelessKey, VRF_OUTPUT_LEN,
+};
 
 /// Re-exported so a caller can implement [`LeafJournal`] for
 /// [`sign_stateful`] without depending on `pqhybridsign-core` directly.

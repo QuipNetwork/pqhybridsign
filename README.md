@@ -210,6 +210,11 @@ SHRINCS signer under a 128s profile pays the key-generation cost, about 47
 seconds, on every signature. The in-process Rust API does not. The table
 measures the Rust API. Tracked as `pqhs-bf1`.
 
+Each binding also offers an opaque key handle that imports once and signs
+many times: `pqhs_stateful_key_open` in C, `StatefulSecretKey` in Python,
+and `openStatefulKey` in the npm package. A signer taking more than one
+signature from a key should use it.
+
 On-chain verification cost is a property of a downstream verifier, not of this
 chain-agnostic library. The SHRINCS component has a Solidity verifier with
 measured EVM gas and a Solana verify program, both in
@@ -300,10 +305,10 @@ Each binding ships from its own registry.
 ```toml
 [dependencies]
 # Every suite, stateful (SHRINCS) on by default.
-pqhybridsign = "0.0.0-rc6"
+pqhybridsign = "0.0.0-rc7"
 
 # Lattice suites only, no hashsigs-rs:
-# pqhybridsign = { version = "0.0.0-rc6", default-features = false, features = ["std"] }
+# pqhybridsign = { version = "0.0.0-rc7", default-features = false, features = ["std"] }
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -319,8 +324,10 @@ npm install @quip.network/pqhybridsign@next
 ```
 
 The module loads a WebAssembly binary before it can sign or verify. Every
-function is async. The loader caches one load per process. Only the first
-call pays that cost.
+function is async. The loader caches the load, so only the first call pays
+that cost. A call that rejects with `PqHybridSignPanic` is the exception:
+the module trapped. The loader discards the cached instance. The next call
+loads a new one.
 
 ```typescript
 import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";
@@ -344,7 +351,7 @@ accessors work for every suite.
 pip install --pre pqhybridsign
 ```
 
-PEP 440 spells the prerelease version `0.0.0rc6`, not `0.0.0-rc6`. Without
+PEP 440 spells the prerelease version `0.0.0rc7`, not `0.0.0-rc7`. Without
 `--pre`, pip does not find it.
 
 ### C and C++

@@ -2,6 +2,67 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc7
+
+rc7 adds a stateful key handle to the ABI and all three bindings, so that
+importing a key costs once rather than once per signature. It also adds VRF
+proving and BIP39 mnemonic and hard-junction derivation to the C, Python and
+JavaScript bindings, which had none of the three before. The remaining changes
+close gaps in how this project verifies itself. The signature suites and the
+wire format do not change, and rc7 removes no public entry point and changes
+no signature.
+
+### Added
+
+- `StatefulKeyHandle` in `pqhybridsign-abi`, with `pqhs_stateful_key_open` in
+  C, `StatefulSecretKey` holding the handle in Python, and `openStatefulKey`
+  in the npm package. Importing a stateful key re-derives the hypertree root,
+  which costs about 47 seconds at the `128s` profiles. A handle pays that once
+  instead of once per signature.
+- VRF, BIP39 mnemonic and hard-junction derivation in all four bindings. A C,
+  Python or JavaScript caller can now evaluate a VRF, turn a recovery phrase
+  into a master seed, and derive a child key. The stateful suites prove
+  through a dedicated stateless key that the bindings derive under a label
+  disjoint from the identity key. The bindings expose derivation only:
+  `adopt_unchecked`, which rests on a caller's unverifiable assertion, stays
+  inside the Rust ABI.
+- `PqHybridSignPanic` in the npm package. A WebAssembly trap now reaches a
+  JavaScript caller as a distinct error class rather than trapping the
+  instance silently. The cached instance is discarded, and the package's own
+  test suite exercises the reload under Node. In a browser the reload depends
+  on a cache-busting re-import that the suite does not run, so treat a retry
+  there as best-effort.
+- `stored_public_key` in the Python package, a module-level function that
+  recomputes the stored form of a verify-form public key the same way
+  `PublicKey::stored_form` does. The C crate and the npm package gain no
+  matching function in this release.
+- A wasm key handle poisons itself after a trap. Once any call on a handle
+  throws `PqHybridSignPanic`, every later call on that handle throws the
+  same error instead of reaching the dead instance, including `free`.
+
+### Changed
+
+- The C crate's test helper that built a stored public key by slicing the
+  bundle at a fixed offset now recomputes it through `PublicKey::stored_form`.
+  The new Python `stored_public_key` function does the same.
+- The stateful durability rule gains its one exception. A caller still
+  exports and persists the advanced key after every signing call, including
+  a call that failed, because a stateful signer advances its leaf counter on
+  failure as well as on success. A call that threw `PqHybridSignPanic` is the
+  exception: the instance is gone, there is no advanced key to export, and
+  the caller's leaf journal is the only durable record of what was spent.
+
+### Fixed
+
+- `DESIGN.md` stated the section 7 label registry holds 16 rows including
+  four rotation rows. It holds 13 rows, and rotation is one templated row
+  whose four byte counts are one per profile and cover all eight composed
+  labels.
+- `cargo test --workspace` now fails when `src/lib.rs` in the wasm crate has
+  changed since the checked-in TypeScript definitions were last regenerated.
+  The check ran only in the `wasm-npm` CI job before.
+- CI runs the `wasm32-unknown-unknown` test target. Nothing ran it before.
+
 ## 0.0.0-rc6
 
 rc6 adds one type-level guarantee and one accessor to the public surface, and

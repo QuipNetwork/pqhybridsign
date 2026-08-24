@@ -20,7 +20,8 @@
 //! signature, and a leaf spent twice is a total loss of that key's
 //! post-quantum security. The stateful pair has its own entry points --
 //! [`keygen_stateful_from_seed`], [`sign_stateful`], [`sign_stateless`],
-//! [`adopt_key`], [`key_identity`] and [`key_identity_from_secret_key`] --
+//! [`StatefulKey`], [`adopt_key`], [`key_identity`] and
+//! [`key_identity_from_secret_key`] --
 //! and the stateless functions [`sign`], [`sign_deterministic`] and
 //! [`keygen_from_seed`] reject H5 and H6, because a stateless-looking call
 //! that silently spent a leaf would be the worst mistake this binding could
@@ -33,16 +34,33 @@
 //! could be captured by `structuredClone`, serialized with `JSON.stringify`,
 //! sent through a `MessageChannel`, or aliased to a second variable, and any
 //! of those forks the one-time leaf counter exactly as a Rust `Clone` would.
-//! That reasoning is about a *held, mutable key object*. This binding keeps
-//! none, and neither do the C and Python bindings whose functional shape it
-//! mirrors. It is safe for the same reasons they are:
+//! That reasoning is about a *held, mutable key object*. The one-shot
+//! functions still keep none. [`StatefulKey`] is a held object, but it is a
+//! wasm-bindgen wrapper over one Rust value: assignment aliases it, a
+//! `structuredClone` of it is not a usable second signer, and `free()`
+//! releases it. The C and Python bindings expose the same handle. It is
+//! safe for these reasons:
 //!
-//! * A secret key crosses the boundary only as bytes -- the exported blob
-//!   [`keygen_stateful_from_seed`] returns, [`sign_stateful`] reads, and
-//!   [`sign_stateful`] hands forward again as `nextSecretKey`. There is no
-//!   counter object for `structuredClone` to fork, because there is no
-//!   object: the leaf counter lives inside the blob and inside the caller's
-//!   journal, never in a handle this binding hands out.
+//! * On the one-shot path a secret key crosses the boundary only as bytes --
+//!   the exported blob [`keygen_stateful_from_seed`] returns,
+//!   [`sign_stateful`] reads, and [`sign_stateful`] hands forward again as
+//!   `nextSecretKey`. There is no counter object for `structuredClone` to
+//!   fork on that path: the leaf counter lives inside the blob and inside
+//!   the caller's journal.
+//! * [`StatefulKey`] wraps one [`pqhybridsign_abi::StatefulKeyHandle`].
+//!   JavaScript assignment aliases the wrapper; it does not clone the key.
+//!   `structuredClone` and `postMessage` do not reject a wasm-bindgen class
+//!   -- the structured clone algorithm clones its own enumerable
+//!   properties, here the raw `__wbg_ptr`, into a plain object in the
+//!   other realm, with no class prototype and therefore no methods,
+//!   including no `free()`. That is worse than a rejection, not better:
+//!   the clone silently carries a pointer that is meaningless outside the
+//!   instance it came from, and there is no method left on it to catch
+//!   the misuse. Call `free()` when finished, on the original handle
+//!   only. Release is not under the caller's control -- wasm-bindgen
+//!   registers the handle with a `FinalizationRegistry` that calls
+//!   `free()` when the wrapper becomes unreachable, but that may happen
+//!   at any garbage collection, or never.
 //! * Durability and fork-detection live in a caller-supplied leaf journal
 //!   (see [`pqhybridsign_abi::LeafJournal`]): a small JavaScript object with
 //!   four methods that [`sign_stateful`] drives. Before any signature
@@ -62,8 +80,9 @@
 //!
 //! # The journal's methods are synchronous
 //!
-//! [`sign_stateful`] calls `journal.commit(leaf)` and must see it return
-//! before it builds the signature -- the persist-before-release ordering
+//! [`sign_stateful`] and [`StatefulKey::sign_stateful`] call
+//! `journal.commit(leaf)` and must see it return
+//! before they build the signature -- the persist-before-release ordering
 //! `pqhybridsign_abi::sign_stateful` documents. Its four methods
 //! (`commit`, `nextLeaf`, `boundKey`, `bindKey`) are therefore ordinary
 //! synchronous calls, exactly as the C binding's function pointers and the
@@ -121,16 +140,29 @@
 //! bad input.
 //!
 //! A trap skips Rust's normal unwind cleanup, so a host cannot assume the
-//! instance's internal state is sound afterward. This crate holds no state
-//! of its own across calls -- every export is a plain function over its
-//! arguments, with no `static` or thread-local data -- so a trap here
-//! cannot leave one of this crate's own locks or half-built values behind
-//! for a later call to observe; that says nothing about the wasm allocator
-//! or the `wasm-bindgen` runtime the instance also carries, which this
-//! crate does not own and cannot vouch for. A host that must survive a
-//! panic here should still instantiate the module in a context it can
-//! discard and recreate, such as a dedicated worker, rather than rely on
-//! the instance remaining usable.
+//! instance's internal state is sound afterward. This crate holds no
+//! `static` or thread-local data across calls. Live [`StatefulKey`]
+//! instances hold an imported key in wasm memory; a trap invalidates them
+//! along with the instance. A trap here cannot leave a lock or half-built
+//! value behind for a later call to observe; that says nothing about the
+//! wasm allocator or the `wasm-bindgen` runtime the instance also carries,
+//! which this crate does not own and cannot vouch for. A host that must
+//! survive a panic here should still instantiate the module in a context
+//! it can discard and recreate, such as a dedicated worker, rather than
+//! rely on the instance remaining usable.
+//!
+//! The npm package wraps this. Its `createApi` catches a
+//! `WebAssembly.RuntimeError`, discards the instance, and rethrows a
+//! `PqHybridSignPanic`. A JavaScript caller that reaches this crate through
+//! `@quip.network/pqhybridsign` can separate a trap from an ordinary
+//! rejection. The next call reloads. It does not reuse the crashed instance.
+//! The Node reload is covered by the package test suite. The browser
+//! reload re-imports the glue under a cache-busting specifier, because a
+//! second `init()` on the same module record returns the instance that
+//! already trapped. The suite does not exercise that browser path, so treat
+//! a retry there as best-effort rather than guaranteed. A caller that
+//! instantiates the `.wasm` file directly gets neither and must treat any
+//! `RuntimeError` as fatal to the instance.
 //!
 //! # Secret key handling
 //!
@@ -154,9 +186,10 @@
 
 use std::cell::RefCell;
 
-use js_sys::{Function, Reflect, Uint8Array};
+use js_sys::{Array, Function, Object, Reflect, Uint8Array};
 use pqhybridsign_abi::{
-    BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, KEY_IDENTITY_LEN,
+    sign_stateful_with_handle, sign_stateless_with_handle, BudgetKey, KeyIdentity, LeafJournal,
+    StatefulKeyHandle, StatelessBudgetStore, KEY_IDENTITY_LEN,
 };
 use rand_core::OsRng;
 use wasm_bindgen::prelude::*;
@@ -197,11 +230,48 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 }
 
 /// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], restricted
+/// to the four suites [`vrf_prove`] and [`vrf_prove_deterministic`] can
+/// prove under.
+///
+/// H5 and H6 spend one unit of the few-time stateless budget on every VRF
+/// evaluation, the same hazard [`stateless_suite`] refuses for signing, and
+/// for the same reason: a call that looks free and is not is the worst
+/// failure mode this crate could offer. Rejecting here, at the wasm layer,
+/// rather than letting the request reach the abi, is what lets the error
+/// name the entry point to use instead -- the abi's own
+/// `WrongEntryPointForSuite` has no way to know this binding calls that
+/// entry point `deriveVrfStatelessKey`.
+///
+/// # Errors
+///
+/// An error naming H5/H6 explicitly and the entry point to use instead, or
+/// listing the valid names for anything else unrecognised.
+fn vrf_stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
+    match name {
+        "H1" => Ok(pqhybridsign_abi::Suite::H1),
+        "H2" => Ok(pqhybridsign_abi::Suite::H2),
+        "H3" => Ok(pqhybridsign_abi::Suite::H3),
+        "H4" => Ok(pqhybridsign_abi::Suite::H4),
+        "H5" | "H6" => Err(format!(
+            "{name} is a stateful suite: this entry point would spend one \
+             unit of a few-time stateless budget without recording it, so \
+             it is refused. Evaluate the VRF for H5/H6 with \
+             deriveVrfStatelessKey and the returned key's prove(budget, \
+             input), which takes a durable budget store."
+        )),
+        other => Err(format!(
+            "unknown suite \"{other}\"; expected one of H1, H2, H3, H4"
+        )),
+    }
+}
+
+/// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], restricted
 /// to the two stateful suites.
 ///
 /// Every stateful-only entry point routes through this:
 /// [`keygenStatefulFromSeed`](keygen_stateful_from_seed),
 /// [`signStateful`](sign_stateful), [`signStateless`](sign_stateless),
+/// [`StatefulKey::open`],
 /// [`keyIdentity`](key_identity),
 /// [`keyIdentityFromSecretKey`](key_identity_from_secret_key),
 /// [`verifyStateful`](verify_stateful), [`verifyStateless`](verify_stateless),
@@ -229,15 +299,21 @@ fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], accepting
 /// all six suites this crate knows.
 ///
-/// The only parser of the three that is total over every suite name this
-/// crate recognises. [`stored_public_key_len`] is the one export that needs
-/// it: it is a pure length accessor over public data, defined for every
-/// suite (`pqhybridsign_abi::stored_public_key_len` is total), so it must
-/// not throw for the four suites this binding's other functions actually
-/// sign and verify with. Compare [`stateless_suite`], which excludes H5/H6
-/// for a reason specific to *signing*, and [`stateful_suite`], which exists
-/// only because the `WithStoredPublicKey` verify functions are specific to
-/// H5/H6.
+/// The only parser of the four that is total over every suite name this
+/// crate recognises. Every entry point that is genuinely total over all
+/// six suites -- a length accessor, [`verify`], or a VRF function that
+/// spends nothing regardless of statefulness -- parses through here rather
+/// than through [`stateless_suite`], [`stateful_suite`] or
+/// [`vrf_stateless_suite`], each of which excludes suites for a reason
+/// specific to what it guards: [`stateless_suite`] excludes H5/H6 because
+/// signing them would spend an unrecorded leaf,
+/// [`vrf_stateless_suite`] excludes them for the matching reason on the
+/// VRF's few-time stateless budget, and [`stateful_suite`] exists only
+/// because the `WithStoredPublicKey` verify functions are specific to
+/// H5/H6. Eight entry points parse through here as of this writing:
+/// [`public_key_len`], [`secret_key_len`], [`signature_len`],
+/// [`stored_public_key_len`], [`verify`], [`vrf_proof_len`],
+/// [`vrf_verify`] and [`vrf_make_bytes`].
 ///
 /// # Errors
 ///
@@ -259,6 +335,25 @@ fn any_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// Wrap an error message as a thrown JavaScript `Error`.
 fn js_error(message: impl core::fmt::Display) -> JsValue {
     JsValue::from(js_sys::Error::new(&message.to_string()))
+}
+
+/// Copy `bytes` into a fixed-size array, or report a JavaScript `Error`
+/// naming `what` and the length seen if `bytes` is not exactly `N` long.
+///
+/// Used for the master-seed and chain-code parameters
+/// [`master_seed_from_mnemonic`], [`derive_hard_junction`],
+/// [`derive_hard_junction_path`] and [`derive_vrf_stateless_key`] take:
+/// `pqhybridsign_abi`'s seed and VRF-key-derivation functions take fixed
+/// arrays rather than the runtime-checked slices most of this crate's
+/// other exports do, so this crate validates the length itself instead of
+/// forwarding a mismatch to the abi layer.
+fn fixed_bytes<const N: usize>(bytes: &[u8], what: &str) -> Result<[u8; N], JsValue> {
+    <[u8; N]>::try_from(bytes).map_err(|_| {
+        js_error(format!(
+            "{what} must be exactly {N} bytes, got {}",
+            bytes.len()
+        ))
+    })
 }
 
 /// The SHRINCS profile this build links against, for example
@@ -1202,6 +1297,524 @@ pub fn sign_stateless(
     }
     let n = result.map_err(js_error)?;
     Ok(Uint8Array::from(&sig[..n]))
+}
+
+/// An imported stateful secret key, held across signing calls.
+///
+/// [`sign_stateful`] takes the exported blob and calls
+/// `SecretKey::import` every time. `import` re-derives the hypertree
+/// root, which at the 128s profiles costs about 47 seconds, the same walk
+/// as keygen. A caller that signs more than once pays it more than once.
+/// This type pays it exactly once, in [`StatefulKey::open`], and every
+/// later signature costs what the in-process Rust API costs.
+///
+/// # The durability contract is unchanged
+///
+/// The handle advances the key in memory. It does not persist anything.
+/// After [`sign_stateful`](Self::sign_stateful) returns, **whether it
+/// returned a signature or threw**, this handle holds the advanced key
+/// and the caller must [`export`](Self::export) it and persist the result
+/// before relying on any signature. The reason is the one
+/// [`sign_stateful`] documents: a leaf can be durably committed to the
+/// journal and the signature still fail, and a caller whose stored key
+/// did not advance with the journal is a caller whose next call is
+/// refused for the rest of the key's life.
+///
+/// A handle is not a substitute for the journal. The journal is the
+/// durable record of spent leaves and the only thing that survives a
+/// crash.
+///
+/// # `free()` must be called
+///
+/// A caller must call `free()`, call `[Symbol.dispose]()`, or declare
+/// the value with JavaScript `using`. wasm-bindgen registers every
+/// handle with a `FinalizationRegistry` that calls the free function
+/// when the wrapper becomes unreachable, but that release is not under
+/// the caller's control: it may happen at any garbage collection, and
+/// it may never happen at all. A handle dropped without `free()` cannot
+/// be relied on to release its secret key material.
+///
+/// # Only H5 and H6
+///
+/// H1 through H4 are stateless and have nothing to hold open;
+/// [`open`](Self::open) rejects them.
+#[wasm_bindgen]
+pub struct StatefulKey {
+    inner: StatefulKeyHandle,
+}
+
+#[wasm_bindgen]
+impl StatefulKey {
+    /// Import `secret_key` once and hold it.
+    ///
+    /// This is the call that costs about 47 seconds at the 128s profiles.
+    /// Every signature taken through the returned handle costs under 0.01
+    /// seconds.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if
+    /// `secret_key` is not `secretKeyLen(suite)` bytes, or if the blob
+    /// does not import.
+    pub fn open(suite: &str, secret_key: Vec<u8>) -> Result<Self, JsValue> {
+        let suite = stateful_suite(suite).map_err(js_error)?;
+        let mut secret_key = secret_key;
+        let result = StatefulKeyHandle::open(suite, &secret_key).map(|inner| Self { inner });
+        secret_key.zeroize();
+        result.map_err(js_error)
+    }
+
+    /// The 32-byte identity of the key this handle holds.
+    ///
+    /// The value [`adopt_key`] takes. Derived from the cached post-quantum
+    /// verify key, which is public; no secret byte reaches it.
+    #[wasm_bindgen(js_name = keyIdentity)]
+    #[must_use]
+    pub fn key_identity(&self) -> Uint8Array {
+        let identity = self.inner.key_identity();
+        Uint8Array::from(&identity.as_bytes()[..])
+    }
+
+    /// The current exported blob, exactly `secretKeyLen(suite)` bytes.
+    ///
+    /// Persist this after every [`sign_stateful`](Self::sign_stateful)
+    /// call, including one that threw; see the type documentation.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the key does not export.
+    pub fn export(&self) -> Result<Uint8Array, JsValue> {
+        let mut sk_out = vec![0u8; pqhybridsign_abi::secret_key_len(self.inner.suite())];
+        let result = self.inner.export(&mut sk_out);
+        match result {
+            Ok(n) => {
+                let out = Uint8Array::from(&sk_out[..n]);
+                sk_out.zeroize();
+                Ok(out)
+            }
+            Err(e) => {
+                sk_out.zeroize();
+                Err(js_error(e))
+            }
+        }
+    }
+
+    /// Sign `msg` under `ctx`, spending one leaf recorded through
+    /// `journal`.
+    ///
+    /// The handle-held counterpart of [`sign_stateful`]. The signature is
+    /// returned; the advanced key stays in this handle. **Export and
+    /// persist it before relying on the signature**, including when this
+    /// method throws.
+    ///
+    /// `journal` is a JavaScript object with the four synchronous methods
+    /// the crate documentation describes; it must already be bound to
+    /// this key ([`adopt_key`]).
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the key's leaf budget is spent
+    /// (`LeavesExhausted`), if `journal` is not this key's journal
+    /// (`JournalKeyMismatch`), if the key and journal counters disagree
+    /// (`CountersDiverged`), or if the journal could not durably commit
+    /// (`JournalFailed`). Any exception a journal method itself threw is
+    /// re-thrown unchanged.
+    #[wasm_bindgen(js_name = signStateful)]
+    pub fn sign_stateful(
+        &mut self,
+        journal: &JsValue,
+        msg: &[u8],
+        ctx: &[u8],
+    ) -> Result<Uint8Array, JsValue> {
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(self.inner.suite())];
+        let mut journal = JsJournal::new(journal);
+
+        let result = sign_stateful_with_handle(&mut self.inner, &mut journal, msg, ctx, &mut sig);
+
+        if let Some(err) = journal.take_error() {
+            return Err(err);
+        }
+
+        let n = result.map_err(js_error)?;
+        Ok(Uint8Array::from(&sig[..n]))
+    }
+
+    /// Sign `msg` under `ctx` without spending a leaf, spending one unit
+    /// of the few-time stateless budget instead.
+    ///
+    /// The handle-held counterpart of [`sign_stateless`]. The key is not
+    /// advanced, so there is nothing new to export afterwards. `budget`
+    /// is a JavaScript object with synchronous `consumed(key)` and
+    /// `record(key, count)` methods, and `record` must be durable before
+    /// it returns, on the same terms `journal.commit` is.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the stateless budget is spent
+    /// (`StatelessBudgetExhausted`), or if the store could not durably
+    /// record (`BudgetStoreFailed`). Any exception a budget method itself
+    /// threw is re-thrown unchanged.
+    #[wasm_bindgen(js_name = signStateless)]
+    pub fn sign_stateless(
+        &self,
+        budget: &JsValue,
+        msg: &[u8],
+        ctx: &[u8],
+    ) -> Result<Uint8Array, JsValue> {
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(self.inner.suite())];
+        let mut budget = JsBudget::new(budget);
+
+        let result = sign_stateless_with_handle(&self.inner, &mut budget, msg, ctx, &mut sig);
+
+        if let Some(err) = budget.take_error() {
+            return Err(err);
+        }
+
+        let n = result.map_err(js_error)?;
+        Ok(Uint8Array::from(&sig[..n]))
+    }
+}
+
+// ---- Master seed derivation: recovery phrases and hard junctions ----
+
+/// Turn an English BIP39 recovery phrase into a 32-byte master seed.
+///
+/// This is Substrate's derivation, not standard BIP39: see
+/// `pqhybridsign_abi::master_seed_from_mnemonic` for exactly which KDF runs
+/// and over what. `password` defaults to the empty string when omitted.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `phrase` is not a valid English BIP39 mnemonic:
+/// a wrong word count, an unknown word, or a bad checksum. The three are
+/// not distinguished, because telling an attacker which part of a guessed
+/// phrase was wrong narrows the search.
+#[wasm_bindgen(js_name = masterSeedFromMnemonic)]
+pub fn master_seed_from_mnemonic(
+    phrase: &str,
+    password: Option<String>,
+) -> Result<Uint8Array, JsValue> {
+    let mut out = [0u8; pqhybridsign_abi::MASTER_SEED_LEN];
+    let result = pqhybridsign_abi::master_seed_from_mnemonic(phrase, password.as_deref(), &mut out);
+    let out_value = result.map(|()| Uint8Array::from(&out[..]));
+    out.zeroize();
+    out_value.map_err(js_error)
+}
+
+/// Derive a hard-junction child master seed.
+///
+/// # The re-keygen hazard
+///
+/// See `pqhybridsign_abi::derive_hard_junction`: derivation is
+/// deterministic, so deriving one junction twice, on two different hosts,
+/// reaches the same child seed and therefore the same stateful tree
+/// starting at leaf 1 -- the same failure as importing one key twice.
+/// Derive a child once, then persist and restore it through the
+/// validating import path. Never re-derive one junction on a second host.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `parentMaster` or `chainCode` is not exactly 32
+/// bytes, or if the key derivation function fails.
+#[wasm_bindgen(js_name = deriveHardJunction)]
+pub fn derive_hard_junction(
+    parent_master: &[u8],
+    chain_code: &[u8],
+) -> Result<Uint8Array, JsValue> {
+    let parent: [u8; pqhybridsign_abi::MASTER_SEED_LEN] =
+        fixed_bytes(parent_master, "parentMaster")?;
+    let code: [u8; pqhybridsign_abi::CHAIN_CODE_LEN] = fixed_bytes(chain_code, "chainCode")?;
+    let mut out = [0u8; pqhybridsign_abi::MASTER_SEED_LEN];
+    let result = pqhybridsign_abi::derive_hard_junction(&parent, &code, &mut out);
+    let out_value = result.map(|()| Uint8Array::from(&out[..]));
+    out.zeroize();
+    out_value.map_err(js_error)
+}
+
+/// Read one 32-byte chain code out of `chainCodes[index]`, for
+/// [`derive_hard_junction_path`]. The error names `index`, so a caller can
+/// tell which element of the array was wrong.
+fn chain_code_at(
+    value: &JsValue,
+    index: usize,
+) -> Result<[u8; pqhybridsign_abi::CHAIN_CODE_LEN], JsValue> {
+    let arr = value.dyn_ref::<Uint8Array>().ok_or_else(|| {
+        js_error(format!(
+            "chainCodes: element at index {index} must be a Uint8Array"
+        ))
+    })?;
+    let len = arr.length() as usize;
+    if len != pqhybridsign_abi::CHAIN_CODE_LEN {
+        return Err(js_error(format!(
+            "chainCodes: element at index {index} must be exactly {} bytes, got {len}",
+            pqhybridsign_abi::CHAIN_CODE_LEN
+        )));
+    }
+    let mut bytes = [0u8; pqhybridsign_abi::CHAIN_CODE_LEN];
+    arr.copy_to(&mut bytes);
+    Ok(bytes)
+}
+
+/// Apply a sequence of chain codes in order, each child becoming the next
+/// parent (`[a, b]` means `deriveHardJunction(deriveHardJunction(parent,
+/// a), b)`).
+///
+/// **An empty `chainCodes` returns `parentMaster` unchanged.** That is the
+/// identity a path of no junctions should have; see
+/// `pqhybridsign_abi::derive_hard_junction_path`.
+///
+/// See [`deriveHardJunction`](derive_hard_junction) for the re-keygen
+/// hazard, which applies to every seed this function returns.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `parentMaster` is not exactly 32 bytes, if any
+/// element of `chainCodes` is not a 32-byte `Uint8Array` -- naming its
+/// index -- or if the key derivation function fails.
+#[wasm_bindgen(js_name = deriveHardJunctionPath)]
+pub fn derive_hard_junction_path(
+    parent_master: &[u8],
+    chain_codes: Array,
+) -> Result<Uint8Array, JsValue> {
+    let parent: [u8; pqhybridsign_abi::MASTER_SEED_LEN] =
+        fixed_bytes(parent_master, "parentMaster")?;
+    let mut codes = Vec::with_capacity(chain_codes.length() as usize);
+    for (index, value) in chain_codes.iter().enumerate() {
+        codes.push(chain_code_at(&value, index)?);
+    }
+    let mut out = [0u8; pqhybridsign_abi::MASTER_SEED_LEN];
+    let result = pqhybridsign_abi::derive_hard_junction_path(&parent, &codes, &mut out);
+    let out_value = result.map(|()| Uint8Array::from(&out[..]));
+    out.zeroize();
+    out_value.map_err(js_error)
+}
+
+// ---- The hybrid verifiable random function ----
+//
+// H1 through H4 prove through `vrfProve`/`vrfProveDeterministic`, which
+// reject H5 and H6 -- proving under those suites spends one unit of a
+// few-time stateless budget on every evaluation, the same hazard
+// `sign`/`signDeterministic` refuse for signing, and for the same reason:
+// a call that looks free and is not is the worst failure mode this crate
+// could offer. `deriveVrfStatelessKey` and `VrfKey.prove` cover H5 and H6
+// through a dedicated key and a caller-supplied budget store, on the same
+// bridge `sign_stateless` uses. `vrfProofLen`, `vrfVerify` and
+// `vrfMakeBytes` span all six suites: verifying and measuring a length
+// spend nothing.
+
+/// Length in bytes of a hybrid VRF proof for `suite`.
+///
+/// For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+/// delta-length binding can occupy. For H5 and H6 this is exact.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+#[wasm_bindgen(js_name = vrfProofLen)]
+pub fn vrf_proof_len(suite: &str) -> Result<u32, JsValue> {
+    let suite = any_suite(suite).map_err(js_error)?;
+    Ok(pqhybridsign_abi::vrf_proof_len(suite).map_err(js_error)? as u32)
+}
+
+/// Evaluate the hybrid VRF for a stateless suite. Returns the proof.
+///
+/// H1 through H4 only; see the section documentation above for why H5 and
+/// H6 have their own entry point.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H4"`, if
+/// `suite` is `"H5"` or `"H6"` (naming `deriveVrfStatelessKey` as the entry
+/// point to use instead), if `secretKey` is not the suite's secret-key
+/// length, or if either component rejects its key.
+#[wasm_bindgen(js_name = vrfProve)]
+pub fn vrf_prove(suite: &str, secret_key: Vec<u8>, input: &[u8]) -> Result<Uint8Array, JsValue> {
+    let suite = vrf_stateless_suite(suite).map_err(js_error)?;
+    let mut secret_key = secret_key;
+    let mut proof = vec![0u8; pqhybridsign_abi::vrf_proof_len(suite).map_err(js_error)?];
+
+    let result = pqhybridsign_abi::vrf_prove(suite, &secret_key, input, &mut OsRng, &mut proof);
+    secret_key.zeroize();
+
+    let n = result.map_err(js_error)?;
+    Ok(Uint8Array::from(&proof[..n]))
+}
+
+/// Evaluate the hybrid VRF for a stateless suite with a reproducible
+/// classical proof. H1 through H4 only, on the same terms as
+/// [`vrfProve`](vrf_prove).
+///
+/// # Errors
+///
+/// The same as [`vrfProve`](vrf_prove).
+#[wasm_bindgen(js_name = vrfProveDeterministic)]
+pub fn vrf_prove_deterministic(
+    suite: &str,
+    secret_key: Vec<u8>,
+    input: &[u8],
+) -> Result<Uint8Array, JsValue> {
+    let suite = vrf_stateless_suite(suite).map_err(js_error)?;
+    let mut secret_key = secret_key;
+    let mut proof = vec![0u8; pqhybridsign_abi::vrf_proof_len(suite).map_err(js_error)?];
+
+    let result = pqhybridsign_abi::vrf_prove_deterministic(suite, &secret_key, input, &mut proof);
+    secret_key.zeroize();
+
+    let n = result.map_err(js_error)?;
+    Ok(Uint8Array::from(&proof[..n]))
+}
+
+/// Verify a hybrid VRF proof against `publicKey`. Total over all six
+/// suites: verifying never spends anything, so there is nothing to keep
+/// apart by statefulness.
+///
+/// Returns `false`, never throws, for a malformed `publicKey` or `proof`.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+#[wasm_bindgen(js_name = vrfVerify)]
+pub fn vrf_verify(
+    suite: &str,
+    public_key: &[u8],
+    input: &[u8],
+    proof: &[u8],
+) -> Result<bool, JsValue> {
+    let suite = any_suite(suite).map_err(js_error)?;
+    Ok(pqhybridsign_abi::vrf_verify(
+        suite, public_key, input, proof,
+    ))
+}
+
+/// Derive 32 output bytes from a verified hybrid VRF proof.
+///
+/// **Verify the proof first.** [`vrfVerify`](vrf_verify) is what
+/// establishes that the pre-output belongs to this key and this input.
+/// Deriving bytes from an unverified proof derives bytes from whatever an
+/// attacker supplied.
+///
+/// `context` separates two uses of one proof: the same proof under two
+/// different contexts gives unrelated bytes, so one evaluation can feed
+/// two consumers without either learning the other's value early.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`, if
+/// `proof` is shorter than the proof header or `publicKey` shorter than
+/// the classical public key, or if `publicKey` or the pre-output does not
+/// decode.
+#[wasm_bindgen(js_name = vrfMakeBytes)]
+pub fn vrf_make_bytes(
+    suite: &str,
+    public_key: &[u8],
+    input: &[u8],
+    proof: &[u8],
+    context: &[u8],
+) -> Result<Uint8Array, JsValue> {
+    let suite = any_suite(suite).map_err(js_error)?;
+    let mut out = [0u8; pqhybridsign_abi::VRF_OUTPUT_LEN];
+    pqhybridsign_abi::vrf_make_bytes(suite, public_key, input, proof, context, &mut out)
+        .map_err(js_error)?;
+    Ok(Uint8Array::from(&out[..]))
+}
+
+/// A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"`
+/// or `"H6"`), held across calls.
+///
+/// Returned by
+/// [`deriveVrfStatelessKey`](derive_vrf_stateless_key). This key is
+/// disjoint from the identity key that carries an account's rotation and
+/// recovery authority (`pqhs-1l6`): it is derived under a label separate
+/// from the identity key's, so the two never collide, and it has no leaf
+/// counter to fork -- [`prove`](Self::prove) draws only on the few-time
+/// stateless budget the caller's `budget` tracks. It cannot be exported to
+/// bytes; it lives only in wasm memory for the life of the handle.
+///
+/// # `free()` must be called
+///
+/// A caller must call `free()`, call `[Symbol.dispose]()`, or declare the
+/// value with JavaScript `using`. wasm-bindgen registers every handle
+/// with a `FinalizationRegistry` that calls the free function when the
+/// wrapper becomes unreachable, but that release is not under the
+/// caller's control: it may happen at any garbage collection, and it may
+/// never happen at all. A handle dropped without `free()` cannot be
+/// relied on to release its key material.
+#[wasm_bindgen]
+pub struct VrfKey {
+    inner: pqhybridsign_abi::VrfStatelessKey,
+}
+
+#[wasm_bindgen]
+impl VrfKey {
+    /// Evaluate the hybrid VRF, spending one unit of `budget`.
+    ///
+    /// `budget` is a JavaScript object with synchronous `consumed(key)`
+    /// and `record(key, count)` methods, on the same terms
+    /// [`signStateless`](sign_stateless)'s budget is (see the crate
+    /// documentation); `record` must be durable before it returns.
+    ///
+    /// Returns the proof.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the stateless budget is spent
+    /// (`StatelessBudgetExhausted`), or if the store could not durably
+    /// record (`BudgetStoreFailed`). Any exception a budget method itself
+    /// threw is re-thrown unchanged.
+    pub fn prove(&self, budget: &JsValue, input: &[u8]) -> Result<Uint8Array, JsValue> {
+        let mut proof =
+            vec![0u8; pqhybridsign_abi::vrf_proof_len(self.inner.suite()).map_err(js_error)?];
+        let mut budget = JsBudget::new(budget);
+
+        let result = pqhybridsign_abi::vrf_prove_stateless(
+            &self.inner,
+            &mut budget,
+            input,
+            &mut OsRng,
+            &mut proof,
+        );
+
+        if let Some(err) = budget.take_error() {
+            return Err(err);
+        }
+        let n = result.map_err(js_error)?;
+        Ok(Uint8Array::from(&proof[..n]))
+    }
+}
+
+/// Derive a dedicated VRF key for a stateful `suite` (`"H5"` or `"H6"`)
+/// from a 32-byte master seed, disjoint from the identity key
+/// (`pqhs-1l6`).
+///
+/// Returns a plain JavaScript object with two properties: `key`, the
+/// [`VrfKey`] handle -- call `free()` on it when finished -- and
+/// `publicKey`, the verify-form public key [`vrfVerify`](vrf_verify)
+/// checks proofs against.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `master` is
+/// not exactly 32 bytes, or if derivation fails.
+#[wasm_bindgen(js_name = deriveVrfStatelessKey)]
+pub fn derive_vrf_stateless_key(suite: &str, master: &[u8]) -> Result<JsValue, JsValue> {
+    let suite = stateful_suite(suite).map_err(js_error)?;
+    let mut master: [u8; pqhybridsign_abi::MASTER_SEED_LEN] = fixed_bytes(master, "master")?;
+    let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(suite)];
+
+    let result = pqhybridsign_abi::VrfStatelessKey::derive(suite, &master, &mut pk);
+    master.zeroize();
+
+    let inner = result.map_err(js_error)?;
+    let key = VrfKey { inner };
+
+    let out = Object::new();
+    Reflect::set(&out, &JsValue::from_str("key"), &JsValue::from(key))?;
+    Reflect::set(
+        &out,
+        &JsValue::from_str("publicKey"),
+        &Uint8Array::from(pk.as_slice()),
+    )?;
+    Ok(out.into())
 }
 
 #[cfg(test)]

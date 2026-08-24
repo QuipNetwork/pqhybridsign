@@ -31,7 +31,9 @@ use zeroize::Zeroizing;
 /// The copy is zeroized when the returned value drops, so a secret key
 /// or seed argument does not linger in this crate's heap after the
 /// call returns. That is the same contract [`crate::stateful::StatefulSecretKey`]
-/// honours with its `Drop` impl.
+/// honours: its `handle` field holds a
+/// `pqhybridsign_abi::StatefulKeyHandle`, which reaches
+/// `pqhybridsign::stateful_composite::SecretKey`'s `ZeroizeOnDrop` wipe.
 ///
 /// # Errors
 ///
