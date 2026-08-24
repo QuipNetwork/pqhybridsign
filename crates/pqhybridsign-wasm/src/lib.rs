@@ -20,7 +20,8 @@
 //! signature, and a leaf spent twice is a total loss of that key's
 //! post-quantum security. The stateful pair has its own entry points --
 //! [`keygen_stateful_from_seed`], [`sign_stateful`], [`sign_stateless`],
-//! [`adopt_key`], [`key_identity`] and [`key_identity_from_secret_key`] --
+//! [`StatefulKey`], [`adopt_key`], [`key_identity`] and
+//! [`key_identity_from_secret_key`] --
 //! and the stateless functions [`sign`], [`sign_deterministic`] and
 //! [`keygen_from_seed`] reject H5 and H6, because a stateless-looking call
 //! that silently spent a leaf would be the worst mistake this binding could
@@ -33,16 +34,23 @@
 //! could be captured by `structuredClone`, serialized with `JSON.stringify`,
 //! sent through a `MessageChannel`, or aliased to a second variable, and any
 //! of those forks the one-time leaf counter exactly as a Rust `Clone` would.
-//! That reasoning is about a *held, mutable key object*. This binding keeps
-//! none, and neither do the C and Python bindings whose functional shape it
-//! mirrors. It is safe for the same reasons they are:
+//! That reasoning is about a *held, mutable key object*. The one-shot
+//! functions still keep none. [`StatefulKey`] is a held object, but it is a
+//! wasm-bindgen wrapper over one Rust value: assignment aliases it,
+//! `structuredClone` cannot fork it, and `free()` releases it. The C and
+//! Python bindings expose the same handle. It is safe for these reasons:
 //!
-//! * A secret key crosses the boundary only as bytes -- the exported blob
-//!   [`keygen_stateful_from_seed`] returns, [`sign_stateful`] reads, and
-//!   [`sign_stateful`] hands forward again as `nextSecretKey`. There is no
-//!   counter object for `structuredClone` to fork, because there is no
-//!   object: the leaf counter lives inside the blob and inside the caller's
-//!   journal, never in a handle this binding hands out.
+//! * On the one-shot path a secret key crosses the boundary only as bytes --
+//!   the exported blob [`keygen_stateful_from_seed`] returns,
+//!   [`sign_stateful`] reads, and [`sign_stateful`] hands forward again as
+//!   `nextSecretKey`. There is no counter object for `structuredClone` to
+//!   fork on that path: the leaf counter lives inside the blob and inside
+//!   the caller's journal.
+//! * [`StatefulKey`] wraps one [`pqhybridsign_abi::StatefulKeyHandle`].
+//!   JavaScript assignment aliases the wrapper; it does not clone the key.
+//!   `structuredClone` and `postMessage` reject a wasm-bindgen class. Call
+//!   `free()` when finished. A handle dropped without `free()` keeps its
+//!   secret key material alive for the life of the instance.
 //! * Durability and fork-detection live in a caller-supplied leaf journal
 //!   (see [`pqhybridsign_abi::LeafJournal`]): a small JavaScript object with
 //!   four methods that [`sign_stateful`] drives. Before any signature
@@ -62,8 +70,9 @@
 //!
 //! # The journal's methods are synchronous
 //!
-//! [`sign_stateful`] calls `journal.commit(leaf)` and must see it return
-//! before it builds the signature -- the persist-before-release ordering
+//! [`sign_stateful`] and [`StatefulKey::sign_stateful`] call
+//! `journal.commit(leaf)` and must see it return
+//! before they build the signature -- the persist-before-release ordering
 //! `pqhybridsign_abi::sign_stateful` documents. Its four methods
 //! (`commit`, `nextLeaf`, `boundKey`, `bindKey`) are therefore ordinary
 //! synchronous calls, exactly as the C binding's function pointers and the
@@ -121,16 +130,16 @@
 //! bad input.
 //!
 //! A trap skips Rust's normal unwind cleanup, so a host cannot assume the
-//! instance's internal state is sound afterward. This crate holds no state
-//! of its own across calls -- every export is a plain function over its
-//! arguments, with no `static` or thread-local data -- so a trap here
-//! cannot leave one of this crate's own locks or half-built values behind
-//! for a later call to observe; that says nothing about the wasm allocator
-//! or the `wasm-bindgen` runtime the instance also carries, which this
-//! crate does not own and cannot vouch for. A host that must survive a
-//! panic here should still instantiate the module in a context it can
-//! discard and recreate, such as a dedicated worker, rather than rely on
-//! the instance remaining usable.
+//! instance's internal state is sound afterward. This crate holds no
+//! `static` or thread-local data across calls. Live [`StatefulKey`]
+//! instances hold an imported key in wasm memory; a trap invalidates them
+//! along with the instance. A trap here cannot leave a lock or half-built
+//! value behind for a later call to observe; that says nothing about the
+//! wasm allocator or the `wasm-bindgen` runtime the instance also carries,
+//! which this crate does not own and cannot vouch for. A host that must
+//! survive a panic here should still instantiate the module in a context
+//! it can discard and recreate, such as a dedicated worker, rather than
+//! rely on the instance remaining usable.
 //!
 //! The npm package wraps this. Its `createApi` catches a
 //! `WebAssembly.RuntimeError`, discards the instance, and rethrows a
@@ -169,7 +178,8 @@ use std::cell::RefCell;
 
 use js_sys::{Function, Reflect, Uint8Array};
 use pqhybridsign_abi::{
-    BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, KEY_IDENTITY_LEN,
+    sign_stateful_with_handle, sign_stateless_with_handle, BudgetKey, KeyIdentity, LeafJournal,
+    StatefulKeyHandle, StatelessBudgetStore, KEY_IDENTITY_LEN,
 };
 use rand_core::OsRng;
 use wasm_bindgen::prelude::*;
@@ -215,6 +225,7 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// Every stateful-only entry point routes through this:
 /// [`keygenStatefulFromSeed`](keygen_stateful_from_seed),
 /// [`signStateful`](sign_stateful), [`signStateless`](sign_stateless),
+/// [`StatefulKey::open`],
 /// [`keyIdentity`](key_identity),
 /// [`keyIdentityFromSecretKey`](key_identity_from_secret_key),
 /// [`verifyStateful`](verify_stateful), [`verifyStateless`](verify_stateless),
@@ -1215,6 +1226,180 @@ pub fn sign_stateless(
     }
     let n = result.map_err(js_error)?;
     Ok(Uint8Array::from(&sig[..n]))
+}
+
+/// An imported stateful secret key, held across signing calls.
+///
+/// [`sign_stateful`] takes the exported blob and calls
+/// `SecretKey::import` every time. `import` re-derives the hypertree
+/// root, which at the 128s profiles costs about 47 seconds, the same walk
+/// as keygen. A caller that signs more than once pays it more than once.
+/// This type pays it exactly once, in [`StatefulKey::open`], and every
+/// later signature costs what the in-process Rust API costs.
+///
+/// # The durability contract is unchanged
+///
+/// The handle advances the key in memory. It does not persist anything.
+/// After [`sign_stateful`](Self::sign_stateful) returns, **whether it
+/// returned a signature or threw**, this handle holds the advanced key
+/// and the caller must [`export`](Self::export) it and persist the result
+/// before relying on any signature. The reason is the one
+/// [`sign_stateful`] documents: a leaf can be durably committed to the
+/// journal and the signature still fail, and a caller whose stored key
+/// did not advance with the journal is a caller whose next call is
+/// refused for the rest of the key's life.
+///
+/// A handle is not a substitute for the journal. The journal is the
+/// durable record of spent leaves and the only thing that survives a
+/// crash.
+///
+/// # `free()` must be called
+///
+/// A caller must call `free()`, call `[Symbol.dispose]()`, or declare
+/// the value with JavaScript `using`. The key lives in wasm memory, which
+/// JavaScript garbage collection does not reach, so a handle that is
+/// dropped without `free()` keeps its secret key material alive for the
+/// life of the instance.
+///
+/// # Only H5 and H6
+///
+/// H1 through H4 are stateless and have nothing to hold open;
+/// [`open`](Self::open) rejects them.
+#[wasm_bindgen]
+pub struct StatefulKey {
+    inner: StatefulKeyHandle,
+}
+
+#[wasm_bindgen]
+impl StatefulKey {
+    /// Import `secret_key` once and hold it.
+    ///
+    /// This is the call that costs about 47 seconds at the 128s profiles.
+    /// Every signature taken through the returned handle costs under 0.01
+    /// seconds.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if
+    /// `secret_key` is not `secretKeyLen(suite)` bytes, or if the blob
+    /// does not import.
+    pub fn open(suite: &str, secret_key: Vec<u8>) -> Result<Self, JsValue> {
+        let suite = stateful_suite(suite).map_err(js_error)?;
+        let mut secret_key = secret_key;
+        let result = StatefulKeyHandle::open(suite, &secret_key).map(|inner| Self { inner });
+        secret_key.zeroize();
+        result.map_err(js_error)
+    }
+
+    /// The 32-byte identity of the key this handle holds.
+    ///
+    /// The value [`adopt_key`] takes. Derived from the cached post-quantum
+    /// verify key, which is public; no secret byte reaches it.
+    #[wasm_bindgen(js_name = keyIdentity)]
+    #[must_use]
+    pub fn key_identity(&self) -> Uint8Array {
+        let identity = self.inner.key_identity();
+        Uint8Array::from(&identity.as_bytes()[..])
+    }
+
+    /// The current exported blob, exactly `secretKeyLen(suite)` bytes.
+    ///
+    /// Persist this after every [`sign_stateful`](Self::sign_stateful)
+    /// call, including one that threw; see the type documentation.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the key does not export.
+    pub fn export(&self) -> Result<Uint8Array, JsValue> {
+        let mut sk_out = vec![0u8; pqhybridsign_abi::secret_key_len(self.inner.suite())];
+        let result = self.inner.export(&mut sk_out);
+        match result {
+            Ok(n) => {
+                let out = Uint8Array::from(&sk_out[..n]);
+                sk_out.zeroize();
+                Ok(out)
+            }
+            Err(e) => {
+                sk_out.zeroize();
+                Err(js_error(e))
+            }
+        }
+    }
+
+    /// Sign `msg` under `ctx`, spending one leaf recorded through
+    /// `journal`.
+    ///
+    /// The handle-held counterpart of [`sign_stateful`]. The signature is
+    /// returned; the advanced key stays in this handle. **Export and
+    /// persist it before relying on the signature**, including when this
+    /// method throws.
+    ///
+    /// `journal` is a JavaScript object with the four synchronous methods
+    /// the crate documentation describes; it must already be bound to
+    /// this key ([`adopt_key`]).
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the key's leaf budget is spent
+    /// (`LeavesExhausted`), if `journal` is not this key's journal
+    /// (`JournalKeyMismatch`), if the key and journal counters disagree
+    /// (`CountersDiverged`), or if the journal could not durably commit
+    /// (`JournalFailed`). Any exception a journal method itself threw is
+    /// re-thrown unchanged.
+    #[wasm_bindgen(js_name = signStateful)]
+    pub fn sign_stateful(
+        &mut self,
+        journal: &JsValue,
+        msg: &[u8],
+        ctx: &[u8],
+    ) -> Result<Uint8Array, JsValue> {
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(self.inner.suite())];
+        let mut journal = JsJournal::new(journal);
+
+        let result = sign_stateful_with_handle(&mut self.inner, &mut journal, msg, ctx, &mut sig);
+
+        if let Some(err) = journal.take_error() {
+            return Err(err);
+        }
+
+        let n = result.map_err(js_error)?;
+        Ok(Uint8Array::from(&sig[..n]))
+    }
+
+    /// Sign `msg` under `ctx` without spending a leaf, spending one unit
+    /// of the few-time stateless budget instead.
+    ///
+    /// The handle-held counterpart of [`sign_stateless`]. The key is not
+    /// advanced, so there is nothing new to export afterwards. `budget`
+    /// is a JavaScript object with synchronous `consumed(key)` and
+    /// `record(key, count)` methods, and `record` must be durable before
+    /// it returns, on the same terms `journal.commit` is.
+    ///
+    /// # Errors
+    ///
+    /// A JavaScript `Error` if the stateless budget is spent
+    /// (`StatelessBudgetExhausted`), or if the store could not durably
+    /// record (`BudgetStoreFailed`). Any exception a budget method itself
+    /// threw is re-thrown unchanged.
+    #[wasm_bindgen(js_name = signStateless)]
+    pub fn sign_stateless(
+        &self,
+        budget: &JsValue,
+        msg: &[u8],
+        ctx: &[u8],
+    ) -> Result<Uint8Array, JsValue> {
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(self.inner.suite())];
+        let mut budget = JsBudget::new(budget);
+
+        let result = sign_stateless_with_handle(&self.inner, &mut budget, msg, ctx, &mut sig);
+
+        if let Some(err) = budget.take_error() {
+            return Err(err);
+        }
+
+        let n = result.map_err(js_error)?;
+        Ok(Uint8Array::from(&sig[..n]))
+    }
 }
 
 #[cfg(test)]

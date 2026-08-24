@@ -60,6 +60,124 @@ export class SignStatefulResult {
 }
 
 /**
+ * An imported stateful secret key, held across signing calls.
+ *
+ * [`sign_stateful`] takes the exported blob and calls
+ * `SecretKey::import` every time. `import` re-derives the hypertree
+ * root, which at the 128s profiles costs about 47 seconds, the same walk
+ * as keygen. A caller that signs more than once pays it more than once.
+ * This type pays it exactly once, in [`StatefulKey::open`], and every
+ * later signature costs what the in-process Rust API costs.
+ *
+ * # The durability contract is unchanged
+ *
+ * The handle advances the key in memory. It does not persist anything.
+ * After [`sign_stateful`](Self::sign_stateful) returns, **whether it
+ * returned a signature or threw**, this handle holds the advanced key
+ * and the caller must [`export`](Self::export) it and persist the result
+ * before relying on any signature. The reason is the one
+ * [`sign_stateful`] documents: a leaf can be durably committed to the
+ * journal and the signature still fail, and a caller whose stored key
+ * did not advance with the journal is a caller whose next call is
+ * refused for the rest of the key's life.
+ *
+ * A handle is not a substitute for the journal. The journal is the
+ * durable record of spent leaves and the only thing that survives a
+ * crash.
+ *
+ * # `free()` must be called
+ *
+ * A caller must call `free()`, call `[Symbol.dispose]()`, or declare
+ * the value with JavaScript `using`. The key lives in wasm memory, which
+ * JavaScript garbage collection does not reach, so a handle that is
+ * dropped without `free()` keeps its secret key material alive for the
+ * life of the instance.
+ *
+ * # Only H5 and H6
+ *
+ * H1 through H4 are stateless and have nothing to hold open;
+ * [`open`](Self::open) rejects them.
+ */
+export class StatefulKey {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * The current exported blob, exactly `secretKeyLen(suite)` bytes.
+     *
+     * Persist this after every [`sign_stateful`](Self::sign_stateful)
+     * call, including one that threw; see the type documentation.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the key does not export.
+     */
+    export(): Uint8Array;
+    /**
+     * The 32-byte identity of the key this handle holds.
+     *
+     * The value [`adopt_key`] takes. Derived from the cached post-quantum
+     * verify key, which is public; no secret byte reaches it.
+     */
+    keyIdentity(): Uint8Array;
+    /**
+     * Import `secret_key` once and hold it.
+     *
+     * This is the call that costs about 47 seconds at the 128s profiles.
+     * Every signature taken through the returned handle costs under 0.01
+     * seconds.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if
+     * `secret_key` is not `secretKeyLen(suite)` bytes, or if the blob
+     * does not import.
+     */
+    static open(suite: string, secret_key: Uint8Array): StatefulKey;
+    /**
+     * Sign `msg` under `ctx`, spending one leaf recorded through
+     * `journal`.
+     *
+     * The handle-held counterpart of [`sign_stateful`]. The signature is
+     * returned; the advanced key stays in this handle. **Export and
+     * persist it before relying on the signature**, including when this
+     * method throws.
+     *
+     * `journal` is a JavaScript object with the four synchronous methods
+     * the crate documentation describes; it must already be bound to
+     * this key ([`adopt_key`]).
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the key's leaf budget is spent
+     * (`LeavesExhausted`), if `journal` is not this key's journal
+     * (`JournalKeyMismatch`), if the key and journal counters disagree
+     * (`CountersDiverged`), or if the journal could not durably commit
+     * (`JournalFailed`). Any exception a journal method itself threw is
+     * re-thrown unchanged.
+     */
+    signStateful(journal: any, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
+    /**
+     * Sign `msg` under `ctx` without spending a leaf, spending one unit
+     * of the few-time stateless budget instead.
+     *
+     * The handle-held counterpart of [`sign_stateless`]. The key is not
+     * advanced, so there is nothing new to export afterwards. `budget`
+     * is a JavaScript object with synchronous `consumed(key)` and
+     * `record(key, count)` methods, and `record` must be durable before
+     * it returns, on the same terms `journal.commit` is.
+     *
+     * # Errors
+     *
+     * A JavaScript `Error` if the stateless budget is spent
+     * (`StatelessBudgetExhausted`), or if the store could not durably
+     * record (`BudgetStoreFailed`). Any exception a budget method itself
+     * threw is re-thrown unchanged.
+     */
+    signStateless(budget: any, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
+}
+
+/**
  * Bind `journal` to the key `identity` names, unless it already belongs to a
  * different key.
  *

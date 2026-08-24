@@ -24,7 +24,9 @@ export type {
   RawKeyPair,
   RawModule,
   RawSignStatefulResult,
+  RawStatefulKey,
   SignStatefulResult,
+  StatefulKeyHandle,
   StatelessBudgetStore,
   Suite,
 } from "./api.js";
@@ -57,6 +59,7 @@ export const {
   sign,
   signDeterministic,
   keygenStatefulFromSeed,
+  openStatefulKey,
   keyIdentity,
   keyIdentityFromSecretKey,
   adoptKey,

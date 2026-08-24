@@ -132,3 +132,33 @@ test("profileName resolves to a non-empty string", async () => {
   assert.equal(typeof name, "string");
   assert.ok(name.length > 0);
 });
+
+test("a stateful key handle signs twice and both signatures verify", async () => {
+  const suite = "H5";
+  const { publicKey, secretKey } = await pqhs.keygenStatefulFromSeed(suite, seed(0x21), 4);
+
+  const key = await pqhs.openStatefulKey(suite, secretKey);
+  try {
+    const journal = new MemoryLeafJournal();
+    await pqhs.adoptKey(journal, await key.keyIdentity());
+
+    const before = await key.export();
+    assert.deepEqual(before, secretKey);
+
+    const sig1 = await key.signStateful(journal, MSG, CTX);
+    assert.equal(await pqhs.verify(suite, publicKey, MSG, CTX, sig1), true);
+
+    const after = await key.export();
+    assert.notDeepEqual(after, before, "the key did not advance");
+
+    const sig2 = await key.signStateful(journal, MSG2, CTX);
+    assert.equal(await pqhs.verify(suite, publicKey, MSG2, CTX, sig2), true);
+    assert.notDeepEqual(sig1, sig2);
+  } finally {
+    key.free();
+  }
+});
+
+test("a stateful key handle rejects a stateless suite", async () => {
+  await assert.rejects(() => pqhs.openStatefulKey("H1", new Uint8Array(32)));
+});

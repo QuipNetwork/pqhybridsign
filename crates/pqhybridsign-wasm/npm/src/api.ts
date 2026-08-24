@@ -83,6 +83,35 @@ export interface SignStatefulResult {
 }
 
 /**
+ * An imported stateful secret key, held across signing calls.
+ *
+ * `signStateful` on the module-level API imports the exported blob on
+ * every call. That import re-derives the hypertree root, which at the
+ * 128s profiles costs about 47 seconds. A handle pays it once, at
+ * {@link PqHybridSignApi.openStatefulKey}.
+ *
+ * Call {@link free} when finished. The key lives in wasm memory, which
+ * JavaScript garbage collection does not reach, so a handle that is
+ * dropped without `free()` keeps its secret key material alive for the
+ * life of the module instance.
+ *
+ * The durability contract is unchanged. After every {@link signStateful}
+ * call, including one that rejected, call {@link export} and persist the
+ * result before relying on the signature.
+ */
+export interface StatefulKeyHandle {
+  keyIdentity(): Promise<Uint8Array>;
+  export(): Promise<Uint8Array>;
+  signStateful(journal: LeafJournal, msg: Uint8Array, ctx: Uint8Array): Promise<Uint8Array>;
+  signStateless(
+    budget: StatelessBudgetStore,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): Promise<Uint8Array>;
+  free(): void;
+}
+
+/**
  * The wasm-bindgen `KeyPair` class as `keygenFromSeed` and
  * `keygenStatefulFromSeed` on the raw module return it: a disposable handle
  * over wasm-owned memory, not a plain object. See
@@ -106,6 +135,23 @@ export interface RawSignStatefulResult {
 }
 
 /**
+ * The wasm-bindgen `StatefulKey` class as `StatefulKey.open` on the raw
+ * module returns it: a disposable handle over wasm-owned memory. See
+ * `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
+ */
+export interface RawStatefulKey {
+  keyIdentity(): Uint8Array;
+  export(): Uint8Array;
+  signStateful(journal: LeafJournal, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
+  signStateless(
+    budget: StatelessBudgetStore,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): Uint8Array;
+  free(): void;
+}
+
+/**
  * The function surface both wasm-pack targets expose once loaded, typed
  * from the checked-in `npm/types/pqhybridsign_wasm.{node,web}.d.ts`
  * (identical across both targets apart from the `web` target's extra
@@ -114,6 +160,9 @@ export interface RawSignStatefulResult {
  * interface has no need of).
  */
 export interface RawModule {
+  StatefulKey: {
+    open(suite: string, secretKey: Uint8Array): RawStatefulKey;
+  };
   keygenFromSeed(suite: string, seed: Uint8Array): RawKeyPair;
   keygenStatefulFromSeed(
     suite: string,
@@ -175,8 +224,9 @@ export interface RawModule {
  * H1 through H4 are stateless: `keygenFromSeed`, `sign` and
  * `signDeterministic` handle them, and reject H5 and H6, because a
  * stateless-looking call must never silently spend a one-time leaf. H5 and
- * H6 are stateful: `keygenStatefulFromSeed`, `signStateful`, `signStateless`,
- * `adoptKey`, `keyIdentity` and `keyIdentityFromSecretKey` handle them, and
+ * H6 are stateful: `keygenStatefulFromSeed`, `openStatefulKey`,
+ * `signStateful`, `signStateless`, `adoptKey`, `keyIdentity` and
+ * `keyIdentityFromSecretKey` handle them, and
  * reject H1 through H4. `verify`, `verifyWithStoredPublicKey` and the four
  * length accessors span all six suites. Each method resolves or rejects
  * exactly as the underlying wasm-bindgen export would return or throw,
@@ -202,6 +252,7 @@ export interface PqHybridSignApi {
     seed: Uint8Array,
     maxStatefulSignatures: number,
   ): Promise<KeyPair>;
+  openStatefulKey(suite: Suite, secretKey: Uint8Array): Promise<StatefulKeyHandle>;
   keyIdentity(suite: Suite, publicKey: Uint8Array): Promise<Uint8Array>;
   keyIdentityFromSecretKey(suite: Suite, secretKey: Uint8Array): Promise<Uint8Array>;
   adoptKey(journal: LeafJournal, identity: Uint8Array): Promise<void>;
@@ -364,6 +415,29 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
         } finally {
           pair.free();
         }
+      });
+    },
+
+    async openStatefulKey(suite, secretKey) {
+      return guard((raw) => {
+        const inner = raw.StatefulKey.open(suite, secretKey);
+        return {
+          async keyIdentity() {
+            return guard(() => inner.keyIdentity());
+          },
+          async export() {
+            return guard(() => inner.export());
+          },
+          async signStateful(journal, msg, ctx) {
+            return guard(() => inner.signStateful(journal, msg, ctx));
+          },
+          async signStateless(budget, msg, ctx) {
+            return guard(() => inner.signStateless(budget, msg, ctx));
+          },
+          free() {
+            inner.free();
+          },
+        };
       });
     },
 
