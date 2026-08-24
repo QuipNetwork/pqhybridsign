@@ -190,6 +190,16 @@ pub unsafe extern "C" fn pqhs_vrf_prove_deterministic(
 /// one case that cannot fail closed is a null `valid_out` itself, which is
 /// rejected before any other check.
 ///
+/// `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
+/// [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
+/// the capacity of the buffer that held it. For H1, H3, H5 and H6 those are
+/// the same number, because [`crate::pqhs_vrf_proof_len`] is exact for
+/// those suites. For H2 and H4, [`crate::pqhs_vrf_proof_len`] reports only a
+/// maximum, and passing that maximum here instead of `*proof_written`
+/// verifies a proof that is not the one produced: this function fails
+/// closed on it, the same as any other malformed `proof`, with no error
+/// code naming the cause.
+///
 /// # Errors
 ///
 /// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
@@ -258,6 +268,13 @@ pub unsafe extern "C" fn pqhs_vrf_verify(
 /// `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
 /// evaluation can feed two consumers without either learning the other's
 /// value early.
+///
+/// `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
+/// [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
+/// the capacity of the buffer that held it, on the same terms as
+/// [`pqhs_vrf_verify`]'s `proof_len`. Passing
+/// [`crate::pqhs_vrf_proof_len`]'s maximum for H2 or H4 instead derives
+/// bytes from the wrong proof.
 ///
 /// # Errors
 ///
@@ -413,6 +430,14 @@ pub unsafe extern "C" fn pqhs_vrf_key_derive(
             Ok(s) => s,
             Err(e) => return e,
         };
+        // Checked here rather than left to `VrfStatelessKey::derive`, which
+        // only checks it after running a full keygen: at the 128s profiles
+        // that is roughly 47 seconds, so a caller who sized `pk_out` for
+        // the wrong suite would see a hang before an error, not instead of
+        // one.
+        if pk_out.len() != pqhybridsign_abi::public_key_len(suite) {
+            return PQHS_ERR_BAD_LENGTH;
+        }
         match VrfStatelessKey::derive(suite, master, pk_out) {
             Ok(inner) => {
                 let raw = Box::into_raw(Box::new(PqhsVrfKey { inner }));
@@ -1017,6 +1042,109 @@ mod tests {
                 PQHS_ERR_NULL_POINTER,
                 "null out (key handle)"
             );
+
+            // `pqhs_vrf_prove_stateless` has the most pointer parameters of
+            // any entry point in this file and is the only one taking a
+            // callback vtable, so its null and incomplete-vtable cases need
+            // a real handle -- the checks above run before a handle would
+            // ever be dereferenced, but these run after.
+            BUDGET.with(|b| b.borrow_mut().clear());
+            let mut real_pk =
+                vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H5)];
+            let mut real_key: *mut PqhsVrfKey = std::ptr::null_mut();
+            let master = [9u8; 32];
+            assert_eq!(
+                pqhs_vrf_key_derive(
+                    5,
+                    master.as_ptr(),
+                    master.len(),
+                    real_pk.as_mut_ptr(),
+                    real_pk.len(),
+                    &mut real_key,
+                ),
+                PQHS_OK
+            );
+            let budget = test_budget();
+            assert_eq!(
+                pqhs_vrf_prove_stateless(
+                    std::ptr::null(),
+                    &budget,
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_mut_ptr(),
+                    proof.len(),
+                    &mut written,
+                ),
+                PQHS_ERR_NULL_POINTER,
+                "null key (prove_stateless)"
+            );
+            assert_eq!(
+                pqhs_vrf_prove_stateless(
+                    real_key,
+                    std::ptr::null(),
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_mut_ptr(),
+                    proof.len(),
+                    &mut written,
+                ),
+                PQHS_ERR_NULL_POINTER,
+                "null budget (prove_stateless)"
+            );
+            assert_eq!(
+                pqhs_vrf_prove_stateless(
+                    real_key,
+                    &budget,
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_mut_ptr(),
+                    proof.len(),
+                    std::ptr::null_mut(),
+                ),
+                PQHS_ERR_NULL_POINTER,
+                "null proof_written (prove_stateless)"
+            );
+            let no_consumed = PqhsStatelessBudget {
+                ctx: std::ptr::null_mut(),
+                consumed: None,
+                record: Some(test_record),
+            };
+            assert_eq!(
+                pqhs_vrf_prove_stateless(
+                    real_key,
+                    &no_consumed,
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_mut_ptr(),
+                    proof.len(),
+                    &mut written,
+                ),
+                PQHS_ERR_NULL_POINTER,
+                "missing consumed callback (prove_stateless)"
+            );
+            let no_record = PqhsStatelessBudget {
+                ctx: std::ptr::null_mut(),
+                consumed: Some(test_consumed),
+                record: None,
+            };
+            assert_eq!(
+                pqhs_vrf_prove_stateless(
+                    real_key,
+                    &no_record,
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_mut_ptr(),
+                    proof.len(),
+                    &mut written,
+                ),
+                PQHS_ERR_NULL_POINTER,
+                "missing record callback (prove_stateless)"
+            );
+            assert!(
+                BUDGET.with(|b| b.borrow().is_empty()),
+                "a refused key, budget or vtable must never reach the store"
+            );
+            pqhs_vrf_key_free(real_key);
         }
     }
 
@@ -1122,6 +1250,16 @@ mod tests {
             )
         };
         assert_eq!(rc, PQHS_OK);
+        // Spending the budget is the entire reason this entry point exists
+        // rather than `pqhs_vrf_prove`: without this assertion, proving and
+        // verifying can both succeed while `spend_stateless_budget` never
+        // runs, and `PQHS_ERR_STATELESS_BUDGET_EXHAUSTED` becomes
+        // unreachable with nothing reporting it.
+        assert_eq!(
+            BUDGET.with(|b| b.borrow().values().copied().sum::<u64>()),
+            1,
+            "the first proof must record one spend"
+        );
 
         let mut valid = false;
         // SAFETY: as above.
@@ -1139,6 +1277,27 @@ mod tests {
         };
         assert_eq!(rc, PQHS_OK);
         assert!(valid);
+
+        // A second proof must advance the spend again, not repeat the
+        // first one's count.
+        // SAFETY: as above.
+        let rc = unsafe {
+            pqhs_vrf_prove_stateless(
+                key_out,
+                &budget,
+                INPUT.as_ptr(),
+                INPUT.len(),
+                proof.as_mut_ptr(),
+                proof.len(),
+                &mut written,
+            )
+        };
+        assert_eq!(rc, PQHS_OK);
+        assert_eq!(
+            BUDGET.with(|b| b.borrow().values().copied().sum::<u64>()),
+            2,
+            "the second proof must advance the recorded spend"
+        );
 
         // SAFETY: `key_out` has not been freed before this call.
         unsafe { pqhs_vrf_key_free(key_out) };

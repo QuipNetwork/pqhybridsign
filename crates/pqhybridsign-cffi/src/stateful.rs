@@ -84,10 +84,16 @@ const _: () = assert!(PQHS_KEY_IDENTITY_LEN == KEY_IDENTITY_LEN);
 /// cached string behind [`pqhs_profile_name`](crate::pqhs_profile_name),
 /// which is initialised once and never mutated.
 ///
-/// [`PqhsStatefulKey`] and [`crate::PqhsVrfKey`] break that isolation on
-/// purpose: an open handle keeps its leaf or stateless-budget state inside
-/// itself rather than in a caller buffer, for as long as it stays open, so
-/// it belongs to one thread at a time. See [`PqhsStatefulKey`]'s own
+/// [`PqhsStatefulKey`] breaks that isolation on purpose: an open handle
+/// keeps its leaf state inside itself rather than in a caller buffer, for
+/// as long as it stays open, so it belongs to one thread at a time. See
+/// [`PqhsStatefulKey`]'s own documentation.
+///
+/// [`crate::PqhsVrfKey`] holds no comparable state of its own: its
+/// few-time budget count lives entirely in the caller's
+/// [`PqhsStatelessBudget`] store, the same as [`pqhs_sign_stateless`] and
+/// [`pqhs_stateful_key_sign_stateless`]. What is not thread-safe there is
+/// the store, not the handle: see [`PqhsStatelessBudget`]'s own
 /// documentation.
 ///
 /// What is *not* thread-safe otherwise is the caller's own journal. Two
@@ -186,10 +192,11 @@ const _: () = assert!(PQHS_BUDGET_KEY_LEN == 32);
 
 /// A caller-owned durable record of how much of the few-time stateless
 /// budget each stateless key material has consumed, passed to
-/// [`pqhs_sign_stateless`].
+/// [`pqhs_sign_stateless`], [`pqhs_stateful_key_sign_stateless`] and
+/// [`crate::pqhs_vrf_prove_stateless`].
 ///
 /// The stateless counterpart of [`PqhsLeafJournal`], and required on the
-/// same terms: [`pqhs_sign_stateless`] cannot be called without one. The
+/// same terms: none of the three can be called without one. The
 /// stateless path has a hard security bound of its own -- `2^20` signatures,
 /// `2^18` under the low-budget profile -- shared with rotation and recovery,
 /// and exceeding it degrades the security assumption of the underlying
@@ -218,14 +225,19 @@ const _: () = assert!(PQHS_BUDGET_KEY_LEN == 32);
 ///
 /// `consumed` and `record` MUST NOT call any `pqhs_*` function, directly or
 /// indirectly, on the same terms as [`PqhsLeafJournal`]'s callbacks: they
-/// run while [`pqhs_sign_stateless`] holds live references to the caller's
-/// `sk` and `sig_out` buffers.
+/// run while the entry point that took them holds live references to its
+/// own caller buffers -- `sk`, `msg`, `ctx` and `sig_out` for
+/// [`pqhs_sign_stateless`]; `msg`, `ctx` and `sig_out` for
+/// [`pqhs_stateful_key_sign_stateless`], whose key is a handle rather than
+/// a buffer; `input` and `proof_out` for
+/// [`crate::pqhs_vrf_prove_stateless`].
 ///
 /// # Threading
 ///
 /// As with [`PqhsLeafJournal`], the callbacks are plain C calls on the
 /// calling thread, and serialising access to the store is the caller's
-/// responsibility. Two threads signing against one unserialised store can
+/// responsibility, whichever of the three entry points above is spending
+/// against it. Two threads spending against one unserialised store can
 /// each read the same count and each write back the same increment, which
 /// loses one spend per race and lets the bound be exceeded.
 #[repr(C)]
@@ -2868,6 +2880,24 @@ mod tests {
     /// the commitment from `pkSeed` and `hypertreeRoot` rather than reading
     /// the value the bundle carries. Test-only: nothing in this crate's
     /// public surface derives the stored form from a verify-form key today.
+    ///
+    /// # Which byte to corrupt, to prove this recomputes rather than reads
+    ///
+    /// The bundle this function reads is laid out `statefulPublicKey(68) ||
+    /// commitment(32) || pkSeed(32) || hypertreeRoot(32)`. Corrupting a byte
+    /// inside the carried `commitment` field (bundle offset 68, composite
+    /// offset `classical_len + 68`) does **not** discriminate a recomputing
+    /// helper from a slicing one: the recomputation reads
+    /// `statefulPublicKey`, `pkSeed` and `hypertreeRoot`, never that field,
+    /// by design, so the output is identical with or without the
+    /// corruption. That corruption only ever proved the *old* slicing
+    /// helper was reading the field; it cannot say anything about this one.
+    ///
+    /// Corrupting a byte inside `pkSeed` instead (bundle offset 100,
+    /// composite offset `classical_len + 100`) does discriminate: `pkSeed`
+    /// feeds the recomputation directly, so a change there must move the
+    /// output. `the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment`
+    /// below pins both directions.
     fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
         let mut stored =
             vec![0u8; pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5)];
@@ -2878,6 +2908,42 @@ mod tests {
         )
         .expect("test-supplied verify-form key must decode");
         stored
+    }
+
+    /// Pins `stored_form`'s recomputation against the natural regression: a
+    /// later "why allocate and call into the ABI for 32 bytes we already
+    /// have" simplification back to
+    /// `verify_public_key[classical_len + 68..][..32]`. Under that slicing
+    /// shape, both assertions below fail, because the sliced byte and the
+    /// corrupted-`pkSeed` byte never interact: the carried commitment
+    /// corruption would flow straight into the output (this test does not
+    /// apply it, since the point is what feeds the *current*, recomputing
+    /// helper), and the `pkSeed` corruption -- which the slicing helper
+    /// never reads -- would leave the output unchanged. See `stored_form`'s
+    /// doc comment for why these are the two offsets that matter.
+    #[test]
+    fn the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment() {
+        let (_sk, pk) = h5_keypair(41);
+        let classical_len =
+            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
+
+        // The carried commitment field: recomputation must ignore it.
+        let mut carried_tampered = pk.clone();
+        carried_tampered[classical_len + 68] ^= 0x01;
+        assert_eq!(
+            stored_form(&carried_tampered),
+            stored_form(&pk),
+            "the carried commitment field must not influence the recomputed stored form"
+        );
+
+        // pkSeed: recomputation must depend on it.
+        let mut pk_seed_tampered = pk.clone();
+        pk_seed_tampered[classical_len + 100] ^= 0x01;
+        assert_ne!(
+            stored_form(&pk_seed_tampered),
+            stored_form(&pk),
+            "pkSeed feeds the recomputation, so corrupting it must move the stored form"
+        );
     }
 
     /// The signer-supplied half: everything after the classical public key.

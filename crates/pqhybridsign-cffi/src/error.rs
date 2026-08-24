@@ -27,9 +27,11 @@ pub const PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL: c_int = 3;
 /// A path-selected signature (H5/H6) carried an unknown selector. Mirrors
 /// `AbiError::BadPathSelector`.
 ///
-/// Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: junction
-/// derivation has no entry point in this crate, so no library code could
-/// ever return it. The number is left unassigned rather than reused by the
+/// Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: the `AbiError`
+/// variant it mirrored no longer exists. Only hard-junction derivation
+/// crosses this boundary ([`crate::pqhs_derive_hard_junction`],
+/// [`crate::pqhs_derive_hard_junction_path`]); soft junctions have no entry
+/// point here. The number is left unassigned rather than reused by the
 /// next code added, so a caller already compiled against an older header
 /// that still branches on `4` keeps reading it as unknown rather than
 /// colliding with a future code's meaning.

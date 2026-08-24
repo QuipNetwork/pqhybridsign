@@ -126,14 +126,19 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * is initialised once and never mutated. The caller's own journal is the
  * part that is not thread-safe: see PqhsLeafJournal.
  *
- * The opaque handles, PqhsStatefulKey and PqhsVrfKey, break that isolation
- * on purpose: leaf state and stateless-budget state live inside an open
- * handle, not in a caller buffer, for as long as the handle stays open. A
- * handle therefore belongs to one thread at a time. Two threads sharing
- * one PqhsStatefulKey, each with its own correctly bound journal, each
- * satisfy the buffer-based rule above and can still be handed the same
- * leaf. Serialising access to one handle across threads is the caller's
- * responsibility, on the same terms as serialising access to one journal.
+ * PqhsStatefulKey breaks that isolation on purpose: its leaf state lives
+ * inside the open handle, not in a caller buffer, for as long as the
+ * handle stays open. It therefore belongs to one thread at a time. Two
+ * threads sharing one PqhsStatefulKey, each with its own correctly bound
+ * journal, each satisfy the buffer-based rule above and can still be
+ * handed the same leaf. Serialising access to one handle across threads
+ * is the caller's responsibility, on the same terms as serialising access
+ * to one journal.
+ *
+ * PqhsVrfKey holds no comparable state of its own: its few-time budget
+ * count lives entirely in the caller's PqhsStatelessBudget store, the same
+ * as pqhs_sign_stateless and pqhs_stateful_key_sign_stateless. What is not
+ * thread-safe there is the store, not the handle: see PqhsStatelessBudget.
  *
  * --- No panics cross this boundary ---
  *

@@ -124,14 +124,19 @@
  * is initialised once and never mutated. The caller's own journal is the
  * part that is not thread-safe: see PqhsLeafJournal.
  *
- * The opaque handles, PqhsStatefulKey and PqhsVrfKey, break that isolation
- * on purpose: leaf state and stateless-budget state live inside an open
- * handle, not in a caller buffer, for as long as the handle stays open. A
- * handle therefore belongs to one thread at a time. Two threads sharing
- * one PqhsStatefulKey, each with its own correctly bound journal, each
- * satisfy the buffer-based rule above and can still be handed the same
- * leaf. Serialising access to one handle across threads is the caller's
- * responsibility, on the same terms as serialising access to one journal.
+ * PqhsStatefulKey breaks that isolation on purpose: its leaf state lives
+ * inside the open handle, not in a caller buffer, for as long as the
+ * handle stays open. It therefore belongs to one thread at a time. Two
+ * threads sharing one PqhsStatefulKey, each with its own correctly bound
+ * journal, each satisfy the buffer-based rule above and can still be
+ * handed the same leaf. Serialising access to one handle across threads
+ * is the caller's responsibility, on the same terms as serialising access
+ * to one journal.
+ *
+ * PqhsVrfKey holds no comparable state of its own: its few-time budget
+ * count lives entirely in the caller's PqhsStatelessBudget store, the same
+ * as pqhs_sign_stateless and pqhs_stateful_key_sign_stateless. What is not
+ * thread-safe there is the store, not the handle: see PqhsStatelessBudget.
  *
  * --- No panics cross this boundary ---
  *
@@ -181,9 +186,11 @@
  * A path-selected signature (H5/H6) carried an unknown selector. Mirrors
  * `AbiError::BadPathSelector`.
  *
- * Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: junction
- * derivation has no entry point in this crate, so no library code could
- * ever return it. The number is left unassigned rather than reused by the
+ * Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: the `AbiError`
+ * variant it mirrored no longer exists. Only hard-junction derivation
+ * crosses this boundary ([`crate::pqhs_derive_hard_junction`],
+ * [`crate::pqhs_derive_hard_junction_path`]); soft junctions have no entry
+ * point here. The number is left unassigned rather than reused by the
  * next code added, so a caller already compiled against an older header
  * that still branches on `4` keeps reading it as unknown rather than
  * colliding with a future code's meaning.
@@ -501,10 +508,16 @@ typedef struct PqhsVrfKey PqhsVrfKey;
  * cached string behind [`pqhs_profile_name`](crate::pqhs_profile_name),
  * which is initialised once and never mutated.
  *
- * [`PqhsStatefulKey`] and [`crate::PqhsVrfKey`] break that isolation on
- * purpose: an open handle keeps its leaf or stateless-budget state inside
- * itself rather than in a caller buffer, for as long as it stays open, so
- * it belongs to one thread at a time. See [`PqhsStatefulKey`]'s own
+ * [`PqhsStatefulKey`] breaks that isolation on purpose: an open handle
+ * keeps its leaf state inside itself rather than in a caller buffer, for
+ * as long as it stays open, so it belongs to one thread at a time. See
+ * [`PqhsStatefulKey`]'s own documentation.
+ *
+ * [`crate::PqhsVrfKey`] holds no comparable state of its own: its
+ * few-time budget count lives entirely in the caller's
+ * [`PqhsStatelessBudget`] store, the same as [`pqhs_sign_stateless`] and
+ * [`pqhs_stateful_key_sign_stateless`]. What is not thread-safe there is
+ * the store, not the handle: see [`PqhsStatelessBudget`]'s own
  * documentation.
  *
  * What is *not* thread-safe otherwise is the caller's own journal. Two
@@ -552,10 +565,11 @@ typedef struct {
 /**
  * A caller-owned durable record of how much of the few-time stateless
  * budget each stateless key material has consumed, passed to
- * [`pqhs_sign_stateless`].
+ * [`pqhs_sign_stateless`], [`pqhs_stateful_key_sign_stateless`] and
+ * [`crate::pqhs_vrf_prove_stateless`].
  *
  * The stateless counterpart of [`PqhsLeafJournal`], and required on the
- * same terms: [`pqhs_sign_stateless`] cannot be called without one. The
+ * same terms: none of the three can be called without one. The
  * stateless path has a hard security bound of its own -- `2^20` signatures,
  * `2^18` under the low-budget profile -- shared with rotation and recovery,
  * and exceeding it degrades the security assumption of the underlying
@@ -584,14 +598,19 @@ typedef struct {
  *
  * `consumed` and `record` MUST NOT call any `pqhs_*` function, directly or
  * indirectly, on the same terms as [`PqhsLeafJournal`]'s callbacks: they
- * run while [`pqhs_sign_stateless`] holds live references to the caller's
- * `sk` and `sig_out` buffers.
+ * run while the entry point that took them holds live references to its
+ * own caller buffers -- `sk`, `msg`, `ctx` and `sig_out` for
+ * [`pqhs_sign_stateless`]; `msg`, `ctx` and `sig_out` for
+ * [`pqhs_stateful_key_sign_stateless`], whose key is a handle rather than
+ * a buffer; `input` and `proof_out` for
+ * [`crate::pqhs_vrf_prove_stateless`].
  *
  * # Threading
  *
  * As with [`PqhsLeafJournal`], the callbacks are plain C calls on the
  * calling thread, and serialising access to the store is the caller's
- * responsibility. Two threads signing against one unserialised store can
+ * responsibility, whichever of the three entry points above is spending
+ * against it. Two threads spending against one unserialised store can
  * each read the same count and each write back the same increment, which
  * loses one spend per race and lets the bound be exceeded.
  */
@@ -1740,6 +1759,16 @@ int pqhs_vrf_prove_deterministic(uint8_t suite,
  * one case that cannot fail closed is a null `valid_out` itself, which is
  * rejected before any other check.
  *
+ * `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
+ * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
+ * the capacity of the buffer that held it. For H1, H3, H5 and H6 those are
+ * the same number, because [`crate::pqhs_vrf_proof_len`] is exact for
+ * those suites. For H2 and H4, [`crate::pqhs_vrf_proof_len`] reports only a
+ * maximum, and passing that maximum here instead of `*proof_written`
+ * verifies a proof that is not the one produced: this function fails
+ * closed on it, the same as any other malformed `proof`, with no error
+ * code naming the cause.
+ *
  * # Errors
  *
  * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
@@ -1777,6 +1806,13 @@ int pqhs_vrf_verify(uint8_t suite,
  * `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
  * evaluation can feed two consumers without either learning the other's
  * value early.
+ *
+ * `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
+ * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
+ * the capacity of the buffer that held it, on the same terms as
+ * [`pqhs_vrf_verify`]'s `proof_len`. Passing
+ * [`crate::pqhs_vrf_proof_len`]'s maximum for H2 or H4 instead derives
+ * bytes from the wrong proof.
  *
  * # Errors
  *
