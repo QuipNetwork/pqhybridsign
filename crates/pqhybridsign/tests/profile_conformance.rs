@@ -146,3 +146,41 @@ fn the_blob_layout_is_the_documented_one() {
         "the trailing field is the same verify key the public key carries"
     );
 }
+
+/// The section 7 registry states rotation label lengths as one templated
+/// row with four byte counts, one for each SHRINCS profile. This table is
+/// transcribed from that row by hand.
+///
+/// This is not what `hybrid_stateful_suite!` already checks. That macro
+/// compares each composed label against a `rotate_label_len` literal
+/// written in the same invocation, which proves the composition rule and
+/// the literal agree and nothing more. The table below comes from the
+/// specification instead, so a suite whose literal was changed to match a
+/// changed composition rule still fails here.
+///
+/// One profile compiles per build, so this covers two of the eight
+/// composed labels. The `cross-profile` CI job runs all four profiles,
+/// which covers all eight.
+#[test]
+fn rotate_label_lengths_match_the_specification_row() {
+    let expected = match <ShrincsScheme as PqStatefulScheme>::NAME {
+        "shrincs-256s" => 38,
+        "shrincs-256s-sha2" => 43,
+        "shrincs-128s-q18" => 42,
+        "shrincs-128s-q20" => 42,
+        other => panic!("no specification byte count for profile {other}"),
+    };
+
+    assert_eq!(
+        <H5 as StatefulSuite>::ROTATE_LABEL.len(),
+        expected,
+        "H5 rotate label under {} is not the length section 7 states",
+        <ShrincsScheme as PqStatefulScheme>::NAME
+    );
+    assert_eq!(
+        <H6 as StatefulSuite>::ROTATE_LABEL.len(),
+        expected,
+        "H6 rotate label under {} is not the length section 7 states",
+        <ShrincsScheme as PqStatefulScheme>::NAME
+    );
+}
