@@ -23,10 +23,11 @@
 //! Profile-dependent conformance checks that must run under every active
 //! `profile-*` feature.
 //!
-//! These three tests read verify-only fixture data (`public_key` and the
-//! exported secret-key blob layout). They do not call `keygen`,
-//! `sign_stateless`, or `SecretKey::import`, so they stay under a second
-//! even at the 128s profiles.
+//! The three fixture tests below read verify-only fixture data (`public_key`
+//! and the exported secret-key blob layout). They do not call `keygen`,
+//! `sign_stateless`, or `SecretKey::import`, so they stay under a second even
+//! at the 128s profiles. `rotate_label_lengths_match_the_specification_row`
+//! reads no fixture at all -- it compares compile-time constants.
 
 mod fixture;
 
@@ -158,9 +159,11 @@ fn the_blob_layout_is_the_documented_one() {
 /// specification instead, so a suite whose literal was changed to match a
 /// changed composition rule still fails here.
 ///
-/// One profile compiles per build, so this covers two of the eight
-/// composed labels. The `cross-profile` CI job runs all four profiles,
-/// which covers all eight.
+/// One profile compiles per build, so this covers two of the eight composed
+/// labels. The `profile-matrix` CI job runs the whole crate's tests under
+/// each of the four profile features in turn, which is what covers all
+/// eight. (`cross-profile` is a different job: it runs only the
+/// `cross_profile` test binary and never reaches this file.)
 #[test]
 fn rotate_label_lengths_match_the_specification_row() {
     let expected = match <ShrincsScheme as PqStatefulScheme>::NAME {
