@@ -25,10 +25,12 @@ export type {
   RawModule,
   RawSignStatefulResult,
   RawStatefulKey,
+  RawVrfKey,
   SignStatefulResult,
   StatefulKeyHandle,
   StatelessBudgetStore,
   Suite,
+  VrfKeyHandle,
 } from "./api.js";
 
 function load(): Promise<RawModule> {
@@ -55,6 +57,15 @@ export function __loadForTest(): Promise<RawModule> {
 const api = createApi(load);
 
 export const {
+  masterSeedFromMnemonic,
+  deriveHardJunction,
+  deriveHardJunctionPath,
+  vrfProofLen,
+  vrfProve,
+  vrfProveDeterministic,
+  vrfVerify,
+  vrfMakeBytes,
+  deriveVrfStatelessKey,
   keygenFromSeed,
   sign,
   signDeterministic,

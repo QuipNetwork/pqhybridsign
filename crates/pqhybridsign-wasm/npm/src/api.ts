@@ -124,6 +124,37 @@ export interface RawKeyPair {
 }
 
 /**
+ * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"` or
+ * `"H6"`), held across calls. Returned by `deriveVrfStatelessKey`.
+ *
+ * This key is disjoint from the identity key that carries an account's
+ * rotation and recovery authority: it is derived under a label separate from
+ * the identity key's, so the two never collide, and it has no leaf counter to
+ * fork -- {@link prove} draws only on the few-time stateless budget the
+ * caller's `budget` tracks. It cannot be exported to bytes; it lives only in
+ * wasm memory for the life of the handle.
+ *
+ * Call {@link free} when finished. The key lives in wasm memory, which
+ * JavaScript garbage collection does not reach, so a handle that is dropped
+ * without `free()` keeps its key material alive for the life of the module
+ * instance.
+ */
+export interface VrfKeyHandle {
+  prove(budget: StatelessBudgetStore, input: Uint8Array): Promise<Uint8Array>;
+  free(): void;
+}
+
+/**
+ * The wasm-bindgen `VrfKey` class as `deriveVrfStatelessKey` on the raw
+ * module returns it: a disposable handle over wasm-owned memory. See
+ * `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
+ */
+export interface RawVrfKey {
+  prove(budget: StatelessBudgetStore, input: Uint8Array): Uint8Array;
+  free(): void;
+}
+
+/**
  * The wasm-bindgen `SignStatefulResult` class as `signStateful` on the raw
  * module returns it: a disposable handle over wasm-owned memory, freed after
  * its two fields are copied out. See `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
@@ -163,6 +194,24 @@ export interface RawModule {
   StatefulKey: {
     open(suite: string, secretKey: Uint8Array): RawStatefulKey;
   };
+  masterSeedFromMnemonic(phrase: string, password?: string): Uint8Array;
+  deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Uint8Array;
+  deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Uint8Array;
+  vrfProofLen(suite: string): number;
+  vrfProve(suite: string, secretKey: Uint8Array, input: Uint8Array): Uint8Array;
+  vrfProveDeterministic(suite: string, secretKey: Uint8Array, input: Uint8Array): Uint8Array;
+  vrfVerify(suite: string, publicKey: Uint8Array, input: Uint8Array, proof: Uint8Array): boolean;
+  vrfMakeBytes(
+    suite: string,
+    publicKey: Uint8Array,
+    input: Uint8Array,
+    proof: Uint8Array,
+    context: Uint8Array,
+  ): Uint8Array;
+  deriveVrfStatelessKey(
+    suite: string,
+    master: Uint8Array,
+  ): { key: RawVrfKey; publicKey: Uint8Array };
   keygenFromSeed(suite: string, seed: Uint8Array): RawKeyPair;
   keygenStatefulFromSeed(
     suite: string,
@@ -233,11 +282,48 @@ export interface RawModule {
  * except that a WebAssembly trap is rethrown as {@link PqHybridSignPanic}
  * and the cached instance is discarded.
  *
+ * `masterSeedFromMnemonic`, `deriveHardJunction` and `deriveHardJunctionPath`
+ * derive master seeds from a recovery phrase or an existing seed; see
+ * `deriveHardJunction`'s documentation for the re-keygen hazard a derived
+ * child carries. `vrfProofLen`, `vrfProve`, `vrfProveDeterministic`,
+ * `vrfVerify` and `vrfMakeBytes` cover the hybrid VRF for H1 through H4;
+ * `vrfProve` and `vrfProveDeterministic` reject H5 and H6 for the same reason
+ * `sign` and `signDeterministic` do, and `deriveVrfStatelessKey` covers those
+ * two suites instead, through a dedicated key disjoint from the identity key
+ * and a caller-supplied {@link StatelessBudgetStore}.
+ *
  * The stateful signing methods are `async` only because loading the wasm
  * module is; the {@link LeafJournal} and {@link StatelessBudgetStore} a
  * caller passes have synchronous methods (see those types).
  */
 export interface PqHybridSignApi {
+  masterSeedFromMnemonic(phrase: string, password?: string): Promise<Uint8Array>;
+  deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Promise<Uint8Array>;
+  deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Promise<Uint8Array>;
+  vrfProofLen(suite: Suite): Promise<number>;
+  vrfProve(suite: Suite, secretKey: Uint8Array, input: Uint8Array): Promise<Uint8Array>;
+  vrfProveDeterministic(
+    suite: Suite,
+    secretKey: Uint8Array,
+    input: Uint8Array,
+  ): Promise<Uint8Array>;
+  vrfVerify(
+    suite: Suite,
+    publicKey: Uint8Array,
+    input: Uint8Array,
+    proof: Uint8Array,
+  ): Promise<boolean>;
+  vrfMakeBytes(
+    suite: Suite,
+    publicKey: Uint8Array,
+    input: Uint8Array,
+    proof: Uint8Array,
+    context: Uint8Array,
+  ): Promise<Uint8Array>;
+  deriveVrfStatelessKey(
+    suite: Suite,
+    master: Uint8Array,
+  ): Promise<{ key: VrfKeyHandle; publicKey: Uint8Array }>;
   keygenFromSeed(suite: Suite, seed: Uint8Array): Promise<KeyPair>;
   sign(suite: Suite, secretKey: Uint8Array, msg: Uint8Array, ctx: Uint8Array): Promise<Uint8Array>;
   signDeterministic(
@@ -377,6 +463,55 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
   }
 
   return {
+    async masterSeedFromMnemonic(phrase, password) {
+      return guard((raw) => raw.masterSeedFromMnemonic(phrase, password));
+    },
+
+    async deriveHardJunction(parentMaster, chainCode) {
+      return guard((raw) => raw.deriveHardJunction(parentMaster, chainCode));
+    },
+
+    async deriveHardJunctionPath(parentMaster, chainCodes) {
+      return guard((raw) => raw.deriveHardJunctionPath(parentMaster, chainCodes));
+    },
+
+    async vrfProofLen(suite) {
+      return guard((raw) => raw.vrfProofLen(suite));
+    },
+
+    async vrfProve(suite, secretKey, input) {
+      return guard((raw) => raw.vrfProve(suite, secretKey, input));
+    },
+
+    async vrfProveDeterministic(suite, secretKey, input) {
+      return guard((raw) => raw.vrfProveDeterministic(suite, secretKey, input));
+    },
+
+    async vrfVerify(suite, publicKey, input, proof) {
+      return guard((raw) => raw.vrfVerify(suite, publicKey, input, proof));
+    },
+
+    async vrfMakeBytes(suite, publicKey, input, proof, context) {
+      return guard((raw) => raw.vrfMakeBytes(suite, publicKey, input, proof, context));
+    },
+
+    async deriveVrfStatelessKey(suite, master) {
+      return guard((raw) => {
+        const { key: inner, publicKey } = raw.deriveVrfStatelessKey(suite, master);
+        return {
+          key: {
+            async prove(budget, input) {
+              return guard(() => inner.prove(budget, input));
+            },
+            free() {
+              inner.free();
+            },
+          },
+          publicKey,
+        };
+      });
+    },
+
     async keygenFromSeed(suite, seed) {
       return guard((raw) => {
         const pair = raw.keygenFromSeed(suite, seed);
