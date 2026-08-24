@@ -949,24 +949,42 @@ mod tests {
     use crate::budget::BudgetKey;
     use crate::stateful::LeafJournal;
     use alloc::rc::Rc;
-    use core::cell::RefCell;
+    use core::cell::{Cell, RefCell};
     use core::sync::atomic::{AtomicUsize, Ordering};
     use subtle::Choice;
 
-    /// Counts calls into `FakePq::verify_stateful`, so a test can prove the
-    /// post-quantum half is evaluated even when the classical half already
-    /// failed (no short circuit). Global rather than per-instance because
-    /// `FakePq` is a unit struct; other tests in this module also drive it,
-    /// so assertions against this counter only ever check for an increase
-    /// across a call, never an exact value.
-    static VERIFY_STATEFUL_CALLS: AtomicUsize = AtomicUsize::new(0);
+    // Both counters below are thread-local, not global, and that is the whole
+    // point of them. `FakePq` and `FakeSecretKey` are unit structs with no
+    // instance to hang state off, and many tests in this module drive them.
+    // A process-global counter therefore mixes calls from tests that cargo is
+    // running in parallel on other threads, which makes any assertion about
+    // an exact value or an absence of calls fail for reasons unrelated to
+    // what it tests. A `#[test]` body runs on one thread and drives these
+    // fakes synchronously, so a thread-local counter observes that test's own
+    // calls and nothing else.
+    std::thread_local! {
+        /// Counts calls into `FakePq::verify_stateful` made by the current
+        /// test, so a test can prove the post-quantum half is evaluated even
+        /// when the classical half already failed (no short circuit), or that
+        /// it is never reached at all.
+        static VERIFY_STATEFUL_CALLS: Cell<usize> = const { Cell::new(0) };
 
-    /// Counts calls into `FakeSecretKey::zeroize`. Dropping a `SecretKey`
-    /// is the only way a test can observe that the wipe ran, because reading
-    /// the freed buffer afterwards is undefined behaviour. Global for the
-    /// same reason as `VERIFY_STATEFUL_CALLS`, and read the same way: as a
-    /// delta across one drop, never as an exact value.
-    static COMPONENT_WIPES: AtomicUsize = AtomicUsize::new(0);
+        /// Counts calls into `FakeSecretKey::zeroize` made by the current
+        /// test. Dropping a `SecretKey` is the only way a test can observe
+        /// that the wipe ran, because reading the freed buffer afterwards is
+        /// undefined behaviour.
+        static COMPONENT_WIPES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Read a thread-local call counter.
+    fn counter(slot: &'static std::thread::LocalKey<Cell<usize>>) -> usize {
+        slot.with(Cell::get)
+    }
+
+    /// Add one to a thread-local call counter.
+    fn bump(slot: &'static std::thread::LocalKey<Cell<usize>>) {
+        slot.with(|n| n.set(n.get() + 1));
+    }
 
     // A minimal fake `PqStatefulScheme` + `StatefulSuite`, to prove the
     // generic driver's ordering (commit the leaf, then attempt the
@@ -986,7 +1004,7 @@ mod tests {
 
     impl Zeroize for FakeSecretKey {
         fn zeroize(&mut self) {
-            COMPONENT_WIPES.fetch_add(1, Ordering::SeqCst);
+            bump(&COMPONENT_WIPES);
             if let Some(leaf) = self.leaf.as_mut() {
                 leaf.zeroize();
             }
@@ -1105,7 +1123,7 @@ mod tests {
             Ok(1)
         }
         fn verify_stateful(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
-            VERIFY_STATEFUL_CALLS.fetch_add(1, Ordering::SeqCst);
+            bump(&VERIFY_STATEFUL_CALLS);
             Choice::from(1u8)
         }
         fn verify_stateless(_vk: &[u8], _msg: &[u8], _sig: &[u8]) -> Choice {
@@ -1915,12 +1933,12 @@ mod tests {
     /// undefined behaviour.
     #[test]
     fn dropping_a_key_wipes_it() {
-        let before = COMPONENT_WIPES.load(Ordering::SeqCst);
+        let before = counter(&COMPONENT_WIPES);
         {
             let (_sk, _pk) = keygen::<FakeH>(&[11u8; 32], 4).expect("keygen");
         }
         assert!(
-            COMPONENT_WIPES.load(Ordering::SeqCst) > before,
+            counter(&COMPONENT_WIPES) > before,
             "the composite key's Drop must wipe the component half"
         );
     }
@@ -1956,9 +1974,9 @@ mod tests {
         let mut tampered = sig.clone();
         tampered[0] ^= 0x01; // corrupt the classical half only
 
-        let before = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let before = counter(&VERIFY_STATEFUL_CALLS);
         let outcome = FakeH::verify_stateful(&pk, b"ok", b"", &tampered);
-        let after = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let after = counter(&VERIFY_STATEFUL_CALLS);
 
         assert!(!outcome, "a tampered classical half must fail verification");
         assert!(
@@ -2113,15 +2131,43 @@ mod tests {
             .last_mut()
             .expect("a stateless signature is non-empty") ^= 0xFF;
 
-        let before = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let before = counter(&VERIFY_STATEFUL_CALLS);
         assert!(!FakeH::verify_stateful(&pk, b"ok", b"", &valid));
         assert!(!FakeH::verify_stateful(&pk, b"ok", b"", &invalid));
-        let after = VERIFY_STATEFUL_CALLS.load(Ordering::SeqCst);
+        let after = counter(&VERIFY_STATEFUL_CALLS);
 
         assert_eq!(
             before, after,
             "verify_stateful must reject a stateless-path signature by its selector alone, \
              never by running the stateful component check"
+        );
+    }
+
+    /// The assertion above is an exact one: it reads the counter, makes two
+    /// calls, and requires the count not to have moved. That only means
+    /// anything if no other test can move the counter while it runs, and
+    /// cargo runs tests in parallel. This pins the isolation the assertion
+    /// rests on, so a later change back to a process-global counter fails
+    /// here rather than as an intermittent failure somewhere else.
+    #[test]
+    fn a_fake_call_counter_is_private_to_the_thread_that_drove_it() {
+        let before = counter(&VERIFY_STATEFUL_CALLS);
+
+        let counted_elsewhere = std::thread::spawn(|| {
+            bump(&VERIFY_STATEFUL_CALLS);
+            counter(&VERIFY_STATEFUL_CALLS)
+        })
+        .join()
+        .expect("the probe thread must not panic");
+
+        assert_eq!(
+            counted_elsewhere, 1,
+            "the probe thread must see its own call, starting from its own zero"
+        );
+        assert_eq!(
+            counter(&VERIFY_STATEFUL_CALLS),
+            before,
+            "a call counted on another thread must not be visible on this one"
         );
     }
 
