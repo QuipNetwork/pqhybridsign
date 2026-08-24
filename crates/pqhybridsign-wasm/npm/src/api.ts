@@ -96,8 +96,20 @@ export interface SignStatefulResult {
  * life of the module instance.
  *
  * The durability contract is unchanged. After every {@link signStateful}
- * call, including one that rejected, call {@link export} and persist the
- * result before relying on the signature.
+ * call, including one that rejected with an ordinary error, call
+ * {@link export} and persist the result before relying on the signature.
+ *
+ * **A {@link PqHybridSignPanic} is the one rejection that instruction does
+ * not cover.** It means the wasm instance behind this handle trapped, and
+ * this package's own trap documentation says a host cannot assume such an
+ * instance is sound. Once any method here rejects with a
+ * {@link PqHybridSignPanic}, this handle is poisoned: every later call on
+ * it, including {@link export} and {@link free}, rejects or throws the same
+ * {@link PqHybridSignPanic} instead of touching the dead instance, so a
+ * caller cannot accidentally export and persist bytes the trapped instance
+ * produced. There is no advanced key to recover from a poisoned handle;
+ * the caller's leaf journal is the only durable record of which leaf, if
+ * any, was spent before the trap.
  */
 export interface StatefulKeyHandle {
   keyIdentity(): Promise<Uint8Array>;
@@ -556,21 +568,64 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
     async openStatefulKey(suite, secretKey) {
       return guard((raw) => {
         const inner = raw.StatefulKey.open(suite, secretKey);
+
+        // Set the first time any call on this handle traps, and never
+        // cleared: a trap invalidates the instance `inner` points into
+        // (see the crate documentation), so once this handle has seen one,
+        // every later call rejects or throws this same PqHybridSignPanic
+        // instead of touching the dead instance -- most importantly
+        // `export()`, which must never hand back bytes a trapped instance
+        // produced.
+        let poisoned: PqHybridSignPanic | undefined;
+
+        async function guardHandle<T>(call: () => T | Promise<T>): Promise<T> {
+          if (poisoned !== undefined) {
+            throw poisoned;
+          }
+          try {
+            return await guard(call);
+          } catch (err) {
+            if (err instanceof PqHybridSignPanic) {
+              poisoned = err;
+            }
+            throw err;
+          }
+        }
+
         return {
           async keyIdentity() {
-            return guard(() => inner.keyIdentity());
+            return guardHandle(() => inner.keyIdentity());
           },
           async export() {
-            return guard(() => inner.export());
+            return guardHandle(() => inner.export());
           },
           async signStateful(journal, msg, ctx) {
-            return guard(() => inner.signStateful(journal, msg, ctx));
+            return guardHandle(() => inner.signStateful(journal, msg, ctx));
           },
           async signStateless(budget, msg, ctx) {
-            return guard(() => inner.signStateless(budget, msg, ctx));
+            return guardHandle(() => inner.signStateless(budget, msg, ctx));
           },
           free() {
-            inner.free();
+            // Poisoned already: the underlying instance is gone (guard
+            // cleared modulePromise when it first trapped), so there is
+            // nothing left to free -- throw the same panic rather than
+            // call into the dead instance.
+            if (poisoned !== undefined) {
+              throw poisoned;
+            }
+            // free() cannot go through guard/guardHandle: the public
+            // signature is synchronous (`free(): void`), not a Promise.
+            // Contain the trap here instead, on the same terms guard does.
+            try {
+              inner.free();
+            } catch (err) {
+              if (err instanceof WebAssembly.RuntimeError) {
+                modulePromise = undefined;
+                poisoned = new PqHybridSignPanic(err);
+                throw poisoned;
+              }
+              throw err;
+            }
           },
         };
       });

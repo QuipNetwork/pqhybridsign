@@ -48,9 +48,16 @@
 //!   the caller's journal.
 //! * [`StatefulKey`] wraps one [`pqhybridsign_abi::StatefulKeyHandle`].
 //!   JavaScript assignment aliases the wrapper; it does not clone the key.
-//!   `structuredClone` and `postMessage` reject a wasm-bindgen class. Call
-//!   `free()` when finished. A handle dropped without `free()` keeps its
-//!   secret key material alive for the life of the instance.
+//!   `structuredClone` and `postMessage` do not reject a wasm-bindgen class
+//!   -- the structured clone algorithm clones its own enumerable
+//!   properties, here the raw `__wbg_ptr`, into a prototype-less plain
+//!   object in the other realm, dropping the class and therefore every
+//!   method, including `free()`. That is worse than a rejection, not
+//!   better: the clone silently carries a pointer that is meaningless
+//!   outside the instance it came from, and there is no method left on it
+//!   to catch the misuse. Call `free()` when finished, on the original
+//!   handle only. A handle dropped without `free()` keeps its secret key
+//!   material alive for the life of the instance.
 //! * Durability and fork-detection live in a caller-supplied leaf journal
 //!   (see [`pqhybridsign_abi::LeafJournal`]): a small JavaScript object with
 //!   four methods that [`sign_stateful`] drives. Before any signature
