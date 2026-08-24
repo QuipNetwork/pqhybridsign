@@ -37,6 +37,11 @@ test("structuredClone of a raw StatefulKey handle produces an inert plain object
       "the clone carries a callable signStateful",
     );
     assert.equal(typeof clone.free, "undefined", "the clone carries a callable free");
+    assert.equal(
+      typeof clone.__wbg_ptr,
+      "number",
+      "the clone lost the raw pointer field, so it is an empty object rather than a live but classless one",
+    );
 
     const identity = key.keyIdentity();
     assert.equal(identity.length, 32, "the original handle stopped answering after the clone");

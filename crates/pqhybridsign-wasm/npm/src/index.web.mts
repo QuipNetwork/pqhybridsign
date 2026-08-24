@@ -62,6 +62,19 @@ export const {
   masterSeedFromMnemonic,
   deriveHardJunction,
   deriveHardJunctionPath,
+  /**
+   * Length in bytes of a hybrid VRF proof for `suite`.
+   *
+   * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+   * delta-length binding can occupy. For H5 and H6 this is exact. A caller
+   * sizing storage from this value must treat it as an upper bound.
+   *
+   * Kept in sync with the doc on {@link PqHybridSignApi.vrfProofLen} in
+   * `api.ts`: destructuring a named export off `api` does not carry that
+   * doc comment into this file's declaration output, so it is repeated
+   * here for the caller who imports `vrfProofLen` directly rather than
+   * through the default `api` export.
+   */
   vrfProofLen,
   vrfProve,
   vrfProveDeterministic,

@@ -727,16 +727,19 @@ mod tests {
         // under different labels must not collide.
         //
         // The two derivations below also differ in `max_stateful_signatures`
-        // (1 for the VRF path, 4 for the identity path), and that parameter
-        // alone moves the post-quantum half of the composite public key
-        // (StatefulSuite::VERIFY_PUBLIC_KEY_LEN's hypertree-root component
-        // depends on it). Asserting on the full public key would therefore
-        // pass even with the label separation removed entirely, which was
-        // confirmed by running this test with `derive_stateless_vrf_seed`
-        // changed to return `*master` unchanged: it passed. Assert on the
-        // classical half instead, which `max_stateful_signatures` cannot
-        // move: that assertion was confirmed to fail under the same
-        // change, and to pass once the change was reverted.
+        // (1 for the VRF path, 4 for the identity path). The SHRINCS bundle
+        // stores `maxSignatures` verbatim at bundle offset 64
+        // (shrincs/bundle.rs:47, written by `write_bundle` from
+        // `keygen_from_seed` at shrincs/scheme.rs:162-164), so that field
+        // alone moves the post-quantum half of the composite public key --
+        // this is established by reading the bundle format, not by running
+        // anything. Asserting on the full public key would therefore pass
+        // even with the label separation removed entirely, whatever the
+        // seed is. Assert on the classical half instead, which
+        // `max_stateful_signatures` cannot move: that assertion was
+        // confirmed by running this test, with `derive_stateless_vrf_seed`
+        // changed to return `*master` unchanged, to fail under the change,
+        // and to pass once the change was reverted.
         let suite = Suite::H5;
         let master = [13u8; 32];
 

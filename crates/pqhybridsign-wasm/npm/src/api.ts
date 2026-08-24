@@ -341,6 +341,13 @@ export interface PqHybridSignApi {
   masterSeedFromMnemonic(phrase: string, password?: string | null): Promise<Uint8Array>;
   deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Promise<Uint8Array>;
   deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Promise<Uint8Array>;
+  /**
+   * Length in bytes of a hybrid VRF proof for `suite`.
+   *
+   * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+   * delta-length binding can occupy. For H5 and H6 this is exact. A caller
+   * sizing storage from this value must treat it as an upper bound.
+   */
   vrfProofLen(suite: Suite): Promise<number>;
   vrfProve(suite: Suite, secretKey: Uint8Array, input: Uint8Array): Promise<Uint8Array>;
   vrfProveDeterministic(
