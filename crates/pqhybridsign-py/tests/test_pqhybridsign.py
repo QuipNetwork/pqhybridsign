@@ -970,3 +970,12 @@ def test_vrf_stateless_key_derive_rejects_a_wrong_length_master():
     is deliberately kept even though it looks like boilerplate."""
     with pytest.raises(phs.BadLengthError):
         phs.VrfStatelessKey.derive(phs.Suite.H5, bytes(31))
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_stateless_key_derive_rejects_the_suite_before_the_master_length(suite):
+    """`master` is 31 bytes, not the required 32, and `suite` is one this
+    entry point does not serve. Before this fix this call raised
+    BadLengthError; it now raises WrongEntryPointForSuiteError."""
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.VrfStatelessKey.derive(suite, bytes(31))

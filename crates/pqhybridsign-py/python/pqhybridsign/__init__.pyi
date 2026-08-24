@@ -172,6 +172,10 @@ class StatelessBudgetStore(Protocol):
 class StatefulSecretKey:
     """A loaded H5 or H6 secret key.
 
+    The durability contract is unchanged. After every sign_stateful call,
+    including one that raised, call export() and persist the result
+    before relying on the signature.
+
     Bound to a `LeafJournal` at construction, by `keygen_stateful_from_seed`
     or `load_stateful_secret_key`: `sign_stateful` always spends leaves
     through that bound journal, never a fresh one, so it takes no `journal`
@@ -189,9 +193,20 @@ class StatefulSecretKey:
 
     @property
     def suite(self) -> Suite: ...
-    def sign_stateful(self, msg: ReadableBuffer, ctx: ReadableBuffer) -> bytes: ...
+    def sign_stateful(self, msg: ReadableBuffer, ctx: ReadableBuffer) -> bytes:
+        """Sign `msg` under `ctx`, spending one leaf from this key's bound
+        journal.
+
+        After this call, including one that raised, persist `export()`
+        before relying on the signature."""
+
     def sign_stateless(self, msg: ReadableBuffer, ctx: ReadableBuffer) -> bytes: ...
-    def export(self) -> bytes: ...
+    def export(self) -> bytes:
+        """Export this key's current state as bytes.
+
+        Persist this after every `sign_stateful` call, including one that
+        raised. See `StatefulSecretKey`."""
+
     def __copy__(self) -> "StatefulSecretKey": ...
     def __deepcopy__(self, memo: Any) -> "StatefulSecretKey": ...
     def __reduce__(self) -> Any: ...
@@ -540,6 +555,10 @@ class VrfStatelessKey:
     def prove(self, budget: StatelessBudgetStore, input: ReadableBuffer) -> bytes:
         """Evaluate the VRF on `input`, spending one unit of this key's
         few-time stateless budget through `budget`.
+
+        Pass the same durable store on every call for this key. A fresh
+        store on each call restarts the count from empty, so the few-time
+        bound never advances and is exceeded with nothing reporting it.
 
         Raises `StatelessBudgetExhaustedError` if this key's stateless
         budget is spent. Raises `BudgetStoreFailedError` if `budget.record`

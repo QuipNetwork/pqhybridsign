@@ -295,6 +295,18 @@ impl VrfStatelessKey {
         master: &Bound<'_, PyAny>,
     ) -> PyResult<(Self, Py<PyBytes>)> {
         let suite = suite.into();
+        // Checked here, before `master` is converted, because the suite
+        // determines which length is even correct: a length verdict on a
+        // suite this entry point does not serve tells the caller nothing
+        // true. Written in terms of the suites this entry point DOES
+        // serve, so a seventh suite added later is refused by default
+        // rather than admitted by default.
+        if !matches!(
+            suite,
+            pqhybridsign_abi::Suite::H5 | pqhybridsign_abi::Suite::H6
+        ) {
+            return Err(to_py_err(AbiError::WrongEntryPointForSuite));
+        }
         let master = extract_bytes(py, master)?;
         let master: Zeroizing<[u8; MASTER_SEED_LEN]> = Zeroizing::new(
             <[u8; MASTER_SEED_LEN]>::try_from(&master[..])
@@ -315,6 +327,10 @@ impl VrfStatelessKey {
     /// `record(key: bytes, count: int) -> None`, and `record` must not
     /// return until the write is durable -- the same contract
     /// `StatefulSecretKey.sign_stateless`'s `budget` argument carries.
+    ///
+    /// Pass the same durable store on every call for this key. A fresh
+    /// store on each call restarts the count from empty, so the few-time
+    /// bound never advances and is exceeded with nothing reporting it.
     ///
     /// Returns the proof as `bytes`.
     ///
