@@ -77,19 +77,25 @@ const _: () = assert!(PQHS_KEY_IDENTITY_LEN == KEY_IDENTITY_LEN);
 /// [`pqhs_sign_stateful`]; this library starts no threads and hands the
 /// `ctx` pointer to nothing else.
 ///
-/// Every entry point in this library is stateless -- keys, signatures and
-/// leaf state live only in the caller's own buffers, for the duration of
-/// one call -- so calls on different threads over different buffers do not
-/// interact. The one piece of process-wide state is the cached string
-/// behind [`pqhs_profile_name`](crate::pqhs_profile_name), which is
-/// initialised once and never mutated.
+/// Every buffer-based entry point in this library is stateless -- keys,
+/// signatures and leaf state live only in the caller's own buffers, for the
+/// duration of one call -- so calls on different threads over different
+/// buffers do not interact. The one piece of process-wide state is the
+/// cached string behind [`pqhs_profile_name`](crate::pqhs_profile_name),
+/// which is initialised once and never mutated.
 ///
-/// What is *not* thread-safe is the caller's own journal. Two threads
-/// signing with the same journal, or with two copies of the same stateful
-/// secret key, can be handed the same leaf. Serialising access to a journal
-/// and to the key blob it tracks is the caller's responsibility, and it is
-/// not optional: a reused leaf is a total loss of the key's post-quantum
-/// security.
+/// [`PqhsStatefulKey`] and [`crate::PqhsVrfKey`] break that isolation on
+/// purpose: an open handle keeps its leaf or stateless-budget state inside
+/// itself rather than in a caller buffer, for as long as it stays open, so
+/// it belongs to one thread at a time. See [`PqhsStatefulKey`]'s own
+/// documentation.
+///
+/// What is *not* thread-safe otherwise is the caller's own journal. Two
+/// threads signing with the same journal, or with two copies of the same
+/// stateful secret key, can be handed the same leaf. Serialising access to
+/// a journal and to the key blob or handle it tracks is the caller's
+/// responsibility, and it is not optional: a reused leaf is a total loss of
+/// the key's post-quantum security.
 #[repr(C)]
 pub struct PqhsLeafJournal {
     /// Opaque caller state, passed unchanged to every callback.
