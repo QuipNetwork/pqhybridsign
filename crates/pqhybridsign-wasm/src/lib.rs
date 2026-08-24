@@ -36,9 +36,10 @@
 //! of those forks the one-time leaf counter exactly as a Rust `Clone` would.
 //! That reasoning is about a *held, mutable key object*. The one-shot
 //! functions still keep none. [`StatefulKey`] is a held object, but it is a
-//! wasm-bindgen wrapper over one Rust value: assignment aliases it,
-//! `structuredClone` cannot fork it, and `free()` releases it. The C and
-//! Python bindings expose the same handle. It is safe for these reasons:
+//! wasm-bindgen wrapper over one Rust value: assignment aliases it, a
+//! `structuredClone` of it is not a usable second signer, and `free()`
+//! releases it. The C and Python bindings expose the same handle. It is
+//! safe for these reasons:
 //!
 //! * On the one-shot path a secret key crosses the boundary only as bytes --
 //!   the exported blob [`keygen_stateful_from_seed`] returns,
@@ -50,14 +51,16 @@
 //!   JavaScript assignment aliases the wrapper; it does not clone the key.
 //!   `structuredClone` and `postMessage` do not reject a wasm-bindgen class
 //!   -- the structured clone algorithm clones its own enumerable
-//!   properties, here the raw `__wbg_ptr`, into a prototype-less plain
-//!   object in the other realm, dropping the class and therefore every
-//!   method, including `free()`. That is worse than a rejection, not
-//!   better: the clone silently carries a pointer that is meaningless
-//!   outside the instance it came from, and there is no method left on it
-//!   to catch the misuse. Call `free()` when finished, on the original
-//!   handle only. A handle dropped without `free()` keeps its secret key
-//!   material alive for the life of the instance.
+//!   properties, here the raw `__wbg_ptr`, into a plain object in the
+//!   other realm, with no class prototype and therefore no methods,
+//!   including no `free()`. That is worse than a rejection, not better:
+//!   the clone silently carries a pointer that is meaningless outside the
+//!   instance it came from, and there is no method left on it to catch
+//!   the misuse. Call `free()` when finished, on the original handle
+//!   only. Release is not under the caller's control -- wasm-bindgen
+//!   registers the handle with a `FinalizationRegistry` that calls
+//!   `free()` when the wrapper becomes unreachable, but that may happen
+//!   at any garbage collection, or never.
 //! * Durability and fork-detection live in a caller-supplied leaf journal
 //!   (see [`pqhybridsign_abi::LeafJournal`]): a small JavaScript object with
 //!   four methods that [`sign_stateful`] drives. Before any signature
@@ -1324,10 +1327,12 @@ pub fn sign_stateless(
 /// # `free()` must be called
 ///
 /// A caller must call `free()`, call `[Symbol.dispose]()`, or declare
-/// the value with JavaScript `using`. The key lives in wasm memory, which
-/// JavaScript garbage collection does not reach, so a handle that is
-/// dropped without `free()` keeps its secret key material alive for the
-/// life of the instance.
+/// the value with JavaScript `using`. wasm-bindgen registers every
+/// handle with a `FinalizationRegistry` that calls the free function
+/// when the wrapper becomes unreachable, but that release is not under
+/// the caller's control: it may happen at any garbage collection, and
+/// it may never happen at all. A handle dropped without `free()` cannot
+/// be relied on to release its secret key material.
 ///
 /// # Only H5 and H6
 ///
@@ -1597,9 +1602,10 @@ pub fn derive_hard_junction_path(
 // `vrfMakeBytes` span all six suites: verifying and measuring a length
 // spend nothing.
 
-/// Length in bytes of a hybrid VRF proof for `suite`. Total over all six
-/// suites; see `pqhybridsign_abi::vrf_proof_len` for what this length
-/// means for each.
+/// Length in bytes of a hybrid VRF proof for `suite`.
+///
+/// For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+/// delta-length binding can occupy. For H5 and H6 this is exact.
 ///
 /// # Errors
 ///
@@ -1727,10 +1733,12 @@ pub fn vrf_make_bytes(
 /// # `free()` must be called
 ///
 /// A caller must call `free()`, call `[Symbol.dispose]()`, or declare the
-/// value with JavaScript `using`. The key lives in wasm memory, which
-/// JavaScript garbage collection does not reach, so a handle that is
-/// dropped without `free()` keeps its key material alive for the life of
-/// the instance.
+/// value with JavaScript `using`. wasm-bindgen registers every handle
+/// with a `FinalizationRegistry` that calls the free function when the
+/// wrapper becomes unreachable, but that release is not under the
+/// caller's control: it may happen at any garbage collection, and it may
+/// never happen at all. A handle dropped without `free()` cannot be
+/// relied on to release its key material.
 #[wasm_bindgen]
 pub struct VrfKey {
     inner: pqhybridsign_abi::VrfStatelessKey,

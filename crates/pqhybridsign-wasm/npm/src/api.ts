@@ -90,10 +90,12 @@ export interface SignStatefulResult {
  * 128s profiles costs about 47 seconds. A handle pays it once, at
  * {@link PqHybridSignApi.openStatefulKey}.
  *
- * Call {@link free} when finished. The key lives in wasm memory, which
- * JavaScript garbage collection does not reach, so a handle that is
- * dropped without `free()` keeps its secret key material alive for the
- * life of the module instance.
+ * Call {@link free} when finished. wasm-bindgen registers every handle
+ * with a `FinalizationRegistry` that calls the free function when the
+ * wrapper becomes unreachable, but that release is not under the
+ * caller's control: it may happen at any garbage collection, and it may
+ * never happen at all. A handle dropped without `free()` cannot be
+ * relied on to release its secret key material.
  *
  * The durability contract is unchanged. After every {@link signStateful}
  * call, including one that rejected with an ordinary error, call
@@ -146,10 +148,12 @@ export interface RawKeyPair {
  * caller's `budget` tracks. It cannot be exported to bytes; it lives only in
  * wasm memory for the life of the handle.
  *
- * Call {@link free} when finished. The key lives in wasm memory, which
- * JavaScript garbage collection does not reach, so a handle that is dropped
- * without `free()` keeps its key material alive for the life of the module
- * instance.
+ * Call {@link free} when finished. wasm-bindgen registers every handle
+ * with a `FinalizationRegistry` that calls the free function when the
+ * wrapper becomes unreachable, but that release is not under the
+ * caller's control: it may happen at any garbage collection, and it may
+ * never happen at all. A handle dropped without `free()` cannot be
+ * relied on to release its key material.
  *
  * If {@link prove} ever rejects with a {@link PqHybridSignPanic}, this
  * handle is poisoned on the same terms {@link StatefulKeyHandle} is: the
