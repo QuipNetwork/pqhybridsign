@@ -2851,25 +2851,21 @@ mod tests {
         );
     }
 
-    /// Offset of the 32-byte commitment inside a SHRINCS bundle
-    /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`),
-    /// matching the private `BUNDLE_COMMITMENT_OFFSET` constant at
-    /// `crates/pqhybridsign/src/shrincs/scheme.rs:48`. `pqhybridsign_abi`'s
-    /// own unit tests no longer extract this by offset -- they call
-    /// `stateful_composite::PublicKey::stored_form` instead -- but this
-    /// crate still lifts it directly, deliberately parked for separate
-    /// bindings work (`pqhs-0d2`).
-    const COMMITMENT_AT: usize = 68;
-
     /// The small form a verifier installs: the classical public key and the
-    /// commitment, lifted out of a verify-form public key its own keygen
-    /// produced. Test-only: nothing in this crate's public surface derives
-    /// the stored form from a verify-form key today.
+    /// commitment, recomputed from a verify-form public key its own keygen
+    /// produced through `pqhybridsign_abi::stored_public_key`, which derives
+    /// the commitment from `pkSeed` and `hypertreeRoot` rather than reading
+    /// the value the bundle carries. Test-only: nothing in this crate's
+    /// public surface derives the stored form from a verify-form key today.
     fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
-        let classical_len =
-            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
-        let mut stored = verify_public_key[..classical_len].to_vec();
-        stored.extend_from_slice(&verify_public_key[classical_len + COMMITMENT_AT..][..32]);
+        let mut stored =
+            vec![0u8; pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5)];
+        pqhybridsign_abi::stored_public_key(
+            pqhybridsign_abi::Suite::H5,
+            verify_public_key,
+            &mut stored,
+        )
+        .expect("test-supplied verify-form key must decode");
         stored
     }
 
