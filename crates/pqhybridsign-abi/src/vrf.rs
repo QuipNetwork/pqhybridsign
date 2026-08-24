@@ -481,6 +481,7 @@ mod tests {
         keygen_from_seed, public_key_len, secret_key_len, AbiError, BudgetKey,
         StatelessBudgetStore, Suite,
     };
+    use pqhybridsign::component::ClassicalScheme;
     use rand_core::OsRng;
     use std::collections::HashMap;
 
@@ -724,6 +725,18 @@ mod tests {
         // pqhs-1l6: the VRF must not draw on the rotation and recovery
         // budget of the identity key. Two keys derived from one master seed
         // under different labels must not collide.
+        //
+        // The two derivations below also differ in `max_stateful_signatures`
+        // (1 for the VRF path, 4 for the identity path), and that parameter
+        // alone moves the post-quantum half of the composite public key
+        // (StatefulSuite::VERIFY_PUBLIC_KEY_LEN's hypertree-root component
+        // depends on it). Asserting on the full public key would therefore
+        // pass even with the label separation removed entirely, which was
+        // confirmed by running this test with `derive_stateless_vrf_seed`
+        // changed to return `*master` unchanged: it passed. Assert on the
+        // classical half instead, which `max_stateful_signatures` cannot
+        // move: that assertion was confirmed to fail under the same
+        // change, and to pass once the change was reverted.
         let suite = Suite::H5;
         let master = [13u8; 32];
 
@@ -734,7 +747,15 @@ mod tests {
         let mut id_pk = vec![0u8; public_key_len(suite)];
         crate::keygen_stateful_from_seed(suite, &master, 4, &mut id_sk, &mut id_pk).unwrap();
 
-        assert_ne!(vrf_pk, id_pk, "the VRF key collided with the identity key");
+        // `<H5 as StatefulSuite>::Classical::PUBLIC_KEY_LEN`, not a bare
+        // number: this is the classical public key's length, which
+        // `max_stateful_signatures` does not enter into.
+        let classical_len = <<H5 as StatefulSuite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        assert_ne!(
+            &vrf_pk[..classical_len],
+            &id_pk[..classical_len],
+            "the VRF key's classical half collided with the identity key's"
+        );
     }
 
     #[test]

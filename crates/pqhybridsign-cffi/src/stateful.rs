@@ -2886,15 +2886,26 @@ mod tests {
     /// The bundle this function reads is laid out `statefulPublicKey(68) ||
     /// commitment(32) || pkSeed(32) || hypertreeRoot(32)`. Corrupting a byte
     /// inside the carried `commitment` field (bundle offset 68, composite
-    /// offset `classical_len + 68`) does **not** discriminate a recomputing
-    /// helper from a slicing one: the recomputation reads
-    /// `statefulPublicKey`, `pkSeed` and `hypertreeRoot`, never that field,
-    /// by design, so the output is identical with or without the
-    /// corruption. That corruption only ever proved the *old* slicing
-    /// helper was reading the field; it cannot say anything about this one.
+    /// offset `classical_len + 68`) DOES discriminate a recomputing helper
+    /// from a slicing one on this path: `stored_form` compares the helper's
+    /// output directly, with nothing in between to reject the tampered
+    /// bundle first. A slicing helper returns
+    /// `verify_public_key[classical_len + 68..][..32]`, and the corrupted
+    /// byte lies inside that slice, so its output moves and the comparison
+    /// against the honest output fails. Reverting `stored_form` to that
+    /// slicing shape and running this test was recorded doing exactly
+    /// that, failing with a left and right pair differing only at the
+    /// tampered byte (`task-12-report.md:317-333`, repeated at
+    /// `task-9b-report.md:218-236`).
+    ///
+    /// This differs from the Python binding, where the corresponding
+    /// corruption does not discriminate: `test_pqhybridsign.py`'s call to
+    /// `verify_with_stored_public_key_stateless` rejects the tampered
+    /// bundle before `stored` is ever compared, and that guard has no
+    /// counterpart on this path.
     ///
     /// Corrupting a byte inside `pkSeed` instead (bundle offset 100,
-    /// composite offset `classical_len + 100`) does discriminate: `pkSeed`
+    /// composite offset `classical_len + 100`) also discriminates: `pkSeed`
     /// feeds the recomputation directly, so a change there must move the
     /// output. `the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment`
     /// below pins both directions.
@@ -2914,13 +2925,16 @@ mod tests {
     /// later "why allocate and call into the ABI for 32 bytes we already
     /// have" simplification back to
     /// `verify_public_key[classical_len + 68..][..32]`. Under that slicing
-    /// shape, both assertions below fail, because the sliced byte and the
-    /// corrupted-`pkSeed` byte never interact: the carried commitment
-    /// corruption would flow straight into the output (this test does not
-    /// apply it, since the point is what feeds the *current*, recomputing
-    /// helper), and the `pkSeed` corruption -- which the slicing helper
-    /// never reads -- would leave the output unchanged. See `stored_form`'s
-    /// doc comment for why these are the two offsets that matter.
+    /// shape, both assertions below fail. The carried-commitment corruption,
+    /// which this test applies below, flows straight into the slicing
+    /// helper's output, so it no longer matches the honest, uncorrupted
+    /// output and the first assertion fails; this was recorded happening
+    /// when `stored_form` was reverted to that slicing shape and run
+    /// (`task-12-report.md:317-333`, repeated at
+    /// `task-9b-report.md:218-236`). The `pkSeed` corruption -- which the
+    /// slicing helper never reads -- would leave its output unchanged, so
+    /// the second assertion fails too. See `stored_form`'s doc comment for
+    /// why these are the two offsets that matter.
     #[test]
     fn the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment() {
         let (_sk, pk) = h5_keypair(41);

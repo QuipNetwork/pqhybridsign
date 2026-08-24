@@ -1346,11 +1346,16 @@ mod tests {
     #[test]
     fn the_vrf_key_handle_rejects_the_lattice_suites_before_judging_the_buffer() {
         for code in 1u8..=4 {
-            // The length is arbitrary: the suite gate fires before any
-            // length is examined, so no real public key length would make
-            // this case discriminate any better. It is deliberately not
-            // sized for any suite, so a passing test cannot be explained
-            // by an accidental length match.
+            // The buffer is deliberately 3 bytes, a length no suite uses.
+            // A correctly sized buffer does NOT discriminate this case:
+            // `the_vrf_key_handle_rejects_the_lattice_suites` above uses
+            // `public_key_len(suite)` and passes whether the suite gate
+            // runs before or after the length check, because the gate
+            // rejects H1-H4 either way. Only a buffer wrong for every
+            // suite proves the gate itself runs first -- if the gate
+            // moved below the length check, this buffer's length would
+            // trip `PQHS_ERR_BAD_LENGTH` instead, and the assertion below
+            // would fail.
             let mut pk = vec![0u8; 3];
             let mut key_out: *mut PqhsVrfKey = std::ptr::null_mut();
             let master = [7u8; 32];
