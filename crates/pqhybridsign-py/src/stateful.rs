@@ -313,6 +313,14 @@ pub(crate) struct StatefulSecretKey {
     budget: Py<PyAny>,
 }
 
+/// `handle` holding an imported [`pqhybridsign_abi::StatefulKeyHandle`],
+/// rather than a re-exported blob signing re-imports on every call, is
+/// this type's whole reason to exist -- see the module documentation
+/// above. No Python-visible behaviour distinguishes the two designs, so no
+/// runtime test can guard the field type; this line does instead. It stops
+/// compiling if `handle` ever reverts to `Vec<u8>`.
+const _: fn(&StatefulSecretKey) -> &pqhybridsign_abi::StatefulKeyHandle = |key| &key.handle;
+
 #[pymethods]
 impl StatefulSecretKey {
     /// The suite this key was created for.
