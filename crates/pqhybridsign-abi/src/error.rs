@@ -35,9 +35,11 @@ pub enum AbiError {
     /// A caller-supplied output buffer was too small. Mirrors
     /// [`CoreError::OutputBufferTooSmall`].
     OutputBufferTooSmall = 3,
-    // Code 4 was `SoftJunctionRejected`, removed: junction derivation has no
-    // entry point in this crate, so no library code could ever construct
-    // it. The discriminant is left unassigned rather than reused, so a
+    // Code 4 was `SoftJunctionRejected`, removed: this construction has no
+    // soft junctions to reject. Every junction here is hard by
+    // construction; a soft junction would let an attacker who holds the
+    // parent public key and one child secret key recover the parent secret
+    // key. The discriminant is left unassigned rather than reused, so a
     // caller compiled against an older header that still branches on `4`
     // keeps reading it as "unknown" instead of colliding with whatever code
     // 4 might mean in a future release.

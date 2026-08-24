@@ -247,8 +247,12 @@ fn sign_one_stateless<S: StatefulSuite>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{keygen_stateful_from_seed, secret_key_len, signature_len, verify, Suite};
+    use crate::{
+        keygen_stateful_from_seed, secret_key_len, signature_len, verify, verify_stateless,
+        BudgetKey, StatelessBudgetStore, Suite,
+    };
     use pqhybridsign::stateful::{KeyIdentity, LeafJournal};
+    use std::collections::HashMap;
 
     /// An in-memory journal. Not durable; a real integrator persists every
     /// method to storage that survives a restart.
@@ -384,6 +388,84 @@ mod tests {
         assert_eq!(
             sign_stateful_with_handle(&mut handle, &mut journal, b"m", b"c", &mut sig).unwrap_err(),
             AbiError::JournalKeyMismatch
+        );
+    }
+
+    /// An in-memory [`StatelessBudgetStore`]. Not durable: these tests
+    /// exercise whether the count is consulted, not persistence.
+    #[derive(Default)]
+    struct MemoryBudget {
+        entries: HashMap<BudgetKey, u64>,
+        /// When set, [`StatelessBudgetStore::consumed`] reports this count
+        /// for every key. A `HashMap` cannot pre-load a [`BudgetKey`] that
+        /// has not been seen, so [`Self::exhausted`] uses this floor.
+        floor: Option<u64>,
+    }
+
+    impl MemoryBudget {
+        /// Pre-load the maximum: every key reports as fully spent.
+        fn exhausted() -> Self {
+            Self {
+                entries: HashMap::new(),
+                floor: Some(u64::MAX),
+            }
+        }
+    }
+
+    impl StatelessBudgetStore for MemoryBudget {
+        type Error = core::convert::Infallible;
+
+        fn consumed(&self, key: &BudgetKey) -> Option<u64> {
+            self.entries.get(key).copied().or(self.floor)
+        }
+
+        fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
+            self.entries.insert(*key, count);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_handle_signs_statelessly_without_spending_a_leaf() {
+        // The stateless path spends few-time budget, not a one-time leaf. The
+        // leaf counter must be untouched afterwards, which is why this takes
+        // `&StatefulKeyHandle` and not `&mut`: there is nothing to advance and
+        // nothing new to export.
+        let suite = Suite::H5;
+        let (sk, pk) = fresh_key(suite);
+        let handle = StatefulKeyHandle::open(suite, &sk).unwrap();
+
+        let mut before = vec![0u8; secret_key_len(suite)];
+        handle.export(&mut before).unwrap();
+
+        let mut budget = MemoryBudget::default();
+        let mut sig = vec![0u8; signature_len(suite)];
+        let n = sign_stateless_with_handle(&handle, &mut budget, b"m", b"c", &mut sig).unwrap();
+
+        // Checked before `verify_stateless` below, not after: a mutant that
+        // routes this call through the stateful signer instead would advance
+        // the leaf counter and produce a signature the stateless verifier
+        // never accepts, so an assertion order with `verify_stateless` first
+        // would mask the leaf-advance regression this test exists to catch.
+        let mut after = vec![0u8; secret_key_len(suite)];
+        handle.export(&mut after).unwrap();
+        assert_eq!(before, after, "the stateless path advanced the key");
+
+        // `crate::verify` accepts only the stateful path for H5/H6; a
+        // stateless-path signature is checked with `verify_stateless`.
+        assert!(verify_stateless(suite, &pk, b"m", b"c", &sig[..n]).unwrap());
+    }
+
+    #[test]
+    fn a_spent_budget_refuses_a_stateless_signature() {
+        let suite = Suite::H5;
+        let (sk, _pk) = fresh_key(suite);
+        let handle = StatefulKeyHandle::open(suite, &sk).unwrap();
+        let mut budget = MemoryBudget::exhausted();
+        let mut sig = vec![0u8; signature_len(suite)];
+        assert_eq!(
+            sign_stateless_with_handle(&handle, &mut budget, b"m", b"c", &mut sig).unwrap_err(),
+            AbiError::StatelessBudgetExhausted
         );
     }
 }
