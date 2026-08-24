@@ -242,7 +242,23 @@ fn vrf_make_bytes(
 ///
 /// The key lives only in memory. There is no export and no way to recover
 /// one from bytes: a dedicated VRF key is derived from the master seed
-/// when it is needed, not stored.
+/// when it is needed, not stored. `derive` is deliberately the only
+/// constructor this binding exposes -- the ABI's `adopt_unchecked` (build
+/// one from a caller-supplied blob, on the caller's unverified word that
+/// it is not the identity key) is not wrapped here. `derive` carries the
+/// identity-key disjointness guarantee structurally, through the label it
+/// derives under; `adopt_unchecked` rests on an assertion a caller could
+/// get wrong, and that warning carries less weight across a language
+/// boundary than it does at a Rust call site.
+///
+/// One consequence: `prove` has no Python-level test. `derive` being the
+/// only constructor means exercising `prove` from Python costs a real
+/// keygen (about 47 seconds at a 128s profile), which the test suite does
+/// not pay for by default. The underlying call, `vrf_prove_stateless`, is
+/// covered at the ABI layer (see `pqhybridsign-abi`'s `vrf` module tests,
+/// `#[ignore]`d for the same cost and run by the profile-matrix job); what
+/// a Python test would add on top is confidence that this wrapper threads
+/// its arguments to that call correctly, and that gap is open here.
 #[pyclass(module = "pqhybridsign", name = "VrfStatelessKey")]
 pub(crate) struct VrfStatelessKey {
     inner: pqhybridsign_abi::VrfStatelessKey,

@@ -902,3 +902,26 @@ def test_vrf_prove_rejects_the_stateful_suites(suite):
         phs.vrf_prove(suite, b"\x00" * 328, b"input")
     with pytest.raises(phs.WrongEntryPointForSuiteError):
         phs.vrf_prove_deterministic(suite, b"\x00" * 328, b"input")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_stateless_key_derive_rejects_the_stateless_suites(suite):
+    """`VrfStatelessKey.derive` has no Python test that runs a real keygen:
+    a successful call costs about 47 seconds at a 128s profile. This
+    reject path returns before that work, so it is the cheap way to prove
+    `suite` and `master` genuinely reach `pqhybridsign_abi::VrfStatelessKey::derive`
+    and that the error is mapped correctly at this call site, rather than
+    somewhere else in the module that happens to be tested. Do not delete
+    this as redundant reject-path noise: it is the only coverage `derive`
+    has."""
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.VrfStatelessKey.derive(suite, bytes(32))
+
+
+def test_vrf_stateless_key_derive_rejects_a_wrong_length_master():
+    """The companion to the suite-rejection test above: proves the 32-byte
+    length check on `master` fires, and fires before the expensive keygen,
+    for the same reason -- this is the only coverage `derive` has, and it
+    is deliberately kept even though it looks like boilerplate."""
+    with pytest.raises(phs.BadLengthError):
+        phs.VrfStatelessKey.derive(phs.Suite.H5, bytes(31))
