@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyType};
 use rand_core::OsRng;
+use zeroize::Zeroizing;
 
 use pqhybridsign_abi::{AbiError, BudgetKey, MASTER_SEED_LEN, VRF_OUTPUT_LEN};
 
@@ -172,7 +173,11 @@ fn vrf_prove_deterministic(
 /// Covers all six suites: verifying never spends anything, so there is
 /// nothing to keep apart by statefulness.
 ///
-/// Returns `False`, never raises, for a malformed `public_key` or `proof`.
+/// Returns `False`, never raises, for malformed `bytes`/`bytearray`
+/// `public_key` or `proof` input. A `public_key`, `input`, or `proof`
+/// argument that is neither `bytes` nor `bytearray` (a `str`, a
+/// `memoryview`, `None`, ...) still raises `TypeError` from the input
+/// conversion, before verification runs.
 #[pyfunction]
 fn vrf_verify(
     py: Python<'_>,
@@ -291,8 +296,10 @@ impl VrfStatelessKey {
     ) -> PyResult<(Self, Py<PyBytes>)> {
         let suite = suite.into();
         let master = extract_bytes(py, master)?;
-        let master = <[u8; MASTER_SEED_LEN]>::try_from(&master[..])
-            .map_err(|_| to_py_err(AbiError::BadLength))?;
+        let master: Zeroizing<[u8; MASTER_SEED_LEN]> = Zeroizing::new(
+            <[u8; MASTER_SEED_LEN]>::try_from(&master[..])
+                .map_err(|_| to_py_err(AbiError::BadLength))?,
+        );
 
         let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(suite)];
         let inner =

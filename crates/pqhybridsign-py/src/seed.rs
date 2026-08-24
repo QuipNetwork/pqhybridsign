@@ -4,7 +4,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use pqhybridsign_abi::{AbiError, CHAIN_CODE_LEN, MASTER_SEED_LEN};
 
@@ -80,11 +80,15 @@ fn derive_hard_junction(
     chain_code: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyBytes>> {
     let parent_master = extract_bytes(py, parent_master)?;
-    let parent_master = <[u8; MASTER_SEED_LEN]>::try_from(&parent_master[..])
-        .map_err(|_| to_py_err(AbiError::BadLength))?;
+    let parent_master: Zeroizing<[u8; MASTER_SEED_LEN]> = Zeroizing::new(
+        <[u8; MASTER_SEED_LEN]>::try_from(&parent_master[..])
+            .map_err(|_| to_py_err(AbiError::BadLength))?,
+    );
     let chain_code = extract_bytes(py, chain_code)?;
-    let chain_code = <[u8; CHAIN_CODE_LEN]>::try_from(&chain_code[..])
-        .map_err(|_| to_py_err(AbiError::BadLength))?;
+    let chain_code: Zeroizing<[u8; CHAIN_CODE_LEN]> = Zeroizing::new(
+        <[u8; CHAIN_CODE_LEN]>::try_from(&chain_code[..])
+            .map_err(|_| to_py_err(AbiError::BadLength))?,
+    );
 
     let mut out = [0u8; MASTER_SEED_LEN];
     let result = pqhybridsign_abi::derive_hard_junction(&parent_master, &chain_code, &mut out);
@@ -120,8 +124,10 @@ fn derive_hard_junction_path(
     chain_codes: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyBytes>> {
     let parent_master = extract_bytes(py, parent_master)?;
-    let parent_master = <[u8; MASTER_SEED_LEN]>::try_from(&parent_master[..])
-        .map_err(|_| to_py_err(AbiError::BadLength))?;
+    let parent_master: Zeroizing<[u8; MASTER_SEED_LEN]> = Zeroizing::new(
+        <[u8; MASTER_SEED_LEN]>::try_from(&parent_master[..])
+            .map_err(|_| to_py_err(AbiError::BadLength))?,
+    );
 
     let mut codes = Vec::new();
     for (i, code) in chain_codes.try_iter()?.enumerate() {

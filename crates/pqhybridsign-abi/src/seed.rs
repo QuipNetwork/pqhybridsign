@@ -126,6 +126,38 @@ mod tests {
         assert_eq!(seed, again);
     }
 
+    // `pqhybridsign::mnemonic`'s own `PHRASE_12` golden-vector phrase and
+    // expected seed (`crates/pqhybridsign/src/mnemonic.rs`), copied
+    // verbatim rather than retyped. That module pins byte-for-byte parity
+    // with `quip-protocol-rs`'s own `master_seed_from_mnemonic`
+    // (crates/transaction-crypto-core/src/lib.rs, on top of substrate-bip39
+    // 0.6.1), generated 2026-08-21. `a_valid_phrase_produces_a_master_seed`
+    // above only checks shape (non-zero, stable), which a wrapper that
+    // mangled its arguments could also satisfy; this pins that this
+    // crate's entry point reaches the same derivation. Do not "fix" a
+    // failing assertion here by pasting in whatever the code currently
+    // returns -- that is exactly the failure mode a pinned vector exists
+    // to catch.
+    const PHRASE_12: &str = "bottom drive obey lake curtain smoke basket hold race lonely fit walk";
+
+    fn hex(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            out.push_str(&format!("{byte:02x}"));
+        }
+        out
+    }
+
+    #[test]
+    fn a_valid_phrase_matches_the_core_crates_golden_vector() {
+        let mut seed = [0u8; MASTER_SEED_LEN];
+        master_seed_from_mnemonic(PHRASE_12, None, &mut seed).unwrap();
+        assert_eq!(
+            hex(&seed),
+            "fac7959dbfe72f052e5a0c3c8d6530f202b02fd8f9f5ca3580ec8deb7797479e"
+        );
+    }
+
     #[test]
     fn the_abi_agrees_with_the_core_crate() {
         // The wrapper must not transform anything. If it did, a Rust caller

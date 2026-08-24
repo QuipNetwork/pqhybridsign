@@ -357,8 +357,9 @@ def stored_public_key(suite: Suite, public_key: ReadableBuffer) -> bytes:
     compute path and the verify path.
 
     Raises `WrongEntryPointForSuiteError` for H1 through H4: they have no
-    stored form. Raises `ComponentFailureError` if `public_key` does not
-    decode as this suite's public key."""
+    stored form. Raises `BadLengthError` if `public_key` is not the
+    verify-form public key length for `suite`. Raises
+    `ComponentFailureError` if the commitment computation itself fails."""
 
 def stored_public_key_len(suite: Suite) -> int:
     """The stored public key length for `suite`, in bytes: the form a
@@ -462,7 +463,10 @@ def derive_hard_junction_path(
     `chain_codes` is not 32 bytes."""
 
 def vrf_proof_len(suite: Suite) -> int:
-    """Length in bytes of a hybrid VRF proof for `suite`."""
+    """Length in bytes of a hybrid VRF proof for `suite`.
+
+    For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+    delta-length binding can occupy. For H5 and H6 this is exact."""
 
 def vrf_prove(suite: Suite, secret_key: ReadableBuffer, input: ReadableBuffer) -> bytes:
     """Evaluate the hybrid VRF for `suite`.
@@ -486,8 +490,10 @@ def vrf_verify(
     proof: ReadableBuffer,
 ) -> bool:
     """Verify a hybrid VRF proof for `suite`. Covers all six suites.
-    Returns `False`, never raises, for a malformed `public_key` or
-    `proof`."""
+    Returns `False`, never raises, for malformed `bytes`/`bytearray`
+    `public_key` or `proof` input. A `public_key`, `input`, or `proof`
+    argument that is neither `bytes` nor `bytearray` still raises
+    `TypeError`, before verification runs."""
 
 def vrf_make_bytes(
     suite: Suite,

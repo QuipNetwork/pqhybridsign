@@ -773,9 +773,10 @@ fn stored_public_key_len(suite: PySuite) -> usize {
 /// # Errors
 ///
 /// `WrongEntryPointForSuiteError` for H1 through H4: they have no stored
-/// form. `ComponentFailureError` if `public_key` does not decode as this
-/// suite's public key. `TypeError` if `public_key` is neither `bytes` nor
-/// `bytearray`.
+/// form. `BadLengthError` if `public_key` is not the verify-form public
+/// key length for `suite`. `ComponentFailureError` if the commitment
+/// computation itself fails. `TypeError` if `public_key` is neither
+/// `bytes` nor `bytearray`.
 #[pyfunction]
 fn stored_public_key(
     py: Python<'_>,

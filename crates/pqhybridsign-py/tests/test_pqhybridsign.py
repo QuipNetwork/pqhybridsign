@@ -794,6 +794,26 @@ def test_master_seed_from_mnemonic_is_stable():
     assert seed == again
 
 
+# `crates/pqhybridsign/src/mnemonic.rs`'s own `PHRASE_12` golden-vector
+# phrase, copied verbatim rather than retyped. The core crate pins that a
+# derivation over this phrase's entropy (not its text) matches
+# `quip-protocol-rs`'s own `master_seed_from_mnemonic`
+# (crates/transaction-crypto-core/src/lib.rs, on top of substrate-bip39
+# 0.6.1), generated 2026-08-21; this test pins that this binding's call
+# reaches that same derivation rather than mangling an argument along the
+# way (swapping `phrase`/`password`, truncating the result, or returning a
+# different call's output all satisfy "32 bytes, not all zeros, stable"
+# without this). Do not "fix" a failing assertion here by pasting in
+# whatever the code currently returns -- that is exactly the failure mode
+# a pinned vector exists to catch.
+PHRASE_12 = "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+
+
+def test_master_seed_from_mnemonic_matches_the_core_crates_golden_vector():
+    seed = phs.master_seed_from_mnemonic(PHRASE_12)
+    assert seed.hex() == "fac7959dbfe72f052e5a0c3c8d6530f202b02fd8f9f5ca3580ec8deb7797479e"
+
+
 def test_master_seed_from_mnemonic_rejects_an_invalid_phrase():
     with pytest.raises(phs.InvalidMnemonicError):
         phs.master_seed_from_mnemonic("not a mnemonic at all")
