@@ -90,11 +90,20 @@ where
     vrf::proof_len_stateless::<S>()
 }
 
-/// Evaluate the hybrid VRF, drawing the classical proof's nonce from `rng`.
+/// Evaluate the hybrid VRF.
 ///
-/// `rng` cannot move the output. Two evaluations of one input under one
-/// key give different proofs and the same [`vrf_make_bytes`] result, so a
-/// prover cannot re-roll for a better value.
+/// `rng` cannot move the output. Whatever it supplies, two evaluations of
+/// one input under one key give the same [`vrf_make_bytes`] result, so a
+/// prover cannot re-roll for a better value. That is the property the
+/// construction rests on and it holds for every suite.
+///
+/// Whether `rng` is used at all depends on the classical half. The sr25519
+/// suites (H3, H4) hedge the classical proof's nonce with it, so two
+/// evaluations produce different proof bytes. The ed25519 suites (H1, H2)
+/// ignore it: RFC 9381 section 5.4.2.2 derives the ECVRF nonce from the
+/// secret key and the input, so their proofs are deterministic and
+/// [`vrf_prove_deterministic`] returns the identical bytes. Pass an `rng`
+/// regardless -- which suites use it is not part of this API's contract.
 ///
 /// H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
 /// budget on every evaluation and need a durable store to record it, so
@@ -564,10 +573,18 @@ mod tests {
 
     #[test]
     fn the_output_does_not_move_with_the_nonce() {
-        // The whole point of the construction: two evaluations of the same
-        // input under the same key give the same output bytes, even though
-        // the classical proofs differ. A prover cannot grind for a better
-        // score by re-rolling.
+        // The property the construction rests on: a prover cannot re-roll for a
+        // better value. Asserting only that the outputs match would also pass if
+        // nothing were ever hedged, so the sr25519 suites additionally assert
+        // that the proof bytes DID differ -- that is what makes the stable
+        // output meaningful rather than trivial.
+        //
+        // H1/H2 are ed25519: RFC 9381 derives the ECVRF nonce from the key and
+        // input, so their proofs are deterministic and must NOT be asserted to
+        // differ.
+        const HEDGED: [Suite; 2] = [Suite::H3, Suite::H4];
+        const DETERMINISTIC: [Suite; 2] = [Suite::H1, Suite::H2];
+
         for suite in STATELESS {
             let (sk, pk) = keypair(suite);
             let mut a = vec![0u8; vrf_proof_len(suite).unwrap()];
@@ -580,6 +597,21 @@ mod tests {
             vrf_make_bytes(suite, &pk, INPUT, &a[..na], OUT_CTX, &mut out_a).unwrap();
             vrf_make_bytes(suite, &pk, INPUT, &b[..nb], OUT_CTX, &mut out_b).unwrap();
             assert_eq!(out_a, out_b, "{suite:?} output moved with the nonce");
+
+            if HEDGED.contains(&suite) {
+                assert_ne!(
+                    a[..na],
+                    b[..nb],
+                    "{suite:?} hedges its nonce, so two proofs must differ"
+                );
+            }
+            if DETERMINISTIC.contains(&suite) {
+                assert_eq!(
+                    a[..na],
+                    b[..nb],
+                    "{suite:?} ignores the rng, so two proofs must be identical"
+                );
+            }
         }
     }
 
@@ -625,6 +657,30 @@ mod tests {
                 vrf_prove(suite, &[0u8; 328], INPUT, &mut OsRng, &mut proof).unwrap_err(),
                 AbiError::WrongEntryPointForSuite,
                 "{suite:?} was accepted by the stateless prover"
+            );
+            assert_eq!(
+                vrf_prove_deterministic(suite, &[0u8; 328], INPUT, &mut proof).unwrap_err(),
+                AbiError::WrongEntryPointForSuite,
+                "{suite:?} was accepted by the deterministic stateless prover"
+            );
+        }
+    }
+
+    #[test]
+    fn the_stateless_vrf_key_rejects_the_lattice_suites() {
+        // The reverse refusal. H1-H4 have no stateful half, so there is no
+        // dedicated stateless VRF key to derive or adopt for them.
+        for suite in [Suite::H1, Suite::H2, Suite::H3, Suite::H4] {
+            let mut pk = vec![0u8; public_key_len(suite)];
+            assert_eq!(
+                VrfStatelessKey::derive(suite, &[13u8; 32], &mut pk).err(),
+                Some(AbiError::WrongEntryPointForSuite),
+                "{suite:?} was accepted by derive"
+            );
+            assert_eq!(
+                VrfStatelessKey::adopt_unchecked(suite, &[0u8; 328]).err(),
+                Some(AbiError::WrongEntryPointForSuite),
+                "{suite:?} was accepted by adopt_unchecked"
             );
         }
     }
