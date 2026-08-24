@@ -254,6 +254,14 @@ pre-output is unique per key and input. A verifier checks the binding but never
 feeds it into that derivation. Post-quantum signatures are not unique for a
 fixed message, so a signer able to read one into the output could grind it.
 
+A consensus integration must use this feature rather than assemble an output
+from the parts itself. Do not hash the post-quantum binding into the VRF
+output. A block author who reaches the binding into the output grinds the
+result and biases leader election, and no amount of verification catches it,
+because every ground signature is valid. The module documentation in
+`src/vrf.rs` states the rule in full and names the two fixes that appear to
+close it and do not.
+
 The ed25519 half passes the RFC's own Appendix B.3 test vectors. Its
 pre-output followed by its proof is exactly the RFC's 80-byte `pi_string`.
 Key validation is always on, so the verifier rejects a public key of small
@@ -507,3 +515,15 @@ delivers.
 ## License
 
 AGPL-3.0-or-later. See [LICENSE](LICENSE).
+
+This is a deliberate choice rather than an inherited default, and it reaches
+past the crate itself. Running a network service built on this library engages
+AGPL section 13, so the operator must offer the corresponding source to the
+users who reach that service over a network. A downstream crate that links
+this one and then declares a more permissive license misstates what its own
+artefact is.
+
+The default feature set also links `hashsigs-rs`, which is AGPL-3.0-or-later
+as well, through `stateful` and the `profile-*` features. A lattice-only build
+with `default-features = false` does not link it. That changes which AGPL code
+ships, not the license of `pqhybridsign`.

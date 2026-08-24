@@ -96,6 +96,10 @@ pub fn keypair_from_seed<S: Suite>(
 /// buffer is accepted, with only the first `SIGNATURE_LEN` bytes written, so
 /// a caller can size one scratch buffer for the largest suite and reuse it
 /// across suites. [`Error::OutputBufferTooSmall`] if it is smaller.
+///
+/// [`Error::ContextTooLong`] if `ctx` exceeds 255 bytes. `M'` carries the
+/// context length in a single byte, so 255 is a hard ceiling rather than a
+/// buffer limit, and no feature or buffer size raises it.
 pub fn sign<S: Suite>(
     sk: &[u8],
     msg: &[u8],
@@ -135,7 +139,9 @@ pub fn sign<S: Suite>(
 /// The no-`alloc` message ceiling described on [`sign`] applies here too,
 /// and so does its `sig_out` contract: at least [`Suite::SIGNATURE_LEN`]
 /// bytes, [`Error::OutputBufferTooSmall`] otherwise, a larger buffer
-/// accepted with only the first `SIGNATURE_LEN` bytes written.
+/// accepted with only the first `SIGNATURE_LEN` bytes written. So does its
+/// 255-byte context ceiling: [`Error::ContextTooLong`] above that, because
+/// `M'` carries the context length in a single byte.
 pub fn sign_deterministic<S: Suite>(
     sk: &[u8],
     msg: &[u8],
