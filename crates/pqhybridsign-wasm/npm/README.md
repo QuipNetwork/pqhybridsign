@@ -10,8 +10,10 @@ npm install @quip.network/pqhybridsign
 ## Usage
 
 Every function is async. Each resolves after the wasm module loads. The
-loader caches one load per process, so the first call pays for the load and
-every later call reuses it.
+loader caches the load, so the first call pays for it and every later call
+reuses it. The one exception is a module trap. If a call rejects with
+`PqHybridSignPanic`, the loader discards the cached instance and the next
+call loads a new one.
 
 ```ts
 import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";

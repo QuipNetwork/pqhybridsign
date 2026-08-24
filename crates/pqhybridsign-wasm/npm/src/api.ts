@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+/// <reference lib="dom" />
 /**
  * The Promise-based `pqhybridsign` API, built over either wasm-pack
  * target's synchronous glue.
@@ -178,7 +179,9 @@ export interface RawModule {
  * `adoptKey`, `keyIdentity` and `keyIdentityFromSecretKey` handle them, and
  * reject H1 through H4. `verify`, `verifyWithStoredPublicKey` and the four
  * length accessors span all six suites. Each method resolves or rejects
- * exactly as the underlying wasm-bindgen export would return or throw.
+ * exactly as the underlying wasm-bindgen export would return or throw,
+ * except that a WebAssembly trap is rethrown as {@link PqHybridSignPanic}
+ * and the cached instance is discarded.
  *
  * The stateful signing methods are `async` only because loading the wasm
  * module is; the {@link LeafJournal} and {@link StatelessBudgetStore} a
@@ -239,13 +242,56 @@ export interface PqHybridSignApi {
 }
 
 /**
+ * A WebAssembly trap that reached the wrapper.
+ *
+ * `wasm32-unknown-unknown` builds its standard library with
+ * `panic = "abort"`. A Rust panic lowers to an `unreachable` instruction
+ * and traps the instance, so `catch_unwind` cannot contain it inside the
+ * module the way the C ABI's guards do. The trap does reach JavaScript, as
+ * a `WebAssembly.RuntimeError`, but so do this package's ordinary
+ * failures as plain `Error`s, and nothing in the object graph separates
+ * them.
+ *
+ * Every method of {@link PqHybridSignApi} rethrows a trap as this class,
+ * so `instanceof PqHybridSignPanic` distinguishes "the module crashed"
+ * from "the call was rejected". The original `RuntimeError` is on
+ * {@link cause}.
+ *
+ * The instance that trapped is discarded. The next call to any method loads a
+ * fresh one, so a caller that catches this and retries is calling into a clean
+ * module rather than a poisoned one.
+ *
+ * Under Node this reload is exercised by the package's own test suite. In a
+ * browser the loader re-imports the glue under a cache-busting specifier to
+ * get a new module record, which is necessary because a second `init()` on the
+ * same record returns the instance that already trapped. That browser path is
+ * not covered by the test suite, so treat a retry there as best-effort rather
+ * than guaranteed.
+ *
+ * Any state the crashed instance held is gone: a stateful signing call that
+ * threw this must be treated as having an unknown outcome, and the caller's
+ * leaf journal, not this package, is what says whether a leaf was spent.
+ */
+export class PqHybridSignPanic extends Error {
+  override readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super(
+      "the pqhybridsign WebAssembly module trapped and was discarded; " +
+        "the next call attempts to load a fresh instance",
+    );
+    this.name = "PqHybridSignPanic";
+    this.cause = cause;
+  }
+}
+
+/**
  * Build a {@link PqHybridSignApi} over `load`.
  *
- * `load` runs at most once per process: the first call from any method
- * below invokes it and caches the returned promise, so a caller that
- * calls several methods before the module finishes loading still pays
- * for exactly one load, and every method -- across the whole process --
- * awaits that same cached promise afterward.
+ * The first call from any method below invokes `load` and caches the
+ * returned promise, so concurrent callers still pay for exactly one
+ * load. After a {@link PqHybridSignPanic} the cache is cleared, so the
+ * next call invokes `load` again rather than reuse a trapped instance.
  */
 export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
   let modulePromise: Promise<RawModule> | undefined;
@@ -257,116 +303,130 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
     return modulePromise;
   }
 
+  /**
+   * Run `call` against a loaded module, converting a trap.
+   *
+   * A `WebAssembly.RuntimeError` means the instance executed an
+   * `unreachable` and is no longer safe to call, so the cached promise is
+   * cleared before the error is rethrown as a {@link PqHybridSignPanic}.
+   * Every other error is this package's own rejection and passes through
+   * untouched.
+   */
+  async function guard<T>(call: (raw: RawModule) => T | Promise<T>): Promise<T> {
+    const raw = await loadOnce();
+    try {
+      return await call(raw);
+    } catch (err) {
+      if (err instanceof WebAssembly.RuntimeError) {
+        modulePromise = undefined;
+        throw new PqHybridSignPanic(err);
+      }
+      throw err;
+    }
+  }
+
   return {
     async keygenFromSeed(suite, seed) {
-      const raw = await loadOnce();
-      const pair = raw.keygenFromSeed(suite, seed);
-      try {
-        // Copy both fields out before free(): free() releases the wasm
-        // memory the wasm-bindgen accessors view, and a caller holding
-        // on to either Uint8Array past that point would read freed
-        // memory.
-        return {
-          publicKey: pair.publicKey.slice(),
-          secretKey: pair.secretKey.slice(),
-        };
-      } finally {
-        pair.free();
-      }
+      return guard((raw) => {
+        const pair = raw.keygenFromSeed(suite, seed);
+        try {
+          // Copy both fields out before free(): free() releases the wasm
+          // memory the wasm-bindgen accessors view, and a caller holding
+          // on to either Uint8Array past that point would read freed
+          // memory.
+          return {
+            publicKey: pair.publicKey.slice(),
+            secretKey: pair.secretKey.slice(),
+          };
+        } finally {
+          pair.free();
+        }
+      });
     },
 
     async sign(suite, secretKey, msg, ctx) {
-      const raw = await loadOnce();
-      return raw.sign(suite, secretKey, msg, ctx);
+      return guard((raw) => raw.sign(suite, secretKey, msg, ctx));
     },
 
     async signDeterministic(suite, secretKey, msg, ctx, nonce) {
-      const raw = await loadOnce();
-      return raw.signDeterministic(suite, secretKey, msg, ctx, nonce);
+      return guard((raw) => raw.signDeterministic(suite, secretKey, msg, ctx, nonce));
     },
 
     async keygenStatefulFromSeed(suite, seed, maxStatefulSignatures) {
-      const raw = await loadOnce();
-      const pair = raw.keygenStatefulFromSeed(suite, seed, maxStatefulSignatures);
-      try {
-        // Copy both fields out before free(), as keygenFromSeed does.
-        return {
-          publicKey: pair.publicKey.slice(),
-          secretKey: pair.secretKey.slice(),
-        };
-      } finally {
-        pair.free();
-      }
+      return guard((raw) => {
+        const pair = raw.keygenStatefulFromSeed(suite, seed, maxStatefulSignatures);
+        try {
+          // Copy both fields out before free(), as keygenFromSeed does.
+          return {
+            publicKey: pair.publicKey.slice(),
+            secretKey: pair.secretKey.slice(),
+          };
+        } finally {
+          pair.free();
+        }
+      });
     },
 
     async keyIdentity(suite, publicKey) {
-      const raw = await loadOnce();
-      return raw.keyIdentity(suite, publicKey);
+      return guard((raw) => raw.keyIdentity(suite, publicKey));
     },
 
     async keyIdentityFromSecretKey(suite, secretKey) {
-      const raw = await loadOnce();
-      return raw.keyIdentityFromSecretKey(suite, secretKey);
+      return guard((raw) => raw.keyIdentityFromSecretKey(suite, secretKey));
     },
 
     async adoptKey(journal, identity) {
-      const raw = await loadOnce();
-      raw.adoptKey(journal, identity);
+      return guard((raw) => raw.adoptKey(journal, identity));
     },
 
     async signStateful(suite, secretKey, journal, msg, ctx) {
-      const raw = await loadOnce();
-      const result = raw.signStateful(suite, secretKey, journal, msg, ctx);
-      try {
-        // Copy both fields out before free(): nextSecretKey especially must
-        // outlive the wasm handle so the caller can persist it.
-        return {
-          signature: result.signature.slice(),
-          nextSecretKey: result.nextSecretKey.slice(),
-        };
-      } finally {
-        result.free();
-      }
+      return guard((raw) => {
+        const result = raw.signStateful(suite, secretKey, journal, msg, ctx);
+        try {
+          // Copy both fields out before free(): nextSecretKey especially must
+          // outlive the wasm handle so the caller can persist it.
+          return {
+            signature: result.signature.slice(),
+            nextSecretKey: result.nextSecretKey.slice(),
+          };
+        } finally {
+          result.free();
+        }
+      });
     },
 
     async signStateless(suite, secretKey, budget, msg, ctx) {
-      const raw = await loadOnce();
-      return raw.signStateless(suite, secretKey, budget, msg, ctx);
+      return guard((raw) => raw.signStateless(suite, secretKey, budget, msg, ctx));
     },
 
     async verify(suite, publicKey, msg, ctx, sig) {
-      const raw = await loadOnce();
-      return raw.verify(suite, publicKey, msg, ctx, sig);
+      return guard((raw) => raw.verify(suite, publicKey, msg, ctx, sig));
     },
 
     async verifyWithStoredPublicKey(suite, storedPublicKey, pqVerifyKey, msg, ctx, sig) {
-      const raw = await loadOnce();
-      return raw.verifyWithStoredPublicKey(suite, storedPublicKey, pqVerifyKey, msg, ctx, sig);
+      return guard((raw) =>
+        raw.verifyWithStoredPublicKey(suite, storedPublicKey, pqVerifyKey, msg, ctx, sig),
+      );
     },
 
     async publicKeyLen(suite) {
-      const raw = await loadOnce();
-      return raw.publicKeyLen(suite);
+      return guard((raw) => raw.publicKeyLen(suite));
     },
 
     async secretKeyLen(suite) {
-      const raw = await loadOnce();
-      return raw.secretKeyLen(suite);
+      return guard((raw) => raw.secretKeyLen(suite));
     },
 
     async signatureLen(suite) {
-      const raw = await loadOnce();
-      return raw.signatureLen(suite);
+      return guard((raw) => raw.signatureLen(suite));
     },
 
     async storedPublicKeyLen(suite) {
-      const raw = await loadOnce();
-      return raw.storedPublicKeyLen(suite);
+      return guard((raw) => raw.storedPublicKeyLen(suite));
     },
 
     async profileName() {
-      const raw = await loadOnce();
-      return raw.profileName();
+      return guard((raw) => raw.profileName());
     },
   };
 }

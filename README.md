@@ -319,8 +319,10 @@ npm install @quip.network/pqhybridsign@next
 ```
 
 The module loads a WebAssembly binary before it can sign or verify. Every
-function is async. The loader caches one load per process. Only the first
-call pays that cost.
+function is async. The loader caches the load, so only the first call pays
+that cost. A call that rejects with `PqHybridSignPanic` is the exception:
+the module trapped. The loader discards the cached instance. The next call
+loads a new one.
 
 ```typescript
 import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";

@@ -845,6 +845,7 @@ dependencies = [
  "js-sys",
  "pqhybridsign-abi",
  "rand_core 0.6.4",
+ "sha2",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "zeroize",
