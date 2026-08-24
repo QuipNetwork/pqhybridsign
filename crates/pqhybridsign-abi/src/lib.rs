@@ -77,6 +77,7 @@ mod stateful_suites;
 mod stateless_suites;
 mod suite;
 mod verify;
+mod vrf;
 
 pub use error::AbiError;
 pub use handle::{sign_stateful_with_handle, sign_stateless_with_handle, StatefulKeyHandle};
@@ -93,6 +94,10 @@ pub use stateful_suites::{
 pub use stateless_suites::{keygen_from_seed, sign, sign_deterministic};
 pub use suite::Suite;
 pub use verify::verify;
+pub use vrf::{
+    vrf_make_bytes, vrf_proof_len, vrf_prove, vrf_prove_deterministic, vrf_prove_stateless,
+    vrf_verify, VrfStatelessKey, VRF_OUTPUT_LEN,
+};
 
 /// Re-exported so a caller can implement [`LeafJournal`] for
 /// [`sign_stateful`] without depending on `pqhybridsign-core` directly.
