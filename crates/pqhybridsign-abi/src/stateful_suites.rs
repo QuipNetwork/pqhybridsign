@@ -344,6 +344,52 @@ fn sign_stateless_suite<S: StatefulSuite>(
     write_sig(sig_out, sig.as_ref())
 }
 
+/// Recompute the stored form of a verify-form public key.
+///
+/// The stored form is the classical public key followed by the SHRINCS
+/// commitment, and the commitment is **derived** from the bundle's `pkSeed`
+/// and `hypertreeRoot` rather than copied out of it. Slicing the bundle's
+/// carried commitment field at a fixed offset gives the same bytes for a
+/// well-formed key and hides a divergence between the compute path and the
+/// verify path, which is why this function exists and why no caller should
+/// reimplement it with an offset.
+///
+/// Returns the number of bytes written into `out`, which is
+/// [`crate::stored_public_key_len`] for `suite`.
+///
+/// # Errors
+///
+/// [`AbiError::WrongEntryPointForSuite`] for H1-H4: they have no stored form.
+/// [`AbiError::BadLength`] if `out` is not [`crate::stored_public_key_len`]
+/// bytes for `suite`. [`AbiError::ComponentFailure`] if `verify_public_key`
+/// does not decode as this suite's public key.
+pub fn stored_public_key(
+    suite: Suite,
+    verify_public_key: &[u8],
+    out: &mut [u8],
+) -> Result<usize, AbiError> {
+    match suite {
+        Suite::H5 => stored_form_of::<H5>(verify_public_key, out),
+        Suite::H6 => stored_form_of::<H6>(verify_public_key, out),
+        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+    }
+}
+
+fn stored_form_of<S: StatefulSuite>(
+    verify_public_key: &[u8],
+    out: &mut [u8],
+) -> Result<usize, AbiError>
+where
+    S::Pq: CommittedVerifyKey,
+{
+    if out.len() != S::STORED_PUBLIC_KEY_LEN {
+        return Err(AbiError::BadLength);
+    }
+    let stored = PublicKey::<S>::from_bytes(verify_public_key)?.stored_form()?;
+    out.copy_from_slice(stored.as_ref());
+    Ok(out.len())
+}
+
 /// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
 /// only a signature produced by [`sign_stateful`], against a signer-supplied
 /// verify key that must be the one `stored_public_key` commits to.
@@ -1110,5 +1156,82 @@ mod tests {
         .expect("the key must still sign after a rejected wrong-length call");
         assert_eq!(state.borrow().committed, vec![0]);
         assert!(crate::verify(Suite::H5, &pk, b"msg", b"", &sig_out[..n]));
+    }
+
+    #[test]
+    fn the_stored_form_is_recomputed_not_copied() {
+        // The point of this test. Corrupting the commitment the bundle CARRIES
+        // must change nothing about the commitment this function DERIVES, so the
+        // two stop matching. A helper that sliced the carried field at a fixed
+        // offset would return the corrupted bytes and this assertion would pass.
+        for suite in [Suite::H5, Suite::H6] {
+            let mut sk = vec![0u8; crate::secret_key_len(suite)];
+            let mut pk = vec![0u8; crate::public_key_len(suite)];
+            keygen_stateful_from_seed(suite, &[9u8; 32], 4, &mut sk, &mut pk).unwrap();
+
+            let mut honest = vec![0u8; crate::stored_public_key_len(suite)];
+            stored_public_key(suite, &pk, &mut honest).unwrap();
+
+            // Offset 68 into the SHRINCS bundle is the carried commitment field.
+            // The classical public key comes first, so the absolute offset adds
+            // the classical length.
+            let classical_len = pk.len() - 164;
+            let mut tampered_pk = pk.clone();
+            tampered_pk[classical_len + 68] ^= 0x01;
+
+            let mut from_tampered = vec![0u8; crate::stored_public_key_len(suite)];
+            let result = stored_public_key(suite, &tampered_pk, &mut from_tampered);
+
+            // Either the bundle is rejected outright, or it decodes and the
+            // recomputed commitment still differs from the corrupted carried one.
+            match result {
+                Err(_) => {}
+                Ok(_) => assert_eq!(
+                    honest, from_tampered,
+                    "{suite:?}: the helper read the carried commitment instead of \
+                     recomputing it"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn the_stored_form_matches_the_public_key_it_came_from() {
+        for suite in [Suite::H5, Suite::H6] {
+            let mut sk = vec![0u8; crate::secret_key_len(suite)];
+            let mut pk = vec![0u8; crate::public_key_len(suite)];
+            keygen_stateful_from_seed(suite, &[9u8; 32], 4, &mut sk, &mut pk).unwrap();
+
+            let mut stored = vec![0u8; crate::stored_public_key_len(suite)];
+            let n = stored_public_key(suite, &pk, &mut stored).unwrap();
+            assert_eq!(n, crate::stored_public_key_len(suite));
+
+            // The classical half is carried verbatim; only the SHRINCS half is
+            // derived. This anchors the layout without asserting the derived
+            // bytes, which no independent source in this crate can predict.
+            let classical_len = stored.len() - 32;
+            assert_eq!(&stored[..classical_len], &pk[..classical_len]);
+        }
+    }
+
+    #[test]
+    fn the_stored_form_rejects_the_stateless_suites() {
+        let mut out = [0u8; 64];
+        assert_eq!(
+            stored_public_key(Suite::H1, &[0u8; 32], &mut out).unwrap_err(),
+            AbiError::WrongEntryPointForSuite
+        );
+    }
+
+    #[test]
+    fn the_stored_form_rejects_a_wrong_length_output_buffer() {
+        let suite = Suite::H5;
+        let mut sk = vec![0u8; crate::secret_key_len(suite)];
+        let mut pk = vec![0u8; crate::public_key_len(suite)];
+        keygen_stateful_from_seed(suite, &[9u8; 32], 4, &mut sk, &mut pk).unwrap();
+        assert_eq!(
+            stored_public_key(suite, &pk, &mut [0u8; 7]).unwrap_err(),
+            AbiError::BadLength
+        );
     }
 }

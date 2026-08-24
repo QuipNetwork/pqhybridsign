@@ -88,8 +88,9 @@ pub use seed::{
 pub use sizes::{public_key_len, secret_key_len, signature_len, stored_public_key_len};
 pub use stateful_suites::{
     adopt_key, key_identity, key_identity_from_secret_key, keygen_stateful_from_seed,
-    require_bound_key, sign_stateful, sign_stateless, verify_stateful, verify_stateless,
-    verify_with_stored_public_key_stateful, verify_with_stored_public_key_stateless,
+    require_bound_key, sign_stateful, sign_stateless, stored_public_key, verify_stateful,
+    verify_stateless, verify_with_stored_public_key_stateful,
+    verify_with_stored_public_key_stateless,
 };
 pub use stateless_suites::{keygen_from_seed, sign, sign_deterministic};
 pub use suite::Suite;
