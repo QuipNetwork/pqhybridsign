@@ -227,6 +227,42 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 }
 
 /// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], restricted
+/// to the four suites [`vrf_prove`] and [`vrf_prove_deterministic`] can
+/// prove under.
+///
+/// H5 and H6 spend one unit of the few-time stateless budget on every VRF
+/// evaluation, the same hazard [`stateless_suite`] refuses for signing, and
+/// for the same reason: a call that looks free and is not is the worst
+/// failure mode this crate could offer. Rejecting here, at the wasm layer,
+/// rather than letting the request reach the abi, is what lets the error
+/// name the entry point to use instead -- the abi's own
+/// `WrongEntryPointForSuite` has no way to know this binding calls that
+/// entry point `deriveVrfStatelessKey`.
+///
+/// # Errors
+///
+/// An error naming H5/H6 explicitly and the entry point to use instead, or
+/// listing the valid names for anything else unrecognised.
+fn vrf_stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
+    match name {
+        "H1" => Ok(pqhybridsign_abi::Suite::H1),
+        "H2" => Ok(pqhybridsign_abi::Suite::H2),
+        "H3" => Ok(pqhybridsign_abi::Suite::H3),
+        "H4" => Ok(pqhybridsign_abi::Suite::H4),
+        "H5" | "H6" => Err(format!(
+            "{name} is a stateful suite: this entry point would spend one \
+             unit of a few-time stateless budget without recording it, so \
+             it is refused. Evaluate the VRF for H5/H6 with \
+             deriveVrfStatelessKey and the returned key's prove(budget, \
+             input), which takes a durable budget store."
+        )),
+        other => Err(format!(
+            "unknown suite \"{other}\"; expected one of H1, H2, H3, H4"
+        )),
+    }
+}
+
+/// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], restricted
 /// to the two stateful suites.
 ///
 /// Every stateful-only entry point routes through this:
@@ -260,15 +296,21 @@ fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`], accepting
 /// all six suites this crate knows.
 ///
-/// The only parser of the three that is total over every suite name this
-/// crate recognises. [`stored_public_key_len`] is the one export that needs
-/// it: it is a pure length accessor over public data, defined for every
-/// suite (`pqhybridsign_abi::stored_public_key_len` is total), so it must
-/// not throw for the four suites this binding's other functions actually
-/// sign and verify with. Compare [`stateless_suite`], which excludes H5/H6
-/// for a reason specific to *signing*, and [`stateful_suite`], which exists
-/// only because the `WithStoredPublicKey` verify functions are specific to
-/// H5/H6.
+/// The only parser of the four that is total over every suite name this
+/// crate recognises. Every entry point that is genuinely total over all
+/// six suites -- a length accessor, [`verify`], or a VRF function that
+/// spends nothing regardless of statefulness -- parses through here rather
+/// than through [`stateless_suite`], [`stateful_suite`] or
+/// [`vrf_stateless_suite`], each of which excludes suites for a reason
+/// specific to what it guards: [`stateless_suite`] excludes H5/H6 because
+/// signing them would spend an unrecorded leaf,
+/// [`vrf_stateless_suite`] excludes them for the matching reason on the
+/// VRF's few-time stateless budget, and [`stateful_suite`] exists only
+/// because the `WithStoredPublicKey` verify functions are specific to
+/// H5/H6. Eight entry points parse through here as of this writing:
+/// [`public_key_len`], [`secret_key_len`], [`signature_len`],
+/// [`stored_public_key_len`], [`verify`], [`vrf_proof_len`],
+/// [`vrf_verify`] and [`vrf_make_bytes`].
 ///
 /// # Errors
 ///
@@ -1575,13 +1617,13 @@ pub fn vrf_proof_len(suite: &str) -> Result<u32, JsValue> {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`, if
-/// `suite` is `"H5"` or `"H6"` (`WrongEntryPointForSuite`), if
-/// `secretKey` is not the suite's secret-key length, or if either
-/// component rejects its key.
+/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H4"`, if
+/// `suite` is `"H5"` or `"H6"` (naming `deriveVrfStatelessKey` as the entry
+/// point to use instead), if `secretKey` is not the suite's secret-key
+/// length, or if either component rejects its key.
 #[wasm_bindgen(js_name = vrfProve)]
 pub fn vrf_prove(suite: &str, secret_key: Vec<u8>, input: &[u8]) -> Result<Uint8Array, JsValue> {
-    let suite = any_suite(suite).map_err(js_error)?;
+    let suite = vrf_stateless_suite(suite).map_err(js_error)?;
     let mut secret_key = secret_key;
     let mut proof = vec![0u8; pqhybridsign_abi::vrf_proof_len(suite).map_err(js_error)?];
 
@@ -1605,7 +1647,7 @@ pub fn vrf_prove_deterministic(
     secret_key: Vec<u8>,
     input: &[u8],
 ) -> Result<Uint8Array, JsValue> {
-    let suite = any_suite(suite).map_err(js_error)?;
+    let suite = vrf_stateless_suite(suite).map_err(js_error)?;
     let mut secret_key = secret_key;
     let mut proof = vec![0u8; pqhybridsign_abi::vrf_proof_len(suite).map_err(js_error)?];
 

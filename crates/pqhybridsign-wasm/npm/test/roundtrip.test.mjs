@@ -306,11 +306,32 @@ test("a different VRF output context gives different bytes", async () => {
   assert.notDeepEqual(score, randomness);
 });
 
-test("vrfProve refuses H5 and H6", async () => {
+test("vrfProve refuses H5 and H6 and names deriveVrfStatelessKey", async () => {
+  // The placeholder key is 32 bytes, not a valid H5/H6 secret key -- but the
+  // suite gate runs before the key length is ever inspected, exactly as the
+  // sibling sign() test above documents, so the placeholder is safe here.
   for (const suite of STATEFUL_SUITES) {
-    await assert.rejects(() => pqhs.vrfProve(suite, new Uint8Array(32), VRF_INPUT));
+    await assert.rejects(
+      () => pqhs.vrfProve(suite, new Uint8Array(32), VRF_INPUT),
+      /deriveVrfStatelessKey/,
+    );
   }
 });
+
+test("vrfProveDeterministic refuses H5 and H6 and names deriveVrfStatelessKey", async () => {
+  for (const suite of STATEFUL_SUITES) {
+    await assert.rejects(
+      () => pqhs.vrfProveDeterministic(suite, new Uint8Array(32), VRF_INPUT),
+      /deriveVrfStatelessKey/,
+    );
+  }
+});
+
+for (const suite of STATELESS_SUITES) {
+  test(`${suite}: deriveVrfStatelessKey rejects a stateless suite`, async () => {
+    await assert.rejects(() => pqhs.deriveVrfStatelessKey(suite, seed(0x13)));
+  });
+}
 
 for (const suite of STATEFUL_SUITES) {
   test(`${suite}: a derived VRF stateless key proves and verifies`, async () => {

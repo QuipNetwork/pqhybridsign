@@ -141,6 +141,55 @@ test("a poisoned stateful key handle rejects every later call, including export(
   assert.equal(freeCalls, 0, "free() must not call into the trapped instance");
 });
 
+test("a poisoned VRF key handle rejects every later call, including free()", async () => {
+  // The mirror of the stateful key handle test above, for the VRF key
+  // handle deriveVrfStatelessKey returns: the same instance guard discards
+  // on a trap backs it, so once prove() traps, neither a later prove() nor
+  // free() may reach the dead instance.
+  let proveCalls = 0;
+  let freeCalls = 0;
+  const innerStub = {
+    prove() {
+      proveCalls += 1;
+      throw new WebAssembly.RuntimeError("unreachable");
+    },
+    free() {
+      freeCalls += 1;
+    },
+  };
+
+  const api = createApi(async () => ({
+    profileName() {
+      return "shrincs-256s";
+    },
+    deriveVrfStatelessKey() {
+      return { key: innerStub, publicKey: new Uint8Array(4) };
+    },
+  }));
+
+  const { key } = await api.deriveVrfStatelessKey("H5", new Uint8Array(4));
+
+  const budget = {
+    consumed() {
+      return null;
+    },
+    record() {},
+  };
+
+  await assert.rejects(() => key.prove(budget, new Uint8Array(1)), PqHybridSignPanic);
+  assert.equal(proveCalls, 1, "the first call reaches the trapped instance");
+
+  // The property this test exists to prove: a call after the trap must not
+  // reach the dead instance a second time, counted rather than merely
+  // asserted to throw -- a second call that itself traps independently
+  // would also satisfy "it threw" without proving containment.
+  await assert.rejects(() => key.prove(budget, new Uint8Array(1)), PqHybridSignPanic);
+  assert.equal(proveCalls, 1, "a later call must not call into the trapped instance again");
+
+  assert.throws(() => key.free(), PqHybridSignPanic);
+  assert.equal(freeCalls, 0, "free() must not call into the trapped instance");
+});
+
 test("the real node loader produces a working module twice", async () => {
   // Not a trap test. It checks the mechanism the recovery in the test
   // above depends on: that the shipped loader, called a second time,

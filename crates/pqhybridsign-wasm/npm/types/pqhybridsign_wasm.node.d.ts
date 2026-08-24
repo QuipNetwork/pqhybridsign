@@ -726,10 +726,10 @@ export function vrfProofLen(suite: string): number;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`, if
- * `suite` is `"H5"` or `"H6"` (`WrongEntryPointForSuite`), if
- * `secretKey` is not the suite's secret-key length, or if either
- * component rejects its key.
+ * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H4"`, if
+ * `suite` is `"H5"` or `"H6"` (naming `deriveVrfStatelessKey` as the entry
+ * point to use instead), if `secretKey` is not the suite's secret-key
+ * length, or if either component rejects its key.
  */
 export function vrfProve(suite: string, secret_key: Uint8Array, input: Uint8Array): Uint8Array;
 
