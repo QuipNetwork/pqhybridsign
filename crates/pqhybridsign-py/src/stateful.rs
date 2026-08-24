@@ -754,6 +754,33 @@ fn stored_public_key_len(suite: PySuite) -> usize {
     pqhybridsign_abi::stored_public_key_len(suite.into())
 }
 
+/// Recompute the stored form of a verify-form public key.
+///
+/// The stored form is the classical public key followed by the SHRINCS
+/// commitment, and the commitment is derived from the bundle's `pkSeed` and
+/// `hypertreeRoot` rather than copied out of it. Slicing the bundle's carried
+/// commitment field at a fixed offset gives the same bytes for a well-formed
+/// key and hides a divergence between the compute path and the verify path.
+///
+/// # Errors
+///
+/// `WrongEntryPointForSuiteError` for H1 through H4: they have no stored
+/// form. `ComponentFailureError` if `public_key` does not decode as this
+/// suite's public key. `TypeError` if `public_key` is neither `bytes` nor
+/// `bytearray`.
+#[pyfunction]
+fn stored_public_key(
+    py: Python<'_>,
+    suite: PySuite,
+    public_key: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyBytes>> {
+    let suite = suite.into();
+    let public_key = extract_bytes(py, public_key)?;
+    let mut out = vec![0u8; pqhybridsign_abi::stored_public_key_len(suite)];
+    let n = pqhybridsign_abi::stored_public_key(suite, &public_key, &mut out).map_err(to_py_err)?;
+    Ok(PyBytes::new(py, &out[..n]).unbind())
+}
+
 /// Verify `sig` over `msg` under `ctx` for a stateful `suite`, accepting
 /// only a signature produced by `sign_stateful`, against one whole
 /// verify-form public key `pk`.
@@ -921,6 +948,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(key_identity_from_secret_key, m)?)?;
     m.add_function(wrap_pyfunction!(adopt_key, m)?)?;
     m.add_function(wrap_pyfunction!(stored_public_key_len, m)?)?;
+    m.add_function(wrap_pyfunction!(stored_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(verify_stateful, m)?)?;
     m.add_function(wrap_pyfunction!(verify_stateless, m)?)?;
     m.add_function(wrap_pyfunction!(verify_with_stored_public_key_stateful, m)?)?;

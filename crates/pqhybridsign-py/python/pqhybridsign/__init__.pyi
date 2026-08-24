@@ -343,6 +343,20 @@ def profile_name() -> str:
     against one profile is not interchangeable with one from a build
     against another."""
 
+def stored_public_key(suite: Suite, public_key: ReadableBuffer) -> bytes:
+    """Recompute the stored form of a verify-form public key.
+
+    The stored form is the classical public key followed by the SHRINCS
+    commitment, and the commitment is derived from the bundle's `pkSeed`
+    and `hypertreeRoot` rather than copied out of it. Slicing the
+    bundle's carried commitment field at a fixed offset gives the same
+    bytes for a well-formed key and hides a divergence between the
+    compute path and the verify path.
+
+    Raises `WrongEntryPointForSuiteError` for H1 through H4: they have no
+    stored form. Raises `ComponentFailureError` if `public_key` does not
+    decode as this suite's public key."""
+
 def stored_public_key_len(suite: Suite) -> int:
     """The stored public key length for `suite`, in bytes: the form a
     verifier keeps, which is what `verify_with_stored_public_key_stateful`

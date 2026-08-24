@@ -216,34 +216,11 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
         sk.sign_stateless(b"message", b"context")
 
 
-# Offset of the 32-byte commitment inside a SHRINCS bundle
-# (statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot),
-# matching the private BUNDLE_COMMITMENT_OFFSET constant at
-# crates/pqhybridsign/src/shrincs/scheme.rs:48. This is spec-fixed layout
-# shared by every SHRINCS instance (H5 and H6 alike), not a per-profile
-# detail.
-#
-# No binding exposes an accessor that derives the small stored form from a
-# verify-form public key -- see the task-4 report for why -- so this test
-# reconstructs it by slicing the offset out directly. pqhybridsign_abi's own
-# unit tests no longer do this the same way: they call
-# stateful_composite::PublicKey::stored_form instead, which computes the
-# commitment rather than assuming it sits at a fixed offset in the verify
-# form. This helper still assumes the fixed offset, deliberately parked for
-# separate bindings work (pqhs-0d2). A real deployment installs the stored
-# form once, at provisioning time, from whatever produced the key; it does
-# not slice it out of the verify form the way this helper does for test
-# setup.
-_COMMITMENT_AT = 68
-
-
 def _stored_form(suite, verify_public_key):
     """The small form a verifier installs: the classical public key and
-    the commitment, lifted out of a verify-form public key its own keygen
-    produced."""
-    classical_len = phs.stored_public_key_len(suite) - 32
-    commitment_at = classical_len + _COMMITMENT_AT
-    return verify_public_key[:classical_len] + verify_public_key[commitment_at : commitment_at + 32]
+    the commitment, recomputed from a verify-form public key its own
+    keygen produced."""
+    return phs.stored_public_key(suite, verify_public_key)
 
 
 def _bundle(suite, verify_public_key):
