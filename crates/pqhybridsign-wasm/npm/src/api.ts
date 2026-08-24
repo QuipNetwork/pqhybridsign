@@ -83,6 +83,47 @@ export interface SignStatefulResult {
 }
 
 /**
+ * An imported stateful secret key, held across signing calls.
+ *
+ * `signStateful` on the module-level API imports the exported blob on
+ * every call. That import re-derives the hypertree root, which at the
+ * 128s profiles costs about 47 seconds. A handle pays it once, at
+ * {@link PqHybridSignApi.openStatefulKey}.
+ *
+ * Call {@link free} when finished. The key lives in wasm memory, which
+ * JavaScript garbage collection does not reach, so a handle that is
+ * dropped without `free()` keeps its secret key material alive for the
+ * life of the module instance.
+ *
+ * The durability contract is unchanged. After every {@link signStateful}
+ * call, including one that rejected with an ordinary error, call
+ * {@link export} and persist the result before relying on the signature.
+ *
+ * **A {@link PqHybridSignPanic} is the one rejection that instruction does
+ * not cover.** It means the wasm instance behind this handle trapped, and
+ * this package's own trap documentation says a host cannot assume such an
+ * instance is sound. Once any method here rejects with a
+ * {@link PqHybridSignPanic}, this handle is poisoned: every later call on
+ * it, including {@link export} and {@link free}, rejects or throws the same
+ * {@link PqHybridSignPanic} instead of touching the dead instance, so a
+ * caller cannot accidentally export and persist bytes the trapped instance
+ * produced. There is no advanced key to recover from a poisoned handle;
+ * the caller's leaf journal is the only durable record of which leaf, if
+ * any, was spent before the trap.
+ */
+export interface StatefulKeyHandle {
+  keyIdentity(): Promise<Uint8Array>;
+  export(): Promise<Uint8Array>;
+  signStateful(journal: LeafJournal, msg: Uint8Array, ctx: Uint8Array): Promise<Uint8Array>;
+  signStateless(
+    budget: StatelessBudgetStore,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): Promise<Uint8Array>;
+  free(): void;
+}
+
+/**
  * The wasm-bindgen `KeyPair` class as `keygenFromSeed` and
  * `keygenStatefulFromSeed` on the raw module return it: a disposable handle
  * over wasm-owned memory, not a plain object. See
@@ -91,6 +132,43 @@ export interface SignStatefulResult {
 export interface RawKeyPair {
   readonly publicKey: Uint8Array;
   readonly secretKey: Uint8Array;
+  free(): void;
+}
+
+/**
+ * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"` or
+ * `"H6"`), held across calls. Returned by `deriveVrfStatelessKey`.
+ *
+ * This key is disjoint from the identity key that carries an account's
+ * rotation and recovery authority: it is derived under a label separate from
+ * the identity key's, so the two never collide, and it has no leaf counter to
+ * fork -- {@link prove} draws only on the few-time stateless budget the
+ * caller's `budget` tracks. It cannot be exported to bytes; it lives only in
+ * wasm memory for the life of the handle.
+ *
+ * Call {@link free} when finished. The key lives in wasm memory, which
+ * JavaScript garbage collection does not reach, so a handle that is dropped
+ * without `free()` keeps its key material alive for the life of the module
+ * instance.
+ *
+ * If {@link prove} ever rejects with a {@link PqHybridSignPanic}, this
+ * handle is poisoned on the same terms {@link StatefulKeyHandle} is: the
+ * wasm instance it points into trapped and is no longer sound to call, so
+ * every later call on it, including {@link free}, rejects or throws that
+ * same {@link PqHybridSignPanic} instead of touching the dead instance.
+ */
+export interface VrfKeyHandle {
+  prove(budget: StatelessBudgetStore, input: Uint8Array): Promise<Uint8Array>;
+  free(): void;
+}
+
+/**
+ * The wasm-bindgen `VrfKey` class as `deriveVrfStatelessKey` on the raw
+ * module returns it: a disposable handle over wasm-owned memory. See
+ * `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
+ */
+export interface RawVrfKey {
+  prove(budget: StatelessBudgetStore, input: Uint8Array): Uint8Array;
   free(): void;
 }
 
@@ -106,6 +184,23 @@ export interface RawSignStatefulResult {
 }
 
 /**
+ * The wasm-bindgen `StatefulKey` class as `StatefulKey.open` on the raw
+ * module returns it: a disposable handle over wasm-owned memory. See
+ * `npm/types/pqhybridsign_wasm.{node,web}.d.ts`.
+ */
+export interface RawStatefulKey {
+  keyIdentity(): Uint8Array;
+  export(): Uint8Array;
+  signStateful(journal: LeafJournal, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
+  signStateless(
+    budget: StatelessBudgetStore,
+    msg: Uint8Array,
+    ctx: Uint8Array,
+  ): Uint8Array;
+  free(): void;
+}
+
+/**
  * The function surface both wasm-pack targets expose once loaded, typed
  * from the checked-in `npm/types/pqhybridsign_wasm.{node,web}.d.ts`
  * (identical across both targets apart from the `web` target's extra
@@ -114,6 +209,27 @@ export interface RawSignStatefulResult {
  * interface has no need of).
  */
 export interface RawModule {
+  StatefulKey: {
+    open(suite: string, secretKey: Uint8Array): RawStatefulKey;
+  };
+  masterSeedFromMnemonic(phrase: string, password?: string | null): Uint8Array;
+  deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Uint8Array;
+  deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Uint8Array;
+  vrfProofLen(suite: string): number;
+  vrfProve(suite: string, secretKey: Uint8Array, input: Uint8Array): Uint8Array;
+  vrfProveDeterministic(suite: string, secretKey: Uint8Array, input: Uint8Array): Uint8Array;
+  vrfVerify(suite: string, publicKey: Uint8Array, input: Uint8Array, proof: Uint8Array): boolean;
+  vrfMakeBytes(
+    suite: string,
+    publicKey: Uint8Array,
+    input: Uint8Array,
+    proof: Uint8Array,
+    context: Uint8Array,
+  ): Uint8Array;
+  deriveVrfStatelessKey(
+    suite: string,
+    master: Uint8Array,
+  ): { key: RawVrfKey; publicKey: Uint8Array };
   keygenFromSeed(suite: string, seed: Uint8Array): RawKeyPair;
   keygenStatefulFromSeed(
     suite: string,
@@ -175,19 +291,76 @@ export interface RawModule {
  * H1 through H4 are stateless: `keygenFromSeed`, `sign` and
  * `signDeterministic` handle them, and reject H5 and H6, because a
  * stateless-looking call must never silently spend a one-time leaf. H5 and
- * H6 are stateful: `keygenStatefulFromSeed`, `signStateful`, `signStateless`,
- * `adoptKey`, `keyIdentity` and `keyIdentityFromSecretKey` handle them, and
+ * H6 are stateful: `keygenStatefulFromSeed`, `openStatefulKey`,
+ * `signStateful`, `signStateless`, `adoptKey`, `keyIdentity` and
+ * `keyIdentityFromSecretKey` handle them, and
  * reject H1 through H4. `verify`, `verifyWithStoredPublicKey` and the four
  * length accessors span all six suites. Each method resolves or rejects
  * exactly as the underlying wasm-bindgen export would return or throw,
  * except that a WebAssembly trap is rethrown as {@link PqHybridSignPanic}
  * and the cached instance is discarded.
  *
+ * `masterSeedFromMnemonic`, `deriveHardJunction` and `deriveHardJunctionPath`
+ * derive master seeds from a recovery phrase or an existing seed.
+ * `masterSeedFromMnemonic` runs Substrate's derivation, not standard BIP39: a
+ * caller that reproduces it with a stock BIP39 library gets a different seed,
+ * and therefore a different key. **Deriving one child twice, on two
+ * different hosts, is the re-keygen hazard**: `deriveHardJunction` and
+ * `deriveHardJunctionPath` are deterministic, so the same parent and the
+ * same chain code reach the same child seed and therefore the same stateful
+ * tree starting at leaf 1 -- the same failure as importing one key twice.
+ * Derive a child once, then persist and restore it; never re-derive one
+ * junction on a second host. An empty `chainCodes` array passed to
+ * `deriveHardJunctionPath` returns `parentMaster` unchanged -- the identity a
+ * path of no junctions should have, not an error -- so a caller whose parsed
+ * path came out empty gets the parent key back and must check for that
+ * itself.
+ *
+ * `vrfProofLen`, `vrfProve`, `vrfProveDeterministic`, `vrfVerify` and
+ * `vrfMakeBytes` cover the hybrid VRF for H1 through H4; `vrfProve` and
+ * `vrfProveDeterministic` reject H5 and H6 for the same reason `sign` and
+ * `signDeterministic` do, and `deriveVrfStatelessKey` covers those two suites
+ * instead, through a dedicated key disjoint from the identity key and a
+ * caller-supplied {@link StatelessBudgetStore}. **Call `vrfVerify` before
+ * `vrfMakeBytes`.** `vrfVerify` is what establishes that a proof's
+ * pre-output belongs to the claimed key and input; `vrfMakeBytes` derives
+ * bytes from that pre-output unconditionally, without checking it, so
+ * calling it on a proof that has not verified derives bytes from whatever an
+ * attacker supplied. A caller who then treats the result as a leadership
+ * score or a randomness beacon is trusting an attacker's numbers.
+ *
  * The stateful signing methods are `async` only because loading the wasm
  * module is; the {@link LeafJournal} and {@link StatelessBudgetStore} a
  * caller passes have synchronous methods (see those types).
  */
 export interface PqHybridSignApi {
+  masterSeedFromMnemonic(phrase: string, password?: string | null): Promise<Uint8Array>;
+  deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Promise<Uint8Array>;
+  deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Promise<Uint8Array>;
+  vrfProofLen(suite: Suite): Promise<number>;
+  vrfProve(suite: Suite, secretKey: Uint8Array, input: Uint8Array): Promise<Uint8Array>;
+  vrfProveDeterministic(
+    suite: Suite,
+    secretKey: Uint8Array,
+    input: Uint8Array,
+  ): Promise<Uint8Array>;
+  vrfVerify(
+    suite: Suite,
+    publicKey: Uint8Array,
+    input: Uint8Array,
+    proof: Uint8Array,
+  ): Promise<boolean>;
+  vrfMakeBytes(
+    suite: Suite,
+    publicKey: Uint8Array,
+    input: Uint8Array,
+    proof: Uint8Array,
+    context: Uint8Array,
+  ): Promise<Uint8Array>;
+  deriveVrfStatelessKey(
+    suite: Suite,
+    master: Uint8Array,
+  ): Promise<{ key: VrfKeyHandle; publicKey: Uint8Array }>;
   keygenFromSeed(suite: Suite, seed: Uint8Array): Promise<KeyPair>;
   sign(suite: Suite, secretKey: Uint8Array, msg: Uint8Array, ctx: Uint8Array): Promise<Uint8Array>;
   signDeterministic(
@@ -202,6 +375,7 @@ export interface PqHybridSignApi {
     seed: Uint8Array,
     maxStatefulSignatures: number,
   ): Promise<KeyPair>;
+  openStatefulKey(suite: Suite, secretKey: Uint8Array): Promise<StatefulKeyHandle>;
   keyIdentity(suite: Suite, publicKey: Uint8Array): Promise<Uint8Array>;
   keyIdentityFromSecretKey(suite: Suite, secretKey: Uint8Array): Promise<Uint8Array>;
   adoptKey(journal: LeafJournal, identity: Uint8Array): Promise<void>;
@@ -326,6 +500,96 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
   }
 
   return {
+    async masterSeedFromMnemonic(phrase, password) {
+      return guard((raw) => raw.masterSeedFromMnemonic(phrase, password));
+    },
+
+    async deriveHardJunction(parentMaster, chainCode) {
+      return guard((raw) => raw.deriveHardJunction(parentMaster, chainCode));
+    },
+
+    async deriveHardJunctionPath(parentMaster, chainCodes) {
+      return guard((raw) => raw.deriveHardJunctionPath(parentMaster, chainCodes));
+    },
+
+    async vrfProofLen(suite) {
+      return guard((raw) => raw.vrfProofLen(suite));
+    },
+
+    async vrfProve(suite, secretKey, input) {
+      return guard((raw) => raw.vrfProve(suite, secretKey, input));
+    },
+
+    async vrfProveDeterministic(suite, secretKey, input) {
+      return guard((raw) => raw.vrfProveDeterministic(suite, secretKey, input));
+    },
+
+    async vrfVerify(suite, publicKey, input, proof) {
+      return guard((raw) => raw.vrfVerify(suite, publicKey, input, proof));
+    },
+
+    async vrfMakeBytes(suite, publicKey, input, proof, context) {
+      return guard((raw) => raw.vrfMakeBytes(suite, publicKey, input, proof, context));
+    },
+
+    async deriveVrfStatelessKey(suite, master) {
+      return guard((raw) => {
+        const { key: inner, publicKey } = raw.deriveVrfStatelessKey(suite, master);
+
+        // Set the first time any call on this handle traps, and never
+        // cleared: a trap invalidates the instance `inner` points into
+        // (see the crate documentation), so once this handle has seen one,
+        // every later call rejects or throws this same PqHybridSignPanic
+        // instead of touching the dead instance.
+        let poisoned: PqHybridSignPanic | undefined;
+
+        async function guardHandle<T>(call: () => T | Promise<T>): Promise<T> {
+          if (poisoned !== undefined) {
+            throw poisoned;
+          }
+          try {
+            return await guard(call);
+          } catch (err) {
+            if (err instanceof PqHybridSignPanic) {
+              poisoned = err;
+            }
+            throw err;
+          }
+        }
+
+        return {
+          key: {
+            async prove(budget, input) {
+              return guardHandle(() => inner.prove(budget, input));
+            },
+            free() {
+              // Poisoned already: the underlying instance is gone (guard
+              // cleared modulePromise when it first trapped), so there is
+              // nothing left to free -- throw the same panic rather than
+              // call into the dead instance.
+              if (poisoned !== undefined) {
+                throw poisoned;
+              }
+              // free() cannot go through guard/guardHandle: the public
+              // signature is synchronous (`free(): void`), not a Promise.
+              // Contain the trap here instead, on the same terms guard does.
+              try {
+                inner.free();
+              } catch (err) {
+                if (err instanceof WebAssembly.RuntimeError) {
+                  modulePromise = undefined;
+                  poisoned = new PqHybridSignPanic(err);
+                  throw poisoned;
+                }
+                throw err;
+              }
+            },
+          },
+          publicKey,
+        };
+      });
+    },
+
     async keygenFromSeed(suite, seed) {
       return guard((raw) => {
         const pair = raw.keygenFromSeed(suite, seed);
@@ -364,6 +628,72 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
         } finally {
           pair.free();
         }
+      });
+    },
+
+    async openStatefulKey(suite, secretKey) {
+      return guard((raw) => {
+        const inner = raw.StatefulKey.open(suite, secretKey);
+
+        // Set the first time any call on this handle traps, and never
+        // cleared: a trap invalidates the instance `inner` points into
+        // (see the crate documentation), so once this handle has seen one,
+        // every later call rejects or throws this same PqHybridSignPanic
+        // instead of touching the dead instance -- most importantly
+        // `export()`, which must never hand back bytes a trapped instance
+        // produced.
+        let poisoned: PqHybridSignPanic | undefined;
+
+        async function guardHandle<T>(call: () => T | Promise<T>): Promise<T> {
+          if (poisoned !== undefined) {
+            throw poisoned;
+          }
+          try {
+            return await guard(call);
+          } catch (err) {
+            if (err instanceof PqHybridSignPanic) {
+              poisoned = err;
+            }
+            throw err;
+          }
+        }
+
+        return {
+          async keyIdentity() {
+            return guardHandle(() => inner.keyIdentity());
+          },
+          async export() {
+            return guardHandle(() => inner.export());
+          },
+          async signStateful(journal, msg, ctx) {
+            return guardHandle(() => inner.signStateful(journal, msg, ctx));
+          },
+          async signStateless(budget, msg, ctx) {
+            return guardHandle(() => inner.signStateless(budget, msg, ctx));
+          },
+          free() {
+            // Poisoned already: the underlying instance is gone (guard
+            // cleared modulePromise when it first trapped), so there is
+            // nothing left to free -- throw the same panic rather than
+            // call into the dead instance.
+            if (poisoned !== undefined) {
+              throw poisoned;
+            }
+            // free() cannot go through guard/guardHandle: the public
+            // signature is synchronous (`free(): void`), not a Promise.
+            // Contain the trap here instead, on the same terms guard does.
+            try {
+              inner.free();
+            } catch (err) {
+              if (err instanceof WebAssembly.RuntimeError) {
+                modulePromise = undefined;
+                poisoned = new PqHybridSignPanic(err);
+                throw poisoned;
+              }
+              throw err;
+            }
+          },
+        };
       });
     },
 

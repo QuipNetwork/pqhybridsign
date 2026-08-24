@@ -78,6 +78,118 @@ test("the module is reloaded after a trap and not before", async () => {
   assert.equal(loads, 2, "a call after a clean call should not reload");
 });
 
+test("a poisoned stateful key handle rejects every later call, including export() and free()", async () => {
+  // The instance behind a stateful key handle is the same instance guard
+  // discards on a trap: once signStateful traps, exporting the handle must
+  // not hand back whatever bytes the now-unsound instance still returns.
+  let exportCalls = 0;
+  let freeCalls = 0;
+  const innerStub = {
+    keyIdentity() {
+      return new Uint8Array(32);
+    },
+    export() {
+      exportCalls += 1;
+      // Bytes a trapped instance might still hand back. The property this
+      // test exists to prove is that these never reach the caller.
+      return new Uint8Array(4).fill(0xee);
+    },
+    signStateful() {
+      throw new WebAssembly.RuntimeError("unreachable");
+    },
+    signStateless() {
+      return new Uint8Array(4);
+    },
+    free() {
+      freeCalls += 1;
+    },
+  };
+
+  const api = createApi(async () => ({
+    profileName() {
+      return "shrincs-256s";
+    },
+    StatefulKey: {
+      open() {
+        return innerStub;
+      },
+    },
+  }));
+
+  const journal = {
+    commit() {},
+    nextLeaf() {
+      return 0;
+    },
+    boundKey() {
+      return null;
+    },
+    bindKey() {},
+  };
+
+  const key = await api.openStatefulKey("H5", new Uint8Array(4));
+
+  await assert.rejects(
+    () => key.signStateful(journal, new Uint8Array(1), new Uint8Array(1)),
+    PqHybridSignPanic,
+  );
+
+  await assert.rejects(() => key.export(), PqHybridSignPanic);
+  assert.equal(exportCalls, 0, "export() must not call into the trapped instance");
+
+  assert.throws(() => key.free(), PqHybridSignPanic);
+  assert.equal(freeCalls, 0, "free() must not call into the trapped instance");
+});
+
+test("a poisoned VRF key handle rejects every later call, including free()", async () => {
+  // The mirror of the stateful key handle test above, for the VRF key
+  // handle deriveVrfStatelessKey returns: the same instance guard discards
+  // on a trap backs it, so once prove() traps, neither a later prove() nor
+  // free() may reach the dead instance.
+  let proveCalls = 0;
+  let freeCalls = 0;
+  const innerStub = {
+    prove() {
+      proveCalls += 1;
+      throw new WebAssembly.RuntimeError("unreachable");
+    },
+    free() {
+      freeCalls += 1;
+    },
+  };
+
+  const api = createApi(async () => ({
+    profileName() {
+      return "shrincs-256s";
+    },
+    deriveVrfStatelessKey() {
+      return { key: innerStub, publicKey: new Uint8Array(4) };
+    },
+  }));
+
+  const { key } = await api.deriveVrfStatelessKey("H5", new Uint8Array(4));
+
+  const budget = {
+    consumed() {
+      return null;
+    },
+    record() {},
+  };
+
+  await assert.rejects(() => key.prove(budget, new Uint8Array(1)), PqHybridSignPanic);
+  assert.equal(proveCalls, 1, "the first call reaches the trapped instance");
+
+  // The property this test exists to prove: a call after the trap must not
+  // reach the dead instance a second time, counted rather than merely
+  // asserted to throw -- a second call that itself traps independently
+  // would also satisfy "it threw" without proving containment.
+  await assert.rejects(() => key.prove(budget, new Uint8Array(1)), PqHybridSignPanic);
+  assert.equal(proveCalls, 1, "a later call must not call into the trapped instance again");
+
+  assert.throws(() => key.free(), PqHybridSignPanic);
+  assert.equal(freeCalls, 0, "free() must not call into the trapped instance");
+});
+
 test("the real node loader produces a working module twice", async () => {
   // Not a trap test. It checks the mechanism the recovery in the test
   // above depends on: that the shipped loader, called a second time,

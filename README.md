@@ -210,6 +210,11 @@ SHRINCS signer under a 128s profile pays the key-generation cost, about 47
 seconds, on every signature. The in-process Rust API does not. The table
 measures the Rust API. Tracked as `pqhs-bf1`.
 
+Each binding also offers an opaque key handle that imports once and signs
+many times: `pqhs_stateful_key_open` in C, `StatefulSecretKey` in Python,
+and `openStatefulKey` in the npm package. A signer taking more than one
+signature from a key should use it.
+
 On-chain verification cost is a property of a downstream verifier, not of this
 chain-agnostic library. The SHRINCS component has a Solidity verifier with
 measured EVM gas and a Solana verify program, both in

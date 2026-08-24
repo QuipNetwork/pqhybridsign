@@ -29,13 +29,27 @@ const ok = await verify("H1", publicKey, msg, ctx, sig);
 // ok === true
 ```
 
-`Suite` names H1 through H4 sign and verify from this package. H5 and H6 are
-stateful suites: this package does not offer signing for them, because a
-JavaScript secret key object cannot stop `structuredClone` or a second
-reference from forking its one-time leaf counter, which destroys the key's
-post-quantum security. `keygenFromSeed`, `sign` and `signDeterministic`
-reject for H5 and H6. `verify`, `verifyWithStoredPublicKey` and the length
-accessors work as documented for every suite.
+`Suite` names H1 through H4 are stateless: `keygenFromSeed`, `sign` and
+`signDeterministic` sign and verify with them, and reject H5 and H6. H5 and
+H6 are stateful: each signature spends a one-time leaf. `keygenStatefulFromSeed`,
+`openStatefulKey`, `signStateful`, `signStateless` and `adoptKey` handle them
+instead. Each call takes a caller-supplied durable leaf journal, which
+records a leaf before its signature returns. That durability stops a
+JavaScript secret key handle from forking its counter. A bare
+`structuredClone` or a second reference would otherwise fork it and destroy
+the key's post-quantum security. `verify`, `verifyWithStoredPublicKey` and
+the length accessors work as documented for every suite.
+
+`masterSeedFromMnemonic`, `deriveHardJunction` and `deriveHardJunctionPath`
+derive a 32-byte master seed from an English recovery phrase or from an
+existing master seed, using Substrate's key derivation rather than standard
+BIP39.
+
+`vrfProofLen`, `vrfProve`, `vrfProveDeterministic`, `vrfVerify` and
+`vrfMakeBytes` cover the hybrid verifiable random function for H1
+through H4. H5 and H6 use it through `deriveVrfStatelessKey` and the
+returned key's `prove`, which spend a caller-tracked few-time stateless
+budget instead of a signing leaf.
 
 ## Publishing this package
 
