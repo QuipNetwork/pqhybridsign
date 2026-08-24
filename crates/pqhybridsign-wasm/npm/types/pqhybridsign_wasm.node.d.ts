@@ -88,10 +88,12 @@ export class SignStatefulResult {
  * # `free()` must be called
  *
  * A caller must call `free()`, call `[Symbol.dispose]()`, or declare
- * the value with JavaScript `using`. The key lives in wasm memory, which
- * JavaScript garbage collection does not reach, so a handle that is
- * dropped without `free()` keeps its secret key material alive for the
- * life of the instance.
+ * the value with JavaScript `using`. wasm-bindgen registers every
+ * handle with a `FinalizationRegistry` that calls the free function
+ * when the wrapper becomes unreachable, but that release is not under
+ * the caller's control: it may happen at any garbage collection, and
+ * it may never happen at all. A handle dropped without `free()` cannot
+ * be relied on to release its secret key material.
  *
  * # Only H5 and H6
  *
@@ -193,10 +195,12 @@ export class StatefulKey {
  * # `free()` must be called
  *
  * A caller must call `free()`, call `[Symbol.dispose]()`, or declare the
- * value with JavaScript `using`. The key lives in wasm memory, which
- * JavaScript garbage collection does not reach, so a handle that is
- * dropped without `free()` keeps its key material alive for the life of
- * the instance.
+ * value with JavaScript `using`. wasm-bindgen registers every handle
+ * with a `FinalizationRegistry` that calls the free function when the
+ * wrapper becomes unreachable, but that release is not under the
+ * caller's control: it may happen at any garbage collection, and it may
+ * never happen at all. A handle dropped without `free()` cannot be
+ * relied on to release its key material.
  */
 export class VrfKey {
     private constructor();
@@ -708,9 +712,10 @@ export function verifyWithStoredPublicKeyStateless(suite: string, stored_public_
 export function vrfMakeBytes(suite: string, public_key: Uint8Array, input: Uint8Array, proof: Uint8Array, context: Uint8Array): Uint8Array;
 
 /**
- * Length in bytes of a hybrid VRF proof for `suite`. Total over all six
- * suites; see `pqhybridsign_abi::vrf_proof_len` for what this length
- * means for each.
+ * Length in bytes of a hybrid VRF proof for `suite`.
+ *
+ * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
+ * delta-length binding can occupy. For H5 and H6 this is exact.
  *
  * # Errors
  *
