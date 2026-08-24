@@ -24,9 +24,11 @@
 
 mod bytes_in;
 mod errors;
+mod seed;
 mod stateful;
 mod stateless;
 mod suite;
+mod vrf;
 
 use pyo3::prelude::*;
 
@@ -39,5 +41,7 @@ fn _pqhybridsign(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     errors::register(py, m)?;
     stateless::register(m)?;
     stateful::register(m)?;
+    seed::register(m)?;
+    vrf::register(m)?;
     Ok(())
 }

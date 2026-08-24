@@ -112,6 +112,12 @@ sub_exception!(
     "A stateful (H5/H6) secret key cannot be copied, deep-copied or pickled: \
      doing so would let the same one-time leaf be spent twice."
 );
+sub_exception!(
+    InvalidMnemonicError,
+    "The recovery phrase is not a valid English BIP39 mnemonic: a wrong word count, an \
+     unknown word, or a bad checksum. The three are not distinguished, because telling an \
+     attacker which part of a guessed phrase was wrong narrows the search."
+);
 
 /// Translate an [`AbiError`] into the matching Python exception.
 pub(crate) fn to_py_err(e: AbiError) -> PyErr {
@@ -135,6 +141,7 @@ pub(crate) fn to_py_err(e: AbiError) -> PyErr {
         AbiError::JournalKeyMismatch => JournalKeyMismatchError::new_err(msg),
         AbiError::StatelessBudgetExhausted => StatelessBudgetExhaustedError::new_err(msg),
         AbiError::BudgetStoreFailed => BudgetStoreFailedError::new_err(msg),
+        AbiError::InvalidMnemonic => InvalidMnemonicError::new_err(msg),
         // `AbiError` is `#[non_exhaustive]`: only a variant added after
         // this crate was written can reach this arm, since every variant
         // that exists today has its own arm above.
@@ -202,6 +209,10 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     m.add(
         "StatefulKeyNotCloneableError",
         py.get_type::<StatefulKeyNotCloneableError>(),
+    )?;
+    m.add(
+        "InvalidMnemonicError",
+        py.get_type::<InvalidMnemonicError>(),
     )?;
     Ok(())
 }

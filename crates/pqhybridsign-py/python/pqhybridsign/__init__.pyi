@@ -94,6 +94,9 @@ class BudgetStoreFailedError(PqHybridSignError):
 class StatefulKeyNotCloneableError(PqHybridSignError):
     """A stateful (H5/H6) secret key cannot be copied, deep-copied or pickled."""
 
+class InvalidMnemonicError(PqHybridSignError):
+    """The recovery phrase is not a valid English BIP39 mnemonic."""
+
 class Suite:
     """One of the six hybrid suites pqhybridsign ships.
 
@@ -415,3 +418,123 @@ def verify_with_stored_public_key_stateless(
     accepts only a signature produced by `sign_stateless`. Use this for
     rotation and recovery authorizations, and for any other message
     deliberately signed on the few-time stateless path."""
+
+def master_seed_from_mnemonic(phrase: str, password: Optional[str] = None) -> bytes:
+    """Turn an English BIP39 recovery phrase into a master seed.
+
+    This is Substrate's seed derivation, not standard BIP39: PBKDF2-HMAC-
+    SHA512 runs over the mnemonic's entropy, not over the phrase text,
+    salted with `"mnemonic" || password`, for 2048 rounds. `password` is
+    the empty string when `None`.
+
+    Raises `InvalidMnemonicError` if `phrase` is not a valid English BIP39
+    mnemonic: a wrong word count, an unknown word, or a bad checksum."""
+
+def derive_hard_junction(
+    parent_master: ReadableBuffer, chain_code: ReadableBuffer
+) -> bytes:
+    """Derive a hard-junction child master seed.
+
+    Derivation is deterministic: the same parent and chain code reach the
+    same child seed on every host that computes it, and therefore the same
+    stateful tree starting at leaf 1. Deriving one child twice on two
+    hosts is the same failure as importing one key twice -- both hosts
+    spend leaf 1, and the post-quantum security of that key is gone. A
+    derived child must be derived once, then persisted and restored
+    through the validating import path.
+
+    Raises `BadLengthError` if `parent_master` or `chain_code` is not 32
+    bytes."""
+
+def derive_hard_junction_path(
+    parent_master: ReadableBuffer, chain_codes: list[ReadableBuffer]
+) -> bytes:
+    """Apply a sequence of chain codes in order, each child becoming the
+    next parent. `[a, b]` means
+    `derive_hard_junction(derive_hard_junction(parent, a), b)`.
+
+    An empty `chain_codes` returns `parent_master` unchanged -- a caller
+    that requires at least one junction must check for that itself. See
+    `derive_hard_junction` for the re-keygen hazard, which applies to
+    every seed this function returns.
+
+    Raises `ValueError` naming the offending index if any element of
+    `chain_codes` is not 32 bytes."""
+
+def vrf_proof_len(suite: Suite) -> int:
+    """Length in bytes of a hybrid VRF proof for `suite`."""
+
+def vrf_prove(suite: Suite, secret_key: ReadableBuffer, input: ReadableBuffer) -> bytes:
+    """Evaluate the hybrid VRF for `suite`.
+
+    H1 through H4 only: H5 and H6 spend one unit of a few-time stateless
+    budget per evaluation and prove through `VrfStatelessKey.prove`
+    instead.
+
+    Raises `WrongEntryPointForSuiteError` for H5 and H6."""
+
+def vrf_prove_deterministic(
+    suite: Suite, secret_key: ReadableBuffer, input: ReadableBuffer
+) -> bytes:
+    """Evaluate the hybrid VRF for `suite` with a reproducible classical
+    proof. The same suite restriction and errors as `vrf_prove`."""
+
+def vrf_verify(
+    suite: Suite,
+    public_key: ReadableBuffer,
+    input: ReadableBuffer,
+    proof: ReadableBuffer,
+) -> bool:
+    """Verify a hybrid VRF proof for `suite`. Covers all six suites.
+    Returns `False`, never raises, for a malformed `public_key` or
+    `proof`."""
+
+def vrf_make_bytes(
+    suite: Suite,
+    public_key: ReadableBuffer,
+    input: ReadableBuffer,
+    proof: ReadableBuffer,
+    context: ReadableBuffer,
+) -> bytes:
+    """Derive 32 output bytes from a verified VRF proof for `suite`.
+
+    Verify the proof first: `vrf_verify` is what establishes that the
+    pre-output belongs to this key and this input. Deriving bytes from an
+    unverified proof derives bytes from whatever an attacker supplied.
+
+    `context` separates two uses of one proof: the same proof under two
+    different contexts gives unrelated bytes."""
+
+class VrfStatelessKey:
+    """A SHRINCS key dedicated to VRF evaluation, held across calls.
+
+    H5 and H6 evaluate the VRF through their post-quantum half's few-time
+    stateless path, which draws on a budget shared with rotation and
+    recovery. The key that carries an identity's rotation and recovery
+    authority must not also spend that budget on VRF evaluations, so this
+    type holds a separate, dedicated key: `derive` gets one from the
+    master seed under a label disjoint from the identity key's, so the
+    two never collide.
+
+    The key lives only in memory: there is no export."""
+
+    @classmethod
+    def derive(
+        cls, suite: Suite, master: ReadableBuffer
+    ) -> tuple["VrfStatelessKey", bytes]:
+        """Derive a dedicated VRF key from `master` for `suite`. Returns
+        `(key, public_key)`.
+
+        Runs a real key generation: about 47 seconds at a 128s profile.
+        Released from the GIL while it runs.
+
+        Raises `WrongEntryPointForSuiteError` for H1 through H4.
+        Raises `BadLengthError` if `master` is not 32 bytes."""
+
+    def prove(self, budget: StatelessBudgetStore, input: ReadableBuffer) -> bytes:
+        """Evaluate the VRF on `input`, spending one unit of this key's
+        few-time stateless budget through `budget`.
+
+        Raises `StatelessBudgetExhaustedError` if this key's stateless
+        budget is spent. Raises `BudgetStoreFailedError` if `budget.record`
+        raised or otherwise failed to run."""

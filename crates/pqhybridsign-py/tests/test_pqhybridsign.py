@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import ast
 import copy
 import pickle
+from pathlib import Path
 
 import pytest
 
@@ -756,3 +758,147 @@ def test_every_name_in_all_is_importable():
     """Every name `__all__` promises must actually resolve on the package."""
     unresolved = [n for n in phs.__all__ if not hasattr(phs, n)]
     assert not unresolved, f"__all__ names that do not resolve: {unresolved}"
+
+
+def test_every_name_in_all_appears_in_the_type_stub():
+    """`__init__.pyi` is hand-maintained, so a name added to `__all__`
+    without a matching stub entry silently loses editor completion and
+    static type checking, with no other test in this file noticing.
+    """
+    stub_path = Path(phs.__file__).with_name("__init__.pyi")
+    tree = ast.parse(stub_path.read_text())
+    stub_names = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    missing = set(phs.__all__) - stub_names
+    assert not missing, f"__all__ names missing from the .pyi stub: {sorted(missing)}"
+
+
+# The standard all-zero-entropy BIP39 test vector, matching
+# pqhybridsign_abi::seed's own tests.
+BIP39_PHRASE = (
+    "abandon abandon abandon abandon abandon abandon abandon abandon "
+    "abandon abandon abandon about"
+)
+
+
+def test_master_seed_from_mnemonic_is_stable():
+    """The same phrase and password reach the same seed on every call: the
+    property a recovery flow depends on."""
+    seed = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    assert len(seed) == 32
+    assert seed != b"\x00" * 32
+    again = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    assert seed == again
+
+
+def test_master_seed_from_mnemonic_rejects_an_invalid_phrase():
+    with pytest.raises(phs.InvalidMnemonicError):
+        phs.master_seed_from_mnemonic("not a mnemonic at all")
+
+
+def test_master_seed_from_mnemonic_password_changes_the_seed():
+    without = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    with_password = phs.master_seed_from_mnemonic(BIP39_PHRASE, "pw")
+    assert without != with_password
+
+
+def test_a_junction_child_differs_from_its_parent_and_its_sibling():
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    a = phs.derive_hard_junction(parent, bytes([1]) * 32)
+    b = phs.derive_hard_junction(parent, bytes([2]) * 32)
+    assert a != parent
+    assert b != parent
+    assert a != b
+
+
+def test_a_junction_path_equals_the_stepwise_derivation():
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    first = bytes([1]) * 32
+    second = bytes([2]) * 32
+
+    intermediate = phs.derive_hard_junction(parent, first)
+    stepwise = phs.derive_hard_junction(intermediate, second)
+
+    path = phs.derive_hard_junction_path(parent, [first, second])
+    assert path == stepwise
+
+    # Order is part of the derivation.
+    reversed_path = phs.derive_hard_junction_path(parent, [second, first])
+    assert reversed_path != path
+
+
+def test_an_empty_junction_path_returns_the_parent():
+    """Documented, not accidental: a caller that parsed an empty path gets
+    the parent key back rather than an error, and must check for that
+    itself."""
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    assert phs.derive_hard_junction_path(parent, []) == parent
+
+
+def test_a_wrong_length_chain_code_raises_value_error_naming_the_index():
+    parent = phs.master_seed_from_mnemonic(BIP39_PHRASE)
+    good = bytes([1]) * 32
+    short = bytes([2]) * 31
+    with pytest.raises(ValueError, match="index 1"):
+        phs.derive_hard_junction_path(parent, [good, short])
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_a_vrf_proof_verifies(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    assert len(proof) <= phs.vrf_proof_len(suite)
+    assert phs.vrf_verify(suite, pk, b"input", proof)
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_a_tampered_vrf_proof_does_not_verify(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    proof[0] ^= 0x01
+    assert phs.vrf_verify(suite, pk, b"input", bytes(proof)) is False
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_is_stable_across_two_proofs_of_one_input(suite):
+    """Two evaluations of one input under one key give the same output, so
+    a prover cannot re-roll for a better value -- the property the
+    construction rests on, and it holds regardless of whether the suite
+    hedges its classical proof's nonce."""
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof_a = phs.vrf_prove(suite, sk, b"input")
+    proof_b = phs.vrf_prove(suite, sk, b"input")
+    out_a = phs.vrf_make_bytes(suite, pk, b"input", proof_a, b"context")
+    out_b = phs.vrf_make_bytes(suite, pk, b"input", proof_b, b"context")
+    assert out_a == out_b
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_context_separates_two_uses_of_one_proof(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    score = phs.vrf_make_bytes(suite, pk, b"input", proof, b"leadership")
+    randomness = phs.vrf_make_bytes(suite, pk, b"input", proof, b"randomness")
+    assert score != randomness
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_prove_deterministic_repeats_byte_for_byte(suite):
+    sk, _pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    a = phs.vrf_prove_deterministic(suite, sk, b"input")
+    b = phs.vrf_prove_deterministic(suite, sk, b"input")
+    assert a == b
+
+
+@pytest.mark.parametrize("suite", STATEFUL_SUITES)
+def test_vrf_prove_rejects_the_stateful_suites(suite):
+    """H5 and H6 spend a few-time budget unit per evaluation and prove
+    through `VrfStatelessKey.prove` instead: a call that looked free and
+    was not would be the worst failure mode this module could offer."""
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.vrf_prove(suite, b"\x00" * 328, b"input")
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.vrf_prove_deterministic(suite, b"\x00" * 328, b"input")
