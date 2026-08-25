@@ -3,7 +3,6 @@
 **Status:** Implemented through Cycle 5
 **Date:** 2026-08-10, revised 2026-08-16
 **Source specification:** Hybrid Post-Quantum Signature Constructions, version 2.0, 2026-07-18
-**Tracker:** beads prefix `pqhs`
 
 ## Summary
 
