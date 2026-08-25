@@ -41,11 +41,11 @@
 // do not depend on the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign::encoding_path;
 use pqhybridsign::rotation::{self, NextStoredPublicKey, RotationKind, RotationPayload};
 use pqhybridsign::shrincs::{keygen, PublicKey, SecretKey, H5};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_test_support::MemoryBudget;
 use std::sync::OnceLock;
 
 const CTX: &[u8] = b"pqhs-qy5.2-rotation";
@@ -376,25 +376,4 @@ fn a_payload_naming_a_different_current_key_is_refused() {
         "a payload whose current_commitment is not this key's must be refused, \
          even though both signatures over it are valid"
     );
-}
-
-/// An in-memory `StatelessBudgetStore`. Not durable across a process
-/// restart, which is fine for a test: the property under test is that the
-/// count is consulted and advanced at all, not real persistence. A
-/// deployment must persist this, or the few-time bound of specification
-/// section 21 can be exceeded silently after any restart.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-impl StatelessBudgetStore for MemoryBudget {
-    type Error = core::convert::Infallible;
-
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
 }

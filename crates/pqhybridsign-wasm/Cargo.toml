@@ -32,6 +32,9 @@ js-sys = "0.3.104"
 getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
+# The shared `MemoryBudget` test double. Path-only, so `cargo package`
+# strips it and the unpublished crate never blocks a release.
+pqhybridsign-test-support = { path = "../pqhybridsign-test-support" }
 wasm-bindgen-test = "0.3.77"
 sha2 = "0.10.9"
 

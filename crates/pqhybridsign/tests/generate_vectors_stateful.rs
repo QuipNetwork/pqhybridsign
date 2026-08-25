@@ -33,10 +33,10 @@
 //! Leaves 1, 2 and 4 are recorded; leaf 3 is spent (state must advance
 //! through it to reach leaf 4) but its signature is not checked, so it is
 //! not persisted.
-use pqhybridsign::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5, H6};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
+use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -202,25 +202,4 @@ fn generate_h5() {
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
 fn generate_h6() {
     emit::<H6>("H6", [0x60u8; 32]);
-}
-
-/// An in-memory `StatelessBudgetStore`. Not durable across a process
-/// restart, which is fine for a test: the property under test is that the
-/// count is consulted and advanced at all, not real persistence. A
-/// deployment must persist this, or the few-time bound of specification
-/// section 21 can be exceeded silently after any restart.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-impl StatelessBudgetStore for MemoryBudget {
-    type Error = core::convert::Infallible;
-
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
 }

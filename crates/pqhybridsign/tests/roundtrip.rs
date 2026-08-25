@@ -28,9 +28,9 @@
 // test does not depend on the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign::shrincs::{keygen, H5, H6};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -211,25 +211,4 @@ fn h6_stateless_signature_verifies() {
         H6::sign_stateless(&sk, &mut MemoryBudget::default(), b"h6 stateless", b"").expect("sign");
 
     assert!(H6::verify_stateless(&pk, b"h6 stateless", b"", &sig));
-}
-
-/// An in-memory `StatelessBudgetStore`. Not durable across a process
-/// restart, which is fine for a test: the property under test is that the
-/// count is consulted and advanced at all, not real persistence. A
-/// deployment must persist this, or the few-time bound of specification
-/// section 21 can be exceeded silently after any restart.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-impl StatelessBudgetStore for MemoryBudget {
-    type Error = core::convert::Infallible;
-
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
 }

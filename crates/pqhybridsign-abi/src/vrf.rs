@@ -477,53 +477,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        keygen_from_seed, public_key_len, secret_key_len, AbiError, BudgetKey,
-        StatelessBudgetStore, Suite,
-    };
+    use crate::{keygen_from_seed, public_key_len, secret_key_len, AbiError, Suite};
     use pqhybridsign::component::ClassicalScheme;
+    use pqhybridsign_test_support::MemoryBudget;
     use rand_core::OsRng;
-    use std::collections::HashMap;
 
     const INPUT: &[u8] = b"epoch-7/slot-42/randomness";
     const OTHER: &[u8] = b"epoch-7/slot-43/randomness";
     const OUT_CTX: &[u8] = b"leadership-score";
 
     const STATELESS: [Suite; 4] = [Suite::H1, Suite::H2, Suite::H3, Suite::H4];
-
-    /// An in-memory [`StatelessBudgetStore`]. Not durable: these tests
-    /// exercise whether the count is consulted, not persistence.
-    #[derive(Default)]
-    struct MemoryBudget {
-        entries: HashMap<BudgetKey, u64>,
-        /// When set, [`StatelessBudgetStore::consumed`] reports this count
-        /// for every key. A `HashMap` cannot pre-load a [`BudgetKey`] that
-        /// has not been seen, so [`Self::exhausted`] uses this floor.
-        floor: Option<u64>,
-    }
-
-    impl MemoryBudget {
-        /// Pre-load the maximum: every key reports as fully spent.
-        fn exhausted() -> Self {
-            Self {
-                entries: HashMap::new(),
-                floor: Some(u64::MAX),
-            }
-        }
-    }
-
-    impl StatelessBudgetStore for MemoryBudget {
-        type Error = core::convert::Infallible;
-
-        fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-            self.entries.get(key).copied().or(self.floor)
-        }
-
-        fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-            self.entries.insert(*key, count);
-            Ok(())
-        }
-    }
 
     fn keypair(suite: Suite) -> (Vec<u8>, Vec<u8>) {
         let mut sk = vec![0u8; secret_key_len(suite)];

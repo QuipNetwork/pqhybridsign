@@ -6,6 +6,7 @@ members = [
     "crates/pqhybridsign-wasm",
     "crates/pqhybridsign-py",
     "crates/pqhybridsign-cffi",
+    "crates/pqhybridsign-test-support",
 ]
 
 [workspace.package]

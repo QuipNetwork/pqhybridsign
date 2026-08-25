@@ -58,6 +58,11 @@ curve25519-dalek = { version = "4.1", default-features = false, features = [
 ], optional = true }
 
 [dev-dependencies]
+# The shared `MemoryBudget` test double. Path-only and `publish = false` on
+# the other side, so `cargo package` strips it and it never reaches
+# crates.io. The dependency points back at this crate, which cargo allows
+# for dev-dependencies specifically.
+pqhybridsign-test-support = { path = "../pqhybridsign-test-support" }
 subtle.workspace = true
 rand_core = { workspace = true, features = ["getrandom"] }
 hex.workspace = true
