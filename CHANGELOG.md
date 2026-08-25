@@ -2,6 +2,52 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc8
+
+rc8 changes nothing a caller of any published artifact can observe. Every
+change to a Rust source file in this release falls inside a `#[cfg(test)]`
+module, so the compiled library, the C library, the Python extension and the
+WebAssembly package behave exactly as they do in rc7. The signature suites and
+the wire format do not change. The work is in the test suite and in the
+repository's own instructions.
+
+### Changed
+
+- One `MemoryBudget` test double now serves the workspace, in a new
+  `pqhybridsign-test-support` crate. Twelve copies existed before, in three
+  shapes: a tuple over a `HashMap` at nine sites, a version with a floor that
+  reports unseen keys as spent at two, and one with a fail flag that drives the
+  `StoreFailed` refusal. A change to `StatelessBudgetStore` had to reach twelve
+  hand-written implementations, and a site that was missed would keep passing
+  against the old behaviour. The shared double is fallible, because one type
+  cannot be both `Infallible` and able to fail.
+- `AGENTS.md` carries the project's build, test, layout, feature and release
+  instructions. It previously held two sections of policy and nothing about how
+  to build or test the project.
+
+### Removed
+
+- The beads issue tracker is gone, and with it the local database, the agent
+  skill, the `SessionStart` hook that ran `bd prime`, the beads-managed git
+  hooks, and the ignore rules and documentation lines naming any of them. The
+  `prek`
+  pre-commit hook that refuses crates.io dependencies younger than seven days
+  lived under the beads hooks directory and now sits at `.git/hooks/pre-commit`,
+  so that check still runs.
+- `CLAUDE.md`. `AGENTS.md` is the cross-tool standard and the authoritative
+  file, and what remained in `CLAUDE.md` was an unfilled template.
+
+### Notes
+
+- `pqhybridsign-test-support` sets `publish = false`, and every consumer names
+  it as a path-only dev-dependency, which `cargo package` strips. It cannot
+  reach crates.io.
+- Ten of the twelve sites use the shared double. The two unit tests inside the
+  `pqhybridsign` library keep a local copy: the support crate depends on
+  `pqhybridsign`, so cargo compiles that library a second time for its `--test`
+  target, and the two `StatelessBudgetStore` definitions are then distinct
+  types. Integration tests link the crate the ordinary way and are unaffected.
+
 ## 0.0.0-rc7
 
 rc7 adds a stateful key handle to the ABI and all three bindings, so that

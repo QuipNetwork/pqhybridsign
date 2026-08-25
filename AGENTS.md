@@ -124,7 +124,7 @@ deleted.** Confirm with a human before pushing a release tag.
 `scripts/check-release-version.py <tag>` asserts that the tag matches the
 workspace `Cargo.toml`, the npm `package.json`, and that `pyproject.toml` still
 declares `dynamic = ["version"]`. Run it before tagging. The Python wheel name
-uses the PEP 440 spelling, so `v0.0.0-rc7` produces `0.0.0rc7`, and the two
+uses the PEP 440 spelling, so `v0.0.0-rc8` produces `0.0.0rc8`, and the two
 never match byte for byte.
 
 Tag the merge commit on `main`, not the branch head, and use an annotated tag
