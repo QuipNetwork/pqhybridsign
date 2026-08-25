@@ -18,7 +18,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc7" }
+pqhybridsign-abi = { path = "../pqhybridsign-abi", version = "0.0.0-rc8" }
 rand_core = { workspace = true, features = ["getrandom"] }
 zeroize.workspace = true
 wasm-bindgen = "0.2.127"
@@ -32,6 +32,9 @@ js-sys = "0.3.104"
 getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
+# The shared `MemoryBudget` test double. Path-only, so `cargo package`
+# strips it and the unpublished crate never blocks a release.
+pqhybridsign-test-support = { path = "../pqhybridsign-test-support" }
 wasm-bindgen-test = "0.3.77"
 sha2 = "0.10.9"
 

@@ -24,9 +24,8 @@ use pqhybridsign::{
     suite::{DeltaSuite, Suite as CoreSuite},
 };
 use pqhybridsign::{H1, H2, H3, H4};
-use pqhybridsign_abi::{
-    AbiError, BudgetKey, KeyIdentity, LeafJournal, StatelessBudgetStore, Suite,
-};
+use pqhybridsign_abi::{AbiError, KeyIdentity, LeafJournal, Suite};
+use pqhybridsign_test_support::MemoryBudget;
 use rand_core::OsRng;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -36,22 +35,6 @@ struct JournalState {
     committed: Vec<u32>,
     bound: Option<KeyIdentity>,
 }
-/// An in-memory `StatelessBudgetStore`, the budget counterpart of
-/// `MemoryJournal`. Not durable; a deployment must persist this or the
-/// few-time bound of specification section 21 restarts at zero.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-impl StatelessBudgetStore for MemoryBudget {
-    type Error = std::convert::Infallible;
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
-}
-
 struct MemoryJournal(Rc<RefCell<JournalState>>);
 impl LeafJournal for MemoryJournal {
     type Error = std::convert::Infallible;

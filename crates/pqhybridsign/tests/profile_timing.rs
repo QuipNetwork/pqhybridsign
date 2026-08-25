@@ -35,10 +35,10 @@
 //! and it was wrong: the `cross_profile` test does one keygen and no signing
 //! at all, yet accounted for 3259 s under `profile-128s-q18` against 0.39 s
 //! under `profile-256s`. Per-operation numbers settle it.
-use pqhybridsign::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign::component::PqStatefulScheme;
 use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
+use pqhybridsign_test_support::MemoryBudget;
 use std::time::Instant;
 
 const SEED: [u8; 32] = [0x42; 32];
@@ -96,25 +96,4 @@ fn time_the_costly_operations() {
         stateful.len(),
         stateless.len(),
     );
-}
-
-/// An in-memory `StatelessBudgetStore`. Not durable across a process
-/// restart, which is fine for a test: the property under test is that the
-/// count is consulted and advanced at all, not real persistence. A
-/// deployment must persist this, or the few-time bound of specification
-/// section 21 can be exceeded silently after any restart.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-impl StatelessBudgetStore for MemoryBudget {
-    type Error = core::convert::Infallible;
-
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
 }

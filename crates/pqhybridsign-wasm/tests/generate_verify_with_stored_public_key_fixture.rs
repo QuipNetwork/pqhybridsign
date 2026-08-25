@@ -39,26 +39,9 @@
 //! either a hex string with no character `"` or `\` can ever produce, or a
 //! plain integer.
 
-use pqhybridsign_abi::{BudgetKey, KeyIdentity, LeafJournal, Suite};
+use pqhybridsign_abi::{KeyIdentity, LeafJournal, Suite};
+use pqhybridsign_test_support::MemoryBudget;
 use std::path::PathBuf;
-
-/// An in-memory `StatelessBudgetStore`. Not durable -- fine for a
-/// one-shot generator that exits immediately after writing the fixture.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-impl pqhybridsign_abi::StatelessBudgetStore for MemoryBudget {
-    type Error = core::convert::Infallible;
-
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
-}
 
 /// An in-memory `LeafJournal`, used only to produce the stateful-selector
 /// (`0x01`) signature the fixture also carries. Not durable, on the same

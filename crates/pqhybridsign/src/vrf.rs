@@ -1641,8 +1641,16 @@ mod stateful_tests {
     /// ECVRF proof is `c || s` rather than schnorrkel's 64-byte DLEQ proof.
     const SR_HEADER: usize = header_len::<crate::classical::Sr25519>();
 
-    /// A budget store held in memory. `Infallible` because a test that wants
-    /// to see a store fault sets `fail` instead of relying on a real fault.
+    /// A budget store held in memory. A test that wants to see a store fault
+    /// sets `fail` rather than relying on a real one.
+    ///
+    /// Local rather than `pqhybridsign_test_support::MemoryBudget`, which
+    /// every other test in the workspace uses. That crate depends on this
+    /// one, so for a unit test inside this library cargo compiles this crate
+    /// twice -- once as the library the double was built against, once as
+    /// the `--test` target -- and the two `StatelessBudgetStore` traits are
+    /// then distinct types. Integration tests under `tests/` link this crate
+    /// the ordinary way and do use the shared double.
     #[derive(Default)]
     struct MemoryBudget {
         entries: Vec<(BudgetKey, u64)>,

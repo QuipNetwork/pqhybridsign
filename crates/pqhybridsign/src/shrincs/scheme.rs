@@ -705,6 +705,14 @@ mod tests {
     /// Gated to the one profile whose tests construct it. Under the other
     /// three profiles the fixture would be dead code, and the per-profile
     /// clippy run holds `--all-targets` to `-D warnings`.
+    ///
+    /// Local rather than `pqhybridsign_test_support::MemoryBudget`, which
+    /// every other test in the workspace uses. That crate depends on this
+    /// one, so for a unit test inside this library cargo compiles this
+    /// crate twice -- once as the library the double was built against,
+    /// once as the `--test` target -- and the two `StatelessBudgetStore`
+    /// traits are then distinct types. Integration tests under `tests/` link
+    /// this crate the ordinary way and do use the shared double.
     #[cfg(feature = "profile-256s")]
     #[derive(Default)]
     struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);

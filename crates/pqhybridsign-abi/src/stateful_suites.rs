@@ -619,8 +619,8 @@ pub(crate) fn write_sig(sig_out: &mut [u8], sig: &[u8]) -> Result<usize, AbiErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pqhybridsign::budget::BudgetKey;
     use pqhybridsign::stateful::LeafJournal;
+    use pqhybridsign_test_support::MemoryBudget;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -629,25 +629,6 @@ mod tests {
         committed: Vec<u32>,
         bound: Option<KeyIdentity>,
     }
-    /// An in-memory `StatelessBudgetStore`, the budget counterpart of
-    /// `MemoryJournal` above. Not durable: these tests exercise whether the
-    /// count is consulted, not persistence.
-    #[derive(Default)]
-    struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-    impl StatelessBudgetStore for MemoryBudget {
-        type Error = core::convert::Infallible;
-
-        fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-            self.0.get(key.as_bytes()).copied()
-        }
-
-        fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-            self.0.insert(*key.as_bytes(), count);
-            Ok(())
-        }
-    }
-
     struct MemoryJournal(Rc<RefCell<JournalState>>);
     impl LeafJournal for MemoryJournal {
         type Error = core::convert::Infallible;

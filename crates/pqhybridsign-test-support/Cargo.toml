@@ -1,0 +1,22 @@
+[package]
+name = "pqhybridsign-test-support"
+description = "Test doubles shared across the pqhybridsign workspace. Not published."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Never goes to crates.io. Every crate that uses it names it as a
+# path-only dev-dependency, which `cargo package` strips, so this crate
+# cannot reach a published artifact even by accident.
+publish = false
+
+[dependencies]
+# Only for `BudgetKey` and `StatelessBudgetStore`, both of which live in the
+# ungated `budget` module. No feature is named here: a consumer's own feature
+# selection unifies onto this dependency, which matters because the four
+# `profile-*` features are mutually exclusive and naming one would force it.
+pqhybridsign = { path = "../pqhybridsign", default-features = false }
+
+[lints]
+workspace = true

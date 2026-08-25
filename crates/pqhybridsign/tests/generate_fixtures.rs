@@ -36,10 +36,10 @@
 //! file itself under `tests/vectors/` rather than printing to stdout. Four
 //! profiles produce four files; paste-from-stdout does not scale.
 
-use pqhybridsign::budget::{BudgetKey, StatelessBudgetStore};
 use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5, H6};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
+use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -217,25 +217,4 @@ fn generate_fixtures() {
         panic!("failed to write {}: {e}", out_path.display());
     });
     eprintln!("wrote {}", out_path.display());
-}
-
-/// An in-memory `StatelessBudgetStore`. Not durable across a process
-/// restart, which is fine for a test: the property under test is that the
-/// count is consulted and advanced at all, not real persistence. A
-/// deployment must persist this, or the few-time bound of specification
-/// section 21 can be exceeded silently after any restart.
-#[derive(Default)]
-struct MemoryBudget(std::collections::HashMap<[u8; 32], u64>);
-
-impl StatelessBudgetStore for MemoryBudget {
-    type Error = core::convert::Infallible;
-
-    fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-        self.0.get(key.as_bytes()).copied()
-    }
-
-    fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-        self.0.insert(*key.as_bytes(), count);
-        Ok(())
-    }
 }

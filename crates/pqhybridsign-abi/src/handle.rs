@@ -248,11 +248,10 @@ fn sign_one_stateless<S: StatefulSuite>(
 mod tests {
     use super::*;
     use crate::{
-        keygen_stateful_from_seed, secret_key_len, signature_len, verify, verify_stateless,
-        BudgetKey, StatelessBudgetStore, Suite,
+        keygen_stateful_from_seed, secret_key_len, signature_len, verify, verify_stateless, Suite,
     };
     use pqhybridsign::stateful::{KeyIdentity, LeafJournal};
-    use std::collections::HashMap;
+    use pqhybridsign_test_support::MemoryBudget;
 
     /// An in-memory journal. Not durable; a real integrator persists every
     /// method to storage that survives a restart.
@@ -389,40 +388,6 @@ mod tests {
             sign_stateful_with_handle(&mut handle, &mut journal, b"m", b"c", &mut sig).unwrap_err(),
             AbiError::JournalKeyMismatch
         );
-    }
-
-    /// An in-memory [`StatelessBudgetStore`]. Not durable: these tests
-    /// exercise whether the count is consulted, not persistence.
-    #[derive(Default)]
-    struct MemoryBudget {
-        entries: HashMap<BudgetKey, u64>,
-        /// When set, [`StatelessBudgetStore::consumed`] reports this count
-        /// for every key. A `HashMap` cannot pre-load a [`BudgetKey`] that
-        /// has not been seen, so [`Self::exhausted`] uses this floor.
-        floor: Option<u64>,
-    }
-
-    impl MemoryBudget {
-        /// Pre-load the maximum: every key reports as fully spent.
-        fn exhausted() -> Self {
-            Self {
-                entries: HashMap::new(),
-                floor: Some(u64::MAX),
-            }
-        }
-    }
-
-    impl StatelessBudgetStore for MemoryBudget {
-        type Error = core::convert::Infallible;
-
-        fn consumed(&self, key: &BudgetKey) -> Option<u64> {
-            self.entries.get(key).copied().or(self.floor)
-        }
-
-        fn record(&mut self, key: &BudgetKey, count: u64) -> Result<(), Self::Error> {
-            self.entries.insert(*key, count);
-            Ok(())
-        }
     }
 
     #[test]

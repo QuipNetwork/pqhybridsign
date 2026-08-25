@@ -1,27 +1,78 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+## Build and Test
 
-> **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
-> git-compatible protocol), stored under `refs/dolt/data` on your git
-> remote — separate from `refs/heads/*` where your code lives.
-> `.beads/issues.jsonl` is a passive export, not the wire protocol.
->
-> See [SYNC_CONCEPTS.md](https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md)
-> for the one-screen overview and anti-patterns (don't treat JSONL as the
-> source of truth; don't `bd import` during normal operation; don't
-> reach for third-party Dolt hosting before trying the default).
-
-## Quick Reference
+The toolchain comes from `rust-toolchain.toml`. The minimum supported Rust
+version is the `rust-version` field in the workspace `Cargo.toml`.
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+cargo fmt --all -- --check                                    # format
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked -p pqhybridsign --all-targets --features vrf -- -D warnings
+cargo test --locked --workspace                               # 512 tests
+cargo test --locked -p pqhybridsign --features vrf
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 ```
+
+Run the two clippy commands, not one. The reason is in Feature Flags below.
+
+The npm package builds and tests from its own directory:
+
+```bash
+cd crates/pqhybridsign-wasm/npm && npm run build && npm test
+```
+
+Before a release, `make check-release` packages every artifact and compiles
+each one from the packaged form. `make check-crate-publish` is the part that a
+version change can fail. It needs a clean working tree, because `cargo package`
+builds the tarball from what git holds and refuses to package uncommitted
+edits.
+
+## Repository Layout
+
+| Crate | Purpose | Published |
+|---|---|---|
+| `pqhybridsign` | The library: suites, composition, encoding | crates.io |
+| `pqhybridsign-abi` | Byte-buffer API the bindings share | crates.io |
+| `pqhybridsign-cffi` | C library and header | archive |
+| `pqhybridsign-py` | Python extension | PyPI |
+| `pqhybridsign-wasm` | WebAssembly and the npm package | npm |
+| `pqhybridsign-test-support` | Test doubles shared by the tests | no |
+
+The path dependencies between these crates carry a version alongside the path.
+A local build resolves through the path and never reads that version, so a
+stale pin builds green here and fails on crates.io. A version change must reach
+every pin.
+
+## Feature Flags
+
+The four SHRINCS profiles, `profile-256s`, `profile-256s-sha2`,
+`profile-128s-q18` and `profile-128s-q20`, are mutually exclusive. The
+`hashsigs-rs` build script fails when more than one is on.
+
+`--all-features` does not work in this workspace. Any command that needs the
+`vrf` feature must name it in a second invocation, and that is why the clippy
+gate runs twice.
+
+The `128s` profiles are slow. Importing a stateful key at those profiles
+re-derives the hypertree root, which costs about 47 seconds. Use
+`StatefulKeyHandle` and its binding equivalents to pay that once per key
+instead of once per signature.
+
+## Testing Notes
+
+The `pqhybridsign-abi` crate has no profile feature, so its stateful VRF tests
+cannot be gated by `cfg`. They carry `#[ignore]` to keep a `128s` build of
+`cargo test --workspace` inside the time budget, and CI runs them separately
+under the default profile.
+
+Tests that need a `StatelessBudgetStore` use
+`pqhybridsign_test_support::MemoryBudget`. Two unit tests inside the
+`pqhybridsign` library keep a local copy instead. A test double from a crate
+that depends on `pqhybridsign` cannot serve a unit test inside `pqhybridsign`,
+because cargo compiles the library a second time for the `--test` target and
+the two trait definitions are then distinct types. Both sites say so in a
+comment.
 
 ## Non-Interactive Shell Commands
 
@@ -61,82 +112,21 @@ A script enforces the rule. `scripts/check-dependency-cooldown.py` reads `Cargo.
 
 This policy exists because of a real incident. An attacker published a malicious `arrayref 0.3.10` and yanked its prior versions in the same minutes. A reactive `cargo update` pulled it, and its build script ran a credential stealer. The malicious version was six minutes old.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
-## Beads Issue Tracker
+## Releases
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+Every release job in `.gitlab-ci.yml` runs only when `$CI_COMMIT_TAG` matches
+`/^v\d/`. Branch pipelines and merge-request pipelines never publish.
 
-### Quick Reference
+Pushing a `v*` tag publishes to npm, PyPI, the C library archive and
+crates.io, in that order. **A crates.io version can never be replaced or
+deleted.** Confirm with a human before pushing a release tag.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+`scripts/check-release-version.py <tag>` asserts that the tag matches the
+workspace `Cargo.toml`, the npm `package.json`, and that `pyproject.toml` still
+declares `dynamic = ["version"]`. Run it before tagging. The Python wheel name
+uses the PEP 440 spelling, so `v0.0.0-rc8` produces `0.0.0rc8`, and the two
+never match byte for byte.
 
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-
-## Agent Context Profiles
-
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
-
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   bd dolt push
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
-
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
-## Beads Issue Tracker
-
-Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
-
-### Quick Reference
-
-```bash
-bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
-```
-
-### Rules
-
-- Use `bd` for all task tracking; do not create markdown TODO lists.
-- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
-- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
-<!-- END BEADS CODEX SETUP -->
+Tag the merge commit on `main`, not the branch head, and use an annotated tag
+whose message is the bare version. That is what the existing `v0.0.0-rc*` tags
+carry.
