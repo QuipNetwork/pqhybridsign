@@ -94,20 +94,25 @@ use them.
 
 ### Selecting a suite in the code
 
-The Rust API names each lattice suite with a short type (`H1` through `H4`), and
-the C, Python, and WebAssembly bindings take the same identifiers as strings.
-The two SHRINCS types are `H5` (ed25519) and `H6` (sr25519). The profile is a
-compile-time build feature, not a runtime argument, so one binary carries one
-profile.
+The Rust API names each lattice suite with a short type (`EdMl44` through
+`SrFn512`), and the C, Python, and WebAssembly bindings take the matching
+short name as a string (`ED-ML-44` through `SR-FN-512`). The two SHRINCS
+types are `EdSh` (ed25519) and `SrSh` (sr25519), with short names `ED-SH` and
+`SR-SH`. The profile is a compile-time build feature, not a runtime argument,
+so one binary carries one profile.
 
-| Type / string handle | Variation |
-|---|---|
-| `H1` | `hybrid-ed25519-mldsa44-v1` |
-| `H2` | `hybrid-ed25519-falcon512-v1` |
-| `H3` | `hybrid-sr25519-mldsa44-v1` |
-| `H4` | `hybrid-sr25519-falcon512-v1` |
-| `H5` under the active profile | `hybrid-ed25519-shrincs-<profile>-v1` |
-| `H6` under the active profile | `hybrid-sr25519-shrincs-<profile>-v1` |
+The short name (`ED-ML-44`) names the pair for humans. The wire label
+(`hybrid-ed25519-mldsa44-v1`) is the signed domain-separation value and is
+unrelated to the short name.
+
+| Rust type | Short name | Variation |
+|---|---|---|
+| `EdMl44` | `ED-ML-44` | `hybrid-ed25519-mldsa44-v1` |
+| `EdFn512` | `ED-FN-512` | `hybrid-ed25519-falcon512-v1` |
+| `SrMl44` | `SR-ML-44` | `hybrid-sr25519-mldsa44-v1` |
+| `SrFn512` | `SR-FN-512` | `hybrid-sr25519-falcon512-v1` |
+| `EdSh` | `ED-SH` under the active profile | `hybrid-ed25519-shrincs-<profile>-v1` |
+| `SrSh` | `SR-SH` under the active profile | `hybrid-sr25519-shrincs-<profile>-v1` |
 
 ## Sizes
 
@@ -332,14 +337,14 @@ loads a new one.
 ```typescript
 import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";
 
-// "H1" is the handle for hybrid-ed25519-mldsa44-v1.
+// "ED-ML-44" is the handle for hybrid-ed25519-mldsa44-v1.
 const seed = new Uint8Array(32).fill(7);
 const msg = new TextEncoder().encode("message");
 const ctx = new TextEncoder().encode("context");
 
-const { publicKey, secretKey } = await keygenFromSeed("H1", seed);
-const sig = await sign("H1", secretKey, msg, ctx);
-const valid = await verify("H1", publicKey, msg, ctx, sig);
+const { publicKey, secretKey } = await keygenFromSeed("ED-ML-44", seed);
+const sig = await sign("ED-ML-44", secretKey, msg, ctx);
+const valid = await verify("ED-ML-44", publicKey, msg, ctx, sig);
 ```
 
 The SHRINCS suites cannot sign in JavaScript. Verification and the length
@@ -364,23 +369,23 @@ and `LICENSE`.
 ## Stateless signing
 
 The lattice suites need no stored state. This example signs under
-`hybrid-ed25519-mldsa44-v1`, whose Rust type is `H1`.
+`hybrid-ed25519-mldsa44-v1`, whose Rust type is `EdMl44`.
 
 ```rust
 use pqhybridsign::composite::{keypair_from_seed, sign, verify};
 use pqhybridsign::error::Error;
 use pqhybridsign::suite::Suite;
-use pqhybridsign::H1;
+use pqhybridsign::EdMl44;
 
 fn demo() -> Result<(), Error> {
-    let mut sk = [0u8; <H1 as Suite>::SECRET_KEY_LEN];
-    let mut pk = [0u8; <H1 as Suite>::PUBLIC_KEY_LEN];
-    keypair_from_seed::<H1>(&[7u8; 32], &mut sk, &mut pk)?;
+    let mut sk = [0u8; <EdMl44 as Suite>::SECRET_KEY_LEN];
+    let mut pk = [0u8; <EdMl44 as Suite>::PUBLIC_KEY_LEN];
+    keypair_from_seed::<EdMl44>(&[7u8; 32], &mut sk, &mut pk)?;
 
-    let mut sig = [0u8; <H1 as Suite>::SIGNATURE_LEN];
-    sign::<H1>(&sk, b"message", b"context", &mut rand_core::OsRng, &mut sig)?;
+    let mut sig = [0u8; <EdMl44 as Suite>::SIGNATURE_LEN];
+    sign::<EdMl44>(&sk, b"message", b"context", &mut rand_core::OsRng, &mut sig)?;
 
-    assert!(verify::<H1>(&pk, b"message", b"context", &sig));
+    assert!(verify::<EdMl44>(&pk, b"message", b"context", &sig));
     Ok(())
 }
 ```

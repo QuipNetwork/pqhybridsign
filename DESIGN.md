@@ -7,8 +7,8 @@
 ## Summary
 
 This repository holds a standalone Rust version of the composite layer of the
-hybrid signature specification, covering four constructions. H1 and H3 pair a
-classical scheme with ML-DSA-44, while H5 and H6 pair one with SHRINCS. None of
+hybrid signature specification, covering four constructions. EdMl44 and SrMl44 pair a
+classical scheme with ML-DSA-44, while EdSh and SrSh pair one with SHRINCS. None of
 the crates depends on the Polkadot SDK, so Substrate wiring stays in
 `quip-crypto-primitives` inside the QuipNetwork Polkadot SDK fork.
 
@@ -27,7 +27,7 @@ Work runs over four cycles. Each cycle has its own epic and its own plan.
 | 3 | AGPL-3.0-or-later for every crate | Matches the `hashsigs-rs` license and the wider Quip repositories |
 | 4 | Generic composition over component traits | Section 7 of the specification is a matrix of classical times post-quantum. Only names and sizes vary |
 | 5 | Noise-style combinatorial suite naming | The label registry regenerates exactly from a name grammar. See Finding 1 |
-| 6 | No H2 or H4 code this cycle | Sections 3, 4 and 22 gate both on final FIPS 206 and a stable `fn-dsa` release |
+| 6 | No EdFn512 or SrFn512 code this cycle | Sections 3, 4 and 22 gate both on final FIPS 206 and a stable `fn-dsa` release |
 
 Decision 3 carries a consequence worth stating where an integrator meets it.
 AGPL-3.0-or-later includes section 13. An operator who runs a public network
@@ -43,13 +43,13 @@ changes which AGPL code ships, not the license of `pqhybridsign`.
 
 | Crate | Contents | Dependencies |
 |-------|----------|--------------|
-| `pqhybridsign` | All six suites. Top-level modules are the composite foundation (component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port) and the lattice suites H1 through H4. H5 and H6 live under `pqhybridsign::shrincs`, behind the `stateful` feature | `subtle`, `zeroize`, `hkdf`, `sha2`, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa`, and `hashsigs-rs` under `stateful` |
+| `pqhybridsign` | All six suites. Top-level modules are the composite foundation (component traits, suite macro, `M'` builder, encodings, HKDF derivation, error types, `LeafJournal` port) and the lattice suites EdMl44 through SrFn512. EdSh and SrSh live under `pqhybridsign::shrincs`, behind the `stateful` feature | `subtle`, `zeroize`, `hkdf`, `sha2`, `ed25519-zebra`, `schnorrkel`, `fips204`, `fn-dsa`, and `hashsigs-rs` under `stateful` |
 | `pqhybridsign-abi` | Type-erased API over a runtime suite enum. Every binding sits on it, because no C header, JavaScript function or Python module can name a type parameter. Not published: the bindings reach it by path | `pqhybridsign` |
 | `pqhybridsign-cffi` | C ABI, with a checked-in header. Ships as a release-asset C library | abi |
-| `pqhybridsign-wasm` | WebAssembly, shipped as an npm package. All six suites sign and verify. H5 and H6 sign through a functional, journal-based API | abi |
+| `pqhybridsign-wasm` | WebAssembly, shipped as an npm package. All six suites sign and verify. EdSh and SrSh sign through a functional, journal-based API | abi |
 | `pqhybridsign-py` | Python bindings on the `abi3-py39` stable ABI, shipped as a PyPI wheel | abi |
 
-H5 and H6 reuse the lattice crate classical components. They do not write
+EdSh and SrSh reuse the lattice crate classical components. They do not write
 those schemes again. Those components come from `ed25519-zebra` and
 `schnorrkel` through `pqhybridsign`. A license or dependency audit that
 reads only this table misses those crates.
@@ -193,7 +193,7 @@ accepted set of a third-party verifier is not ours to bind, and a dependency
 upgrade that narrows or widens the gap is not a defect in this library. See
 the rustdoc on `pqhybridsign::classical::Ed25519` and
 `crates/pqhybridsign/tests/ed25519_strict.rs` for the pinned vectors and the
-demonstration at the H1 composite level.
+demonstration at the EdMl44 composite level.
 
 ### Component traits
 
@@ -226,8 +226,8 @@ One macro declares each instance:
 
 ```rust
 hybrid_suite! {
-    /// H3 - sr25519 + ML-DSA-44
-    H3 = "sr25519" + "mldsa44" -> "hybrid-sr25519-mldsa44-v1", 26 bytes;
+    /// SrMl44 - sr25519 + ML-DSA-44
+    SrMl44 = "sr25519" + "mldsa44" -> "hybrid-sr25519-mldsa44-v1", 26 bytes;
     public_key = 32 + 1312;
     secret_key = 64 + 2560;
     signature  = 64 + 2420;
@@ -244,9 +244,9 @@ assertions, and the build fails when any of these drift apart:
 
 The macro also emits the concrete array types for keys and signatures. Stable
 Rust cannot express `[u8; C::PK_LEN + P::PK_LEN]`, so the arithmetic moves to
-the instantiation site. H1 and H3 then allocate nothing.
+the instantiation site. EdMl44 and SrMl44 then allocate nothing.
 
-A second macro, `hybrid_stateful_suite!`, declares H5 and H6 against
+A second macro, `hybrid_stateful_suite!`, declares EdSh and SrSh against
 `StatefulSuite`. It applies the same compile-time label checks. It does not
 emit fixed signature array types, because a stateful signature length depends
 on the leaf index and is only bounded at run time by
@@ -263,7 +263,7 @@ M' = Prefix(0x01) || Label || len(ctx) || ctx || M
 `Label` means the full null-terminated registry value. The same definition
 applies inside the HKDF `info` string. See Finding 2.
 
-For H5 and H6 the classical component signs `M'`. The SHRINCS component signs
+For EdSh and SrSh the classical component signs `M'`. The SHRINCS component signs
 a canonical action hash built from `M'`, where `payload_hash = keccak256(M')`.
 Section 7.1 of the specification defines that mapping.
 
@@ -274,14 +274,14 @@ decoder.
 
 | Shape | Constructions | Layout |
 |-------|---------------|--------|
-| Fixed | H1, H3 | `classical_sig(64) \|\| pq_sig(2420)` |
-| Delta length | H2, H4 | `classical_sig(64) \|\| delta(1) \|\| falcon_sig` |
-| Path selected | H5, H6 | `classical_sig(64) \|\| selector(1) \|\| body` |
+| Fixed | EdMl44, SrMl44 | `classical_sig(64) \|\| pq_sig(2420)` |
+| Delta length | EdFn512, SrFn512 | `classical_sig(64) \|\| delta(1) \|\| falcon_sig` |
+| Path selected | EdSh, SrSh | `classical_sig(64) \|\| selector(1) \|\| body` |
 
 Decoding follows parse-do-not-validate. A composite value exists only after
 every check in section 6 passes.
 
-For H5 and H6 the decoder runs these steps in order:
+For EdSh and SrSh the decoder runs these steps in order:
 
 1. Recompute the commitment from the supplied bundle. Reject a mismatch.
    Reject an all-zero commitment.
@@ -310,15 +310,15 @@ must use the stateless path or a lattice suite:
 
 | Caller | Path |
 |---|---|
-| Transactional system with a durable ordered journal per key | Stateful path, H5 or H6 |
-| Stateless service, replicated signer, or any signer restored from a seed backup | Stateless path, or H1 or H3 |
+| Transactional system with a durable ordered journal per key | Stateful path, EdSh or SrSh |
+| Stateless service, replicated signer, or any signer restored from a seed backup | Stateless path, or EdMl44 or SrMl44 |
 
 The library cannot check this property, so it is stated here and in the crate
 documentation. This file is the normative statement.
 
 ### Layers
 
-H5 and H6 are built in three layers.
+EdSh and SrSh are built in three layers.
 
 1. `PqStatefulScheme` describes one stateful post-quantum component and carries
    both signing modes. `ShrincsScheme` implements it against `hashsigs-rs`.
@@ -671,7 +671,7 @@ replacement.
 Recorded here because it was reconstructed twice from timings and should not
 have to be reconstructed a third time.
 
-Measured in release, one H5 key with four leaves, by
+Measured in release, one EdSh key with four leaves, by
 `crates/pqhybridsign/tests/profile_timing.rs`:
 
 | Profile | keygen | sign_stateful | sign_stateless | Stateless signature |
@@ -819,7 +819,7 @@ Junction derivation is hard only and applies to the whole suite. A junction
 derives a new master seed, and both components derive again from it. Soft
 junctions return a typed rejection.
 
-For H5 and H6 a reproducible key is a function of the master seed, the suite,
+For EdSh and SrSh a reproducible key is a function of the master seed, the suite,
 the profile and `maxSignatures`. `maxSignatures` is not seed derived, so all
 four values need a record. Never restore a signer by generating the key again
 from the seed. That resets the leaf counter to 1.
@@ -861,9 +861,9 @@ Do not add the proc-macro crate to "fix" this.
 Write the tests before the code they cover.
 
 - Section 17 tests 1 to 14, applied per construction as annotated there. Tests
-  15 to 32 apply to H5 and H6.
+  15 to 32 apply to EdSh and SrSh.
 - Golden vectors as checked-in JSON. Each vector records the suite label and
-  the exact `info` construction. H5 and H6 vectors also record the leaf index
+  the exact `info` construction. EdSh and SrSh vectors also record the leaf index
   and `maxSignatures`, because the same message at two leaves gives two
   different signatures by design.
 - Property tests over encode and decode round trips, and over negative
@@ -969,7 +969,7 @@ Recommendation: state the rule in section 9 of the specification.
 Section 9 requires suite-separated HKDF. Section 22 records that the shipped
 `quip-crypto-primitives` uses a fixed `info` value of `pq` for every suite,
 tracked as QuipNetwork/quip-protocol-rs#9. A conforming crate gives different
-component keys from the same master seed than the deployed H1 and H3 code.
+component keys from the same master seed than the deployed EdMl44 and SrMl44 code.
 
 Both sides are self-consistent. This is a recorded incompatibility, not a
 defect. The golden vectors state which derivation they cover.
@@ -1006,11 +1006,11 @@ and `pqhs-efg` Cycle 4.
 
 ### Done
 
-Cycle 1: the workspace, `pqhybridsign-core`, and H1 and H3. Covers the
+Cycle 1: the workspace, `pqhybridsign-core`, and EdMl44 and SrMl44. Covers the
 component traits, the suite macro, `M'`, the fixed encoding, HKDF derivation,
 hard junctions, golden vectors, and specification tests 1 to 10.
 
-Cycle 2: `pqhybridsign-shrincs` with H5 and H6. Covers `PqStatefulScheme`,
+Cycle 2: `pqhybridsign-shrincs` with EdSh and SrSh. Covers `PqStatefulScheme`,
 `StatefulSuite`, the generic stateful composite, the `LeafJournal` port, the
 path-selected encoding, commitment verification, leaf-indexed golden vectors,
 and specification tests 15 to 32.
@@ -1026,7 +1026,7 @@ stateful secret key has a validating export and import path (`pqhs-utz`), the
 continuous integration runs a cross-profile job that compares commitments
 rather than labels (`pqhs-yn0`).
 
-Cycle 4: H2 and H4, over `fn-dsa` 0.4.0. The maintainer decided on 2026-08-10
+Cycle 4: EdFn512 and SrFn512, over `fn-dsa` 0.4.0. The maintainer decided on 2026-08-10
 to ship these now rather than wait for a final FIPS 206, having been told that
 the standard may change the wire format and that signatures made before then
 could stop verifying. The dependency set the workspace Rust floor to 1.82.
@@ -1035,7 +1035,7 @@ could stop verifying. The dependency set the workspace Rust floor to 1.82.
 Cycle 5: the language bindings, all on `pqhybridsign-abi`. The C ABI with a
 checked-in header, the WebAssembly and npm package, and the Python wheel.
 
-The WebAssembly binding signs under all six suites. It once refused H5 and H6.
+The WebAssembly binding signs under all six suites. It once refused EdSh and SrSh.
 A JavaScript object holding a stateful secret key can be structured-cloned,
 and a clone forks the one-time leaf counter. The functional design removes
 that object. A secret key crosses the boundary only as bytes.
@@ -1059,7 +1059,7 @@ is the abi's contract. A method that resolves a promise later cannot meet it.
 The npm layer is `async` only because loading the wasm module is.
 
 `verify_with_stored_public_key` closes a real gap in all three bindings.
-`pqhs_verify`, `phs.verify`, and the WebAssembly `verify` take an H5 or H6
+`pqhs_verify`, `phs.verify`, and the WebAssembly `verify` take an EdSh or SrSh
 verify key with no commitment to check it against, so the caller must
 establish that key's provenance itself. `verify_with_stored_public_key` binds
 a signer-supplied bundle to a stored commitment, so the caller does not.

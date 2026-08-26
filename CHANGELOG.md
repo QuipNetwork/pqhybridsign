@@ -26,6 +26,16 @@ the stateful commitment and every public entry point do not change.
   regenerated files, the master seed, the secret key, the public key, the
   stateful signatures and the public-key commitment are identical to the
   values rc2 produced. Only the stateless signature fields moved.
+- Suites are named for the algorithms they pair. `H1` through `H6` become
+  `ED-ML-44`, `ED-FN-512`, `SR-ML-44`, `SR-FN-512`, `ED-SH` and `SR-SH`. This
+  renames `Suite` variants in Rust, `Suite` members in Python and the suite
+  strings in JavaScript. **This breaks those three APIs**, with no aliases: the
+  old names are gone. The C API is unchanged, because it takes a numeric suite
+  code and defines no constant for a suite name. The numeric codes (1 through 6) and the
+  wire labels do not change, so signatures and stored artefacts are unaffected.
+- The two SHRINCS suites carry no profile suffix. One build selects one
+  SHRINCS profile, so `ED-SH` means ed25519 plus SHRINCS at whatever profile
+  the build chose.
 
 ### Added
 
