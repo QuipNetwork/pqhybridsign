@@ -1,18 +1,18 @@
 error[E0061]: this function takes 5 arguments but 4 arguments were supplied
   --> tests/compile_fail/sign_rotation_needs_budget.rs:22:14
    |
-22 |     let _n = rotation::sign_rotation::<H5>(&sk, b"ctx", &payload, &mut sig);
-   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------------------------
-   |                                           |             |         |
-   |                                           |             |         expected `&RotationPayload`, found `&mut Vec<u8>`
-   |                                           |             expected `&[u8]`, found `&RotationPayload`
-   |                                           argument #5 of type `&mut [u8]` is missing
+22 |     let _n = rotation::sign_rotation::<EdSh>(&sk, b"ctx", &payload, &mut sig);
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------------------------
+   |                                             |             |         |
+   |                                             |             |         expected `&RotationPayload`, found `&mut Vec<u8>`
+   |                                             |             expected `&[u8]`, found `&RotationPayload`
+   |                                             argument #5 of type `&mut [u8]` is missing
    |
 note: types differ in mutability
-  --> tests/compile_fail/sign_rotation_needs_budget.rs:22:49
+  --> tests/compile_fail/sign_rotation_needs_budget.rs:22:51
    |
-22 |     let _n = rotation::sign_rotation::<H5>(&sk, b"ctx", &payload, &mut sig);
-   |                                                 ^^^^^^
+22 |     let _n = rotation::sign_rotation::<EdSh>(&sk, b"ctx", &payload, &mut sig);
+   |                                                   ^^^^^^
    = note: expected mutable reference `&mut _`
                       found reference `&'static [u8; 3]`
 note: function defined here
@@ -22,6 +22,6 @@ note: function defined here
    |        ^^^^^^^^^^^^^
 help: did you mean
    |
-22 -     let _n = rotation::sign_rotation::<H5>(&sk, b"ctx", &payload, &mut sig);
-22 +     let _n = rotation::sign_rotation::<H5>(&sk, /* budget */, &mut sig, &payload, /* &mut [u8] */);
+22 -     let _n = rotation::sign_rotation::<EdSh>(&sk, b"ctx", &payload, &mut sig);
+22 +     let _n = rotation::sign_rotation::<EdSh>(&sk, /* budget */, &mut sig, &payload, /* &mut [u8] */);
    |

@@ -25,7 +25,7 @@ use pqhybridsign::{
     composite_delta,
     suite::{DeltaSuite, Suite},
 };
-use pqhybridsign::{H1, H2, H3, H4};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 use support::{strict, weak_classical_forgery};
 
 fn emit<S: Suite>(name: &str) {
@@ -53,7 +53,7 @@ fn emit<S: Suite>(name: &str) {
     println!("}}");
 }
 
-/// Same shape as [`emit`], for a [`DeltaSuite`] (H2, H4), whose signature
+/// Same shape as [`emit`], for a [`DeltaSuite`] (EdFn512, SrFn512), whose signature
 /// length is not known ahead of signing.
 fn emit_delta<S: DeltaSuite>(name: &str) {
     let master = [0x2au8; 32];
@@ -85,25 +85,25 @@ fn emit_delta<S: DeltaSuite>(name: &str) {
 #[test]
 #[ignore = "generator, run explicitly with --ignored"]
 fn generate_h1() {
-    emit::<H1>("H1");
+    emit::<EdMl44>("ED-ML-44");
 }
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored"]
 fn generate_h3() {
-    emit::<H3>("H3");
+    emit::<SrMl44>("SR-ML-44");
 }
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored"]
 fn generate_h2() {
-    emit_delta::<H2>("H2");
+    emit_delta::<EdFn512>("ED-FN-512");
 }
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored"]
 fn generate_h4() {
-    emit_delta::<H4>("H4");
+    emit_delta::<SrFn512>("SR-FN-512");
 }
 
 const ED25519_LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";

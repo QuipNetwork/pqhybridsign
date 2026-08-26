@@ -36,7 +36,7 @@
 //! file itself under `tests/vectors/` rather than printing to stdout. Four
 //! profiles produce four files; paste-from-stdout does not scale.
 
-use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5, H6};
+use pqhybridsign::shrincs::{keygen, EdSh, ShrincsScheme, SrSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_test_support::MemoryBudget;
@@ -207,8 +207,8 @@ fn generate_fixtures() {
         active_profile_feature()
     );
 
-    let h5 = emit_suite::<H5>("H5", [0x50u8; 32]);
-    let h6 = emit_suite::<H6>("H6", [0x60u8; 32]);
+    let h5 = emit_suite::<EdSh>("ED-SH", [0x50u8; 32]);
+    let h6 = emit_suite::<SrSh>("SR-SH", [0x60u8; 32]);
 
     let profile_id_hex = hex::encode(profile_id::PROFILE_ID);
     let body = format!(

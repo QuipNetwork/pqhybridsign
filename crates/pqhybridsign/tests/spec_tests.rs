@@ -14,7 +14,7 @@
 )]
 // Specification section 17.
 //
-// Present here, for both H1 and H3:
+// Present here, for both EdMl44 and SrMl44:
 //   1  round trip                       `t1_round_trip`
 //   2  hedged non-determinism           `t2_hedged_*` (below the macro)
 //   3  deterministic canonicality       `t3_deterministic_canonicality`
@@ -33,7 +33,7 @@
 // of the numbered tests.
 use pqhybridsign::composite::{keypair_from_seed, sign, sign_deterministic, verify};
 use pqhybridsign::suite::Suite;
-use pqhybridsign::{H1, H3};
+use pqhybridsign::{EdMl44, SrMl44};
 use rand_core::OsRng;
 
 macro_rules! keys {
@@ -182,35 +182,35 @@ macro_rules! suite_tests {
     };
 }
 
-suite_tests!(h1, H1);
-suite_tests!(h3, H3);
+suite_tests!(h1, EdMl44);
+suite_tests!(h3, SrMl44);
 
 #[test]
 fn t6_cross_suite_signatures_never_verify() {
-    // A signature made under H1 must not verify under H3, and the reverse.
-    let mut sk1 = vec![0u8; <H1 as Suite>::SECRET_KEY_LEN];
-    let mut pk1 = vec![0u8; <H1 as Suite>::PUBLIC_KEY_LEN];
-    keypair_from_seed::<H1>(&[42u8; 32], &mut sk1, &mut pk1).expect("keygen");
-    let mut sig = vec![0u8; <H1 as Suite>::SIGNATURE_LEN];
-    sign_deterministic::<H1>(&sk1, b"m", b"c", b"n", &mut sig).expect("sign");
-    assert!(verify::<H1>(&pk1, b"m", b"c", &sig));
-    assert!(!verify::<H3>(&pk1, b"m", b"c", &sig));
+    // A signature made under EdMl44 must not verify under SrMl44, and the reverse.
+    let mut sk1 = vec![0u8; <EdMl44 as Suite>::SECRET_KEY_LEN];
+    let mut pk1 = vec![0u8; <EdMl44 as Suite>::PUBLIC_KEY_LEN];
+    keypair_from_seed::<EdMl44>(&[42u8; 32], &mut sk1, &mut pk1).expect("keygen");
+    let mut sig = vec![0u8; <EdMl44 as Suite>::SIGNATURE_LEN];
+    sign_deterministic::<EdMl44>(&sk1, b"m", b"c", b"n", &mut sig).expect("sign");
+    assert!(verify::<EdMl44>(&pk1, b"m", b"c", &sig));
+    assert!(!verify::<SrMl44>(&pk1, b"m", b"c", &sig));
 }
 
 #[test]
 fn one_master_seed_gives_two_independent_suites() {
-    // Specification section 9: suite-separated derivation. Without it, H1
-    // and H3 would share a post-quantum key.
-    let mut sk1 = vec![0u8; <H1 as Suite>::SECRET_KEY_LEN];
-    let mut pk1 = vec![0u8; <H1 as Suite>::PUBLIC_KEY_LEN];
-    let mut sk3 = vec![0u8; <H3 as Suite>::SECRET_KEY_LEN];
-    let mut pk3 = vec![0u8; <H3 as Suite>::PUBLIC_KEY_LEN];
-    keypair_from_seed::<H1>(&[7u8; 32], &mut sk1, &mut pk1).expect("keygen");
-    keypair_from_seed::<H3>(&[7u8; 32], &mut sk3, &mut pk3).expect("keygen");
+    // Specification section 9: suite-separated derivation. Without it, EdMl44
+    // and SrMl44 would share a post-quantum key.
+    let mut sk1 = vec![0u8; <EdMl44 as Suite>::SECRET_KEY_LEN];
+    let mut pk1 = vec![0u8; <EdMl44 as Suite>::PUBLIC_KEY_LEN];
+    let mut sk3 = vec![0u8; <SrMl44 as Suite>::SECRET_KEY_LEN];
+    let mut pk3 = vec![0u8; <SrMl44 as Suite>::PUBLIC_KEY_LEN];
+    keypair_from_seed::<EdMl44>(&[7u8; 32], &mut sk1, &mut pk1).expect("keygen");
+    keypair_from_seed::<SrMl44>(&[7u8; 32], &mut sk3, &mut pk3).expect("keygen");
     assert_ne!(&sk1[64..], &sk3[64..], "post-quantum halves must differ");
 }
 
-// Specification test 2 for H1. The two halves behave differently and the
+// Specification test 2 for EdMl44. The two halves behave differently and the
 // test asserts the split exactly:
 //   - ed25519 is RFC 8032 deterministic and takes no randomness, so the
 //     classical half repeats. See crates/pqhybridsign/src/classical/
@@ -219,11 +219,11 @@ fn one_master_seed_gives_two_independent_suites() {
 //     hedged path, so the post-quantum half must not repeat.
 #[test]
 fn t2_h1_hedged_signing_varies_in_the_post_quantum_half_only() {
-    let (sk, pk) = keys!(H1, 2);
-    let mut a = vec![0u8; <H1 as Suite>::SIGNATURE_LEN];
-    let mut b = vec![0u8; <H1 as Suite>::SIGNATURE_LEN];
-    sign::<H1>(&sk, b"m", b"c", &mut OsRng, &mut a).expect("sign");
-    sign::<H1>(&sk, b"m", b"c", &mut OsRng, &mut b).expect("sign");
+    let (sk, pk) = keys!(EdMl44, 2);
+    let mut a = vec![0u8; <EdMl44 as Suite>::SIGNATURE_LEN];
+    let mut b = vec![0u8; <EdMl44 as Suite>::SIGNATURE_LEN];
+    sign::<EdMl44>(&sk, b"m", b"c", &mut OsRng, &mut a).expect("sign");
+    sign::<EdMl44>(&sk, b"m", b"c", &mut OsRng, &mut b).expect("sign");
     assert_eq!(
         &a[..64],
         &b[..64],
@@ -234,19 +234,19 @@ fn t2_h1_hedged_signing_varies_in_the_post_quantum_half_only() {
         &b[64..],
         "the hedged ML-DSA-44 half must draw fresh randomness"
     );
-    assert!(verify::<H1>(&pk, b"m", b"c", &a));
-    assert!(verify::<H1>(&pk, b"m", b"c", &b));
+    assert!(verify::<EdMl44>(&pk, b"m", b"c", &a));
+    assert!(verify::<EdMl44>(&pk, b"m", b"c", &b));
 }
 
 #[test]
 fn t2_hedged_signing_is_not_deterministic_for_sr25519() {
-    // Specification test 2 for H3. Both halves take randomness here:
+    // Specification test 2 for SrMl44. Both halves take randomness here:
     // sr25519 through schnorrkel and ML-DSA-44 through its hedged `rnd`.
-    let (sk, _) = keys!(H3, 2);
-    let mut a = vec![0u8; <H3 as Suite>::SIGNATURE_LEN];
-    let mut b = vec![0u8; <H3 as Suite>::SIGNATURE_LEN];
-    sign::<H3>(&sk, b"m", b"c", &mut OsRng, &mut a).expect("sign");
-    sign::<H3>(&sk, b"m", b"c", &mut OsRng, &mut b).expect("sign");
+    let (sk, _) = keys!(SrMl44, 2);
+    let mut a = vec![0u8; <SrMl44 as Suite>::SIGNATURE_LEN];
+    let mut b = vec![0u8; <SrMl44 as Suite>::SIGNATURE_LEN];
+    sign::<SrMl44>(&sk, b"m", b"c", &mut OsRng, &mut a).expect("sign");
+    sign::<SrMl44>(&sk, b"m", b"c", &mut OsRng, &mut b).expect("sign");
     assert_ne!(
         &a[..64],
         &b[..64],

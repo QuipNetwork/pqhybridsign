@@ -41,7 +41,7 @@
 mod fixture;
 
 use pqhybridsign::component::PqStatefulScheme;
-use pqhybridsign::shrincs::{PublicKey, ShrincsScheme, H5, H6};
+use pqhybridsign::shrincs::{EdSh, PublicKey, ShrincsScheme, SrSh};
 use pqhybridsign::stateful::StatefulHybridSignatureScheme;
 
 #[cfg(any(feature = "profile-256s", feature = "profile-256s-sha2"))]
@@ -101,7 +101,7 @@ where
         f.suite
     );
 
-    // Cross-suite: H5 signature against H6 public key (and the reverse) must
+    // Cross-suite: EdSh signature against SrSh public key (and the reverse) must
     // fail. Reconstruct the other suite's public key as `S::PublicKey` so
     // the same `verify` path is exercised; the wire bytes differ by classical
     // algorithm, so a true verify rejects them.
@@ -141,12 +141,12 @@ where
 fn h5_fixture_golden_vectors_verify() {
     let f = fixture::h5();
     let other = fixture::h6();
-    check_suite::<H5>(f, "H5", &other.public_key);
+    check_suite::<EdSh>(f, "ED-SH", &other.public_key);
 }
 
 #[test]
 fn h6_fixture_golden_vectors_verify() {
     let f = fixture::h6();
     let other = fixture::h5();
-    check_suite::<H6>(f, "H6", &other.public_key);
+    check_suite::<SrSh>(f, "SR-SH", &other.public_key);
 }

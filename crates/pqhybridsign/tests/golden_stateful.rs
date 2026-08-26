@@ -20,9 +20,9 @@
         unreachable_pub
     )
 )]
-//! Leaf-indexed golden vectors for H5 (ed25519 + SHRINCS) and H6 (sr25519 +
+//! Leaf-indexed golden vectors for EdSh (ed25519 + SHRINCS) and SrSh (sr25519 +
 //! SHRINCS): these pin the stateful wire format the way
-//! `pqhybridsign/tests/golden.rs` pins the stateless H1/H3 format.
+//! `pqhybridsign/tests/golden.rs` pins the stateless EdMl44/SrMl44 format.
 //!
 //! A stateful signature's identity includes its leaf index: signing the
 //! same message twice yields different bytes by design, because the leaf
@@ -61,7 +61,7 @@
 //! builds run roughly 70 times slower, so generate in release.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign::shrincs::{keygen, PublicKey, ShrincsScheme, H5, H6};
+use pqhybridsign::shrincs::{keygen, EdSh, PublicKey, ShrincsScheme, SrSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use std::cell::RefCell;
@@ -281,13 +281,13 @@ where
 #[test]
 fn h5_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h5.json")).expect("parse");
-    assert_eq!(v.suite, "H5");
-    check::<H5>(&v);
+    assert_eq!(v.suite, "ED-SH");
+    check::<EdSh>(&v);
 }
 
 #[test]
 fn h6_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h6.json")).expect("parse");
-    assert_eq!(v.suite, "H6");
-    check::<H6>(&v);
+    assert_eq!(v.suite, "SR-SH");
+    check::<SrSh>(&v);
 }

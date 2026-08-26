@@ -7,7 +7,7 @@ use ed25519_zebra::{SigningKey, VerificationKey};
 use subtle::Choice;
 use zeroize::Zeroize;
 
-/// ed25519 classical component of suites H1, H2, H5.
+/// ed25519 classical component of suites EdMl44, EdFn512, EdSh.
 ///
 /// Signing follows RFC 8032. Verification follows [ZIP-215], which
 /// `ed25519-zebra` implements, and the two sides are deliberately
@@ -68,8 +68,8 @@ use zeroize::Zeroize;
 ///   attacker-supplied input is accepted by one honest verifier and
 ///   rejected by another," which is the shape of a chain split.
 ///   `tests/ed25519_strict.rs`'s `a_low_order_ed25519_half_splits_h1_verification`
-///   shows this survives into the H1 composite signature, not only the bare
-///   ed25519 component: an H1 signature with this classical forgery spliced
+///   shows this survives into the EdMl44 composite signature, not only the bare
+///   ed25519 component: an EdMl44 signature with this classical forgery spliced
 ///   in and an honest ML-DSA-44 half still verifies under this crate,
 ///   because composite verification is `classical_ok & pq_ok`.
 ///

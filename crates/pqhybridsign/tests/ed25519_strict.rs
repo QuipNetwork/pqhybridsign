@@ -58,7 +58,7 @@ mod support;
 
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use pqhybridsign::classical::Ed25519;
-use pqhybridsign::H1;
+use pqhybridsign::EdMl44;
 use pqhybridsign::{component::ClassicalScheme, composite, suite::Suite};
 use support::{strict, warn, weak_classical_forgery};
 
@@ -119,12 +119,12 @@ mod own_outputs {
     /// stops satisfying the strict equation means the signing path
     /// regressed, not that some third-party verifier changed its mind.
     ///
-    /// Covers H1 and H2, the two ed25519-based suites. The ed25519
+    /// Covers EdMl44 and EdFn512, the two ed25519-based suites. The ed25519
     /// component signs `M'`, which the composite layer builds, so the
     /// strict check runs against `M'` and not against the bare message.
     #[test]
     fn golden_vector_ed25519_halves_are_strict_valid() {
-        use pqhybridsign::H2;
+        use pqhybridsign::EdFn512;
         use pqhybridsign::{message, suite::DeltaSuite};
 
         #[derive(serde::Deserialize)]
@@ -156,8 +156,16 @@ mod own_outputs {
             );
         }
 
-        check(H1::LABEL, include_str!("vectors/h1.json"), "H1 golden");
-        check(H2::LABEL, include_str!("vectors/h2.json"), "H2 golden");
+        check(
+            EdMl44::LABEL,
+            include_str!("vectors/h1.json"),
+            "EdMl44 golden",
+        );
+        check(
+            EdFn512::LABEL,
+            include_str!("vectors/h2.json"),
+            "EdFn512 golden",
+        );
     }
 }
 
@@ -246,7 +254,7 @@ fn zip215_negative_vectors_diverge_from_strict_rfc8032() {
 }
 
 /// Shows the ZIP-215 / strict RFC 8032 divergence survives composition to
-/// the H1 (ed25519 + ML-DSA-44) composite level, not just the ed25519
+/// the EdMl44 (ed25519 + ML-DSA-44) composite level, not just the ed25519
 /// component in isolation.
 ///
 /// Advisory, for the same reason as `zip215_negative_vectors_diverge_from_strict_rfc8032`:
@@ -255,26 +263,26 @@ fn zip215_negative_vectors_diverge_from_strict_rfc8032() {
 #[test]
 fn a_low_order_ed25519_half_splits_h1_verification() {
     let master = [0x7bu8; 32];
-    let mut sk = vec![0u8; H1::SECRET_KEY_LEN];
-    let mut pk = vec![0u8; H1::PUBLIC_KEY_LEN];
-    composite::keypair_from_seed::<H1>(&master, &mut sk, &mut pk).expect("keygen");
+    let mut sk = vec![0u8; EdMl44::SECRET_KEY_LEN];
+    let mut pk = vec![0u8; EdMl44::PUBLIC_KEY_LEN];
+    composite::keypair_from_seed::<EdMl44>(&master, &mut sk, &mut pk).expect("keygen");
 
-    let msg = b"H1 composite ZIP-215 divergence probe";
+    let msg = b"EdMl44 composite ZIP-215 divergence probe";
     let ctx = b"";
-    let mut sig = vec![0u8; H1::SIGNATURE_LEN];
-    composite::sign_deterministic::<H1>(&sk, msg, ctx, b"nonce", &mut sig).expect("sign");
+    let mut sig = vec![0u8; EdMl44::SIGNATURE_LEN];
+    composite::sign_deterministic::<EdMl44>(&sk, msg, ctx, b"nonce", &mut sig).expect("sign");
 
     // Splice the weak classical forgery in for the real ed25519 half. The
     // post-quantum half stays an honest ML-DSA-44 signature over the same
     // M'; composite verification is `classical_ok & pq_ok`, so this alone
     // decides whether the whole composite verifies.
     let (weak_pk, weak_sig) = weak_classical_forgery();
-    let c_pk_len = <<H1 as Suite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
-    let split = H1::SPLIT;
+    let c_pk_len = <<EdMl44 as Suite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+    let split = EdMl44::SPLIT;
     pk[..c_pk_len].copy_from_slice(&weak_pk);
     sig[..split].copy_from_slice(&weak_sig);
 
-    let composite_accepts = composite::verify::<H1>(&pk, msg, ctx, &sig);
+    let composite_accepts = composite::verify::<EdMl44>(&pk, msg, ctx, &sig);
     // `weak_classical_forgery` accepts under ed25519-zebra for every
     // message by construction (see its doc comment), so its strict verdict
     // does not depend on which message the composite layer actually signed.
@@ -283,14 +291,14 @@ fn a_low_order_ed25519_half_splits_h1_verification() {
 
     if composite_accepts && a_strict_composite_would_reject {
         warn(&format!(
-            "WARNING [ZIP-215 divergence survives H1 composition]\n\
-             \x20 an H1 (ed25519 + ML-DSA-44) composite signature whose classical half is a ZIP-215-only \
+            "WARNING [ZIP-215 divergence survives EdMl44 composition]\n\
+             \x20 an EdMl44 (ed25519 + ML-DSA-44) composite signature whose classical half is a ZIP-215-only \
              forgery -- an order-8 public key with no discoverable secret key -- verifies successfully \
-             end to end, because H1 verification is `classical_ok & pq_ok` and the post-quantum half is \
+             end to end, because EdMl44 verification is `classical_ok & pq_ok` and the post-quantum half is \
              an honestly produced ML-DSA-44 signature.\n\
              \x20 a strict classical verifier rejects that same classical half (small_order={small_order}, \
              cofactorless_equation_holds={cofactorless}), and so would reject the whole composite.\n\
-             \x20 consequence: two conforming H1 verifiers -- one using this crate, one substituting a \
+             \x20 consequence: two conforming EdMl44 verifiers -- one using this crate, one substituting a \
              strict verifier for the classical half -- disagree about the exact same composite signature \
              bytes.",
             small_order = classical_outcome.small_order,
@@ -298,9 +306,9 @@ fn a_low_order_ed25519_half_splits_h1_verification() {
         ));
     } else {
         warn(&format!(
-            "WARNING [H1 composition divergence vector is stale]\n\
+            "WARNING [EdMl44 composition divergence vector is stale]\n\
              \x20 composite_accepts={composite_accepts}, strict_would_reject={a_strict_composite_would_reject}; \
-             the forgery no longer demonstrates the expected divergence at the H1 composite level.",
+             the forgery no longer demonstrates the expected divergence at the EdMl44 composite level.",
         ));
     }
 }

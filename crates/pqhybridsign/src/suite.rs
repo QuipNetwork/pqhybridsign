@@ -29,7 +29,7 @@ pub trait Suite {
         + <Self::Pq as PqScheme>::SECRET_KEY_LEN;
     /// Length in bytes of the composite signature: the classical signature
     /// followed by the post-quantum signature. Fixed, since both halves are
-    /// fixed-length for every [`Suite`] (H1, H3); H2 and H4's variable-length
+    /// fixed-length for every [`Suite`] (EdMl44, SrMl44); EdFn512 and SrFn512's variable-length
     /// post-quantum half is why they implement [`DeltaSuite`] instead.
     const SIGNATURE_LEN: usize =
         <Self::Classical as ClassicalScheme>::SIGNATURE_LEN + <Self::Pq as PqScheme>::SIGNATURE_LEN;
@@ -235,9 +235,9 @@ macro_rules! hybrid_stateful_suite {
 /// [`Suite`] bakes a fixed-offset split into [`Suite::SIGNATURE_LEN`] and
 /// [`Suite::SPLIT`], which FN-DSA-512 does not fit: its wire form carries a
 /// length field between the classical and post-quantum halves
-/// (`crate::encoding_delta`). This trait exists so H2 and H4 can share
+/// (`crate::encoding_delta`). This trait exists so EdFn512 and SrFn512 can share
 /// [`hybrid_delta_suite!`](crate::hybrid_delta_suite) and `crate::composite_delta` without perturbing
-/// [`Suite`] or the fixed-offset composite functions H1 and H3 already use,
+/// [`Suite`] or the fixed-offset composite functions EdMl44 and SrMl44 already use,
 /// mirroring how [`StatefulSuite`] sits beside [`Suite`] for the same
 /// reason.
 pub trait DeltaSuite {
@@ -250,8 +250,8 @@ pub trait DeltaSuite {
     const LABEL: &'static [u8];
 
     /// Smallest post-quantum signature length the wire `DeltaLen` field can
-    /// represent (specification section 6). `MIN_FALCON512_SIG_LEN` for H2
-    /// and H4.
+    /// represent (specification section 6). `MIN_FALCON512_SIG_LEN` for EdFn512
+    /// and SrFn512.
     const MIN_PQ_SIG_LEN: usize;
 
     /// Length in bytes of the composite public key: the classical public

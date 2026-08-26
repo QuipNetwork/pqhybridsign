@@ -9,9 +9,9 @@
 //! build failure, not a signature produced against an unenforced bound.
 
 use pqhybridsign::stateful::StatefulHybridSignatureScheme;
-use pqhybridsign::shrincs::{keygen, H5};
+use pqhybridsign::shrincs::{keygen, EdSh};
 
 fn main() {
-    let (sk, _pk) = keygen::<H5>(&[1u8; 32], 4).expect("keygen");
-    let _sig = H5::sign_stateless(&sk, b"message", b"ctx");
+    let (sk, _pk) = keygen::<EdSh>(&[1u8; 32], 4).expect("keygen");
+    let _sig = EdSh::sign_stateless(&sk, b"message", b"ctx");
 }

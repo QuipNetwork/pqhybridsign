@@ -20,7 +20,7 @@ use pqhybridsign::composite::{keypair_from_seed, sign, sign_deterministic, verif
 use pqhybridsign::{error::Error, hybrid_suite, suite::Suite};
 
 hybrid_suite! {
-    /// H1 sizes, with the accept-everything stubs.
+    /// EdMl44 sizes, with the accept-everything stubs.
     H1Test,
     classical = Ed25519Stub as "ed25519",
     pq = MlDsaStub as "mldsa44",
@@ -29,7 +29,7 @@ hybrid_suite! {
 }
 
 hybrid_suite! {
-    /// H1 shape, with stubs that reject a modified signature.
+    /// EdMl44 shape, with stubs that reject a modified signature.
     HashH1,
     classical = HashClassical as "ed25519",
     pq = HashPq as "mldsa44",
@@ -284,7 +284,7 @@ fn signing_rejects_wrong_length_buffers() {
 
 /// `sig_out` only needs to be *at least* `SIGNATURE_LEN`: a caller sizing
 /// one scratch buffer for the largest of the six suites and reusing it for
-/// every suite must not be turned away by H1 or H3. Pins the relaxed
+/// every suite must not be turned away by EdMl44 or SrMl44. Pins the relaxed
 /// contract for both `sign` and `sign_deterministic`, and for both suites
 /// this module exercises.
 #[test]

@@ -33,7 +33,7 @@
 //! Leaves 1, 2 and 4 are recorded; leaf 3 is spent (state must advance
 //! through it to reach leaf 4) but its signature is not checked, so it is
 //! not persisted.
-use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5, H6};
+use pqhybridsign::shrincs::{keygen, EdSh, ShrincsScheme, SrSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_test_support::MemoryBudget;
@@ -202,11 +202,11 @@ where
 #[test]
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
 fn generate_h5() {
-    emit::<H5>("H5", [0x50u8; 32]);
+    emit::<EdSh>("ED-SH", [0x50u8; 32]);
 }
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
 fn generate_h6() {
-    emit::<H6>("H6", [0x60u8; 32]);
+    emit::<SrSh>("SR-SH", [0x60u8; 32]);
 }

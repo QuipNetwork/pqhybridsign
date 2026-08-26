@@ -210,7 +210,7 @@ fn two_suites_from_one_master_seed_have_independent_keys() {
 /// `sig_out` only needs to be *at least* `MAX_SIGNATURE_LEN`: mirrors
 /// `composite.rs`'s `sig_out_accepts_exact_or_larger_and_rejects_shorter`
 /// for the two `DeltaSuite`s. `signing_reports_a_buffer_that_is_too_small`
-/// above already pins the short case for H2; this rounds it out with H4 and
+/// above already pins the short case for EdFn512; this rounds it out with SrFn512 and
 /// the accept-larger side of the contract for both.
 #[test]
 fn sig_out_accepts_exact_or_larger_and_rejects_shorter() {

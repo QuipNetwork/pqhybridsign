@@ -19,7 +19,7 @@ use common::{Ed25519Stub, MlDsaStub};
 use pqhybridsign::hybrid_suite;
 
 hybrid_suite! {
-    /// H1 test instance.
+    /// EdMl44 test instance.
     H1Test,
     classical = Ed25519Stub as "ed25519",
     pq = MlDsaStub as "mldsa44",

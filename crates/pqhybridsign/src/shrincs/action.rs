@@ -7,7 +7,7 @@
 //! already embeds the suite label, specification section 7.1) and by the
 //! public-key commitment, which is never shared across suites. That is why
 //! `domain_separator` and `action_type` below are fixed constants shared
-//! across every H5/H6 suite and profile combination rather than varying per
+//! across every EdSh/SrSh suite and profile combination rather than varying per
 //! suite.
 //!
 //! # Leaf-consuming signatures: the attempt spends the leaf
@@ -44,7 +44,7 @@ pub const HYBRID_DOMAIN_SEPARATOR: [u8; 32] = [
     0xfe, 0x2f, 0x77, 0x2d, 0x89, 0x9c, 0x7f, 0xc1, 0xbe, 0x3e, 0xb7, 0x37, 0x63, 0x80, 0xee, 0xbc,
 ];
 
-/// Fixed 32-byte action type shared across all H5/H6 suite and profile
+/// Fixed 32-byte action type shared across all EdSh/SrSh suite and profile
 /// combinations. Suite separation is carried by `payload_hash`, not by this
 /// field.
 ///

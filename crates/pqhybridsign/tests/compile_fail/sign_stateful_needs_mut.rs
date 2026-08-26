@@ -3,7 +3,7 @@
 //! advances the one-time leaf state, so it requires `&mut`.
 
 use pqhybridsign::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
-use pqhybridsign::shrincs::{keygen, H5};
+use pqhybridsign::shrincs::{keygen, EdSh};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -41,8 +41,8 @@ impl LeafJournal for MemoryJournal {
 }
 
 fn main() {
-    let (sk, _pk) = keygen::<H5>(&[1u8; 32], 4).expect("keygen");
+    let (sk, _pk) = keygen::<EdSh>(&[1u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::default();
 
-    let _sig = H5::sign_stateful(&sk, &mut journal, b"hello", b"ctx");
+    let _sig = EdSh::sign_stateful(&sk, &mut journal, b"hello", b"ctx");
 }

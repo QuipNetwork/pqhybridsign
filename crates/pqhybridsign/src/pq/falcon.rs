@@ -16,7 +16,7 @@ use zeroize::Zeroize;
 /// FN-DSA-512 post-quantum component (Falcon), `fn-dsa` crate 0.4.0.
 ///
 /// Specification section 6 pins `MIN_FALCON512_SIG_LEN` for the
-/// delta-length wire encoding this component's H2 and H4 suites use; that
+/// delta-length wire encoding this component's EdFn512 and SrFn512 suites use; that
 /// constant lives with the suites (`pqhybridsign::suites`), not here, since
 /// it is a wire-format property, not a component property.
 #[derive(Clone, Copy, Debug)]

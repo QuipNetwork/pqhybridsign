@@ -10,9 +10,9 @@
 
 Six suites, all AND-composed from a classical and a post-quantum half:
 
-- **H1** ed25519 + ML-DSA-44, **H3** sr25519 + ML-DSA-44
-- **H2** ed25519 + FN-DSA-512, **H4** sr25519 + FN-DSA-512
-- **H5** ed25519 + SHRINCS, **H6** sr25519 + SHRINCS (stateful, behind the
+- **EdMl44** ed25519 + ML-DSA-44, **SrMl44** sr25519 + ML-DSA-44
+- **EdFn512** ed25519 + FN-DSA-512, **SrFn512** sr25519 + FN-DSA-512
+- **EdSh** ed25519 + SHRINCS, **SrSh** sr25519 + SHRINCS (stateful, behind the
   `stateful` feature)
 
 # Module layout
@@ -21,7 +21,7 @@ The composite foundation is a toolkit: every module is public API and is
 reached through its own path, `pqhybridsign::error::Error`,
 `pqhybridsign::policy::LeafPolicyMachine`. There are no root re-exports of
 it, because a partial set gave two access patterns for one type. The
-lattice suites `H1` through `H4` are re-exported at the crate root. The
+lattice suites `EdMl44` through `SrFn512` are re-exported at the crate root. The
 stateful hash-based suites live under `pqhybridsign::shrincs`, compiled only
 when the `stateful` feature is on.
 "]
@@ -78,15 +78,15 @@ pub mod suite;
 #[cfg(feature = "vrf")]
 pub mod vrf;
 
-// Lattice suites H1 through H4, over `ed25519-zebra`, `schnorrkel`,
+// Lattice suites EdMl44 through SrFn512, over `ed25519-zebra`, `schnorrkel`,
 // `fips204`, and `fn-dsa`. Always compiled.
 pub mod classical;
 pub mod pq;
 mod suites;
 
-pub use suites::{H1, H2, H3, H4, MIN_FALCON512_SIG_LEN};
+pub use suites::{EdFn512, EdMl44, SrFn512, SrMl44, MIN_FALCON512_SIG_LEN};
 
-// Stateful hash-based suites H5 and H6, over `hashsigs-rs`. Compiled when
+// Stateful hash-based suites EdSh and SrSh, over `hashsigs-rs`. Compiled when
 // any SHRINCS profile is active. The `stateful` feature (on by default)
 // selects the 256s profile; a caller may instead name another profile
 // directly. With no profile, the SHRINCS code and the `hashsigs-rs`

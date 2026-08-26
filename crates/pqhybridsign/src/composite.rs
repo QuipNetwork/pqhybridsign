@@ -84,7 +84,7 @@ pub fn keypair_from_seed<S: Suite>(
 /// `rng` supplies fresh randomness to every component that accepts it:
 /// sr25519 through schnorrkel, and ML-DSA-44 through the FIPS 204 hedged
 /// `rnd` value. ed25519 is deterministic by RFC 8032 and takes no
-/// randomness, so under H1 the classical half repeats across calls while
+/// randomness, so under EdMl44 the classical half repeats across calls while
 /// the post-quantum half does not.
 ///
 /// Without the `alloc` feature, `M'` is built in a `STACK_M_PRIME`-byte
@@ -122,7 +122,7 @@ pub fn sign<S: Suite>(
 ///
 /// - sr25519 binds it. The Schnorr nonce is seeded from
 ///   `H(sk || nonce || msg)` and attached to the schnorrkel transcript, so
-///   a different `nonce` gives a different classical half under H3.
+///   a different `nonce` gives a different classical half under SrMl44.
 /// - ed25519 ignores it. RFC 8032 fixes `r = H(prefix || msg)`, and
 ///   `ed25519-zebra` exposes no hook for a caller-chosen `r`. The RFC 8032
 ///   nonce is already secret and unique per message, which is the property
@@ -130,9 +130,9 @@ pub fn sign<S: Suite>(
 /// - ML-DSA-44 ignores it. FIPS 204's deterministic variant fixes `rnd` to
 ///   all zeros.
 ///
-/// The practical consequence: under H1 both halves ignore `nonce`, so two
+/// The practical consequence: under EdMl44 both halves ignore `nonce`, so two
 /// different nonces over the same message and context give byte-identical
-/// signatures. Under H3 only the classical half changes. Callers who need
+/// signatures. Under SrMl44 only the classical half changes. Callers who need
 /// distinct signatures over one message must either vary `ctx` or use
 /// [`sign`].
 ///

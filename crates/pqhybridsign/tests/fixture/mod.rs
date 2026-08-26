@@ -4,7 +4,7 @@
 //! A directory under `tests/` is not a test binary on its own. Consuming
 //! integration tests pull this module in with `mod fixture;`.
 //!
-//! Each fixture file holds both H5 and H6 for one profile. The active
+//! Each fixture file holds both EdSh and SrSh for one profile. The active
 //! `profile-*` feature selects the file at compile time via `include_str!`,
 //! so a missing file is a compile error. A file whose recorded
 //! `profile_name` disagrees with the active profile panics and names the
@@ -270,13 +270,13 @@ pub fn foreign_profiles(want: &str) -> Vec<ForeignFixture> {
     out
 }
 
-/// H5 fixture for the active profile.
+/// EdSh fixture for the active profile.
 pub fn h5() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| load_suite("H5"))
 }
 
-/// H6 fixture for the active profile.
+/// SrSh fixture for the active profile.
 pub fn h6() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| load_suite("H6"))
