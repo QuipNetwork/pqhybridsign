@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Signing for the two stateful suites, H5 and H6.
+//! Signing for the two stateful suites, ED-SH and SR-SH.
 //!
-//! H5 and H6 pair a classical scheme with SHRINCS, whose post-quantum half
+//! ED-SH and SR-SH pair a classical scheme with SHRINCS, whose post-quantum half
 //! spends a one-time leaf per signature (see the crate documentation).
 //! [`pqhs_sign_stateful`] and [`pqhs_stateful_key_sign`] are the entry
 //! points that spend one, and they take a [`PqhsLeafJournal`] -- a durable
@@ -387,7 +387,7 @@ pub unsafe extern "C" fn pqhs_adopt_key(
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4, which have no journal
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512, which have no journal
 /// and so no identity. `PQHS_ERR_BAD_LENGTH` if `pk` is not the suite's
 /// public key length or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
 /// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is null.
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn pqhs_key_identity(
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4. `PQHS_ERR_BAD_LENGTH` if
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512. `PQHS_ERR_BAD_LENGTH` if
 /// `sk` is not [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for
 /// `suite` or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
 /// `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
@@ -532,7 +532,7 @@ fn write_identity(
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: use
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: use
 /// [`pqhs_sign`](crate::pqhs_sign) or
 /// [`pqhs_sign_deterministic`](crate::pqhs_sign_deterministic) instead.
 /// `PQHS_ERR_BAD_LENGTH` if `sk` or `sk_out` is not exactly
@@ -676,7 +676,7 @@ pub unsafe extern "C" fn pqhs_sign_stateful(
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4. `PQHS_ERR_BAD_LENGTH`
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512. `PQHS_ERR_BAD_LENGTH`
 /// if `sk` is not exactly
 /// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
 /// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
@@ -768,22 +768,22 @@ pub unsafe extern "C" fn pqhs_sign_stateless(
 /// verify-form public key `pk`.
 ///
 /// [`pqhs_verify`](crate::sign::pqhs_verify) is the total dispatcher across
-/// all six suites and, for H5 and H6, behaves exactly as this function
+/// all six suites and, for ED-SH and SR-SH, behaves exactly as this function
 /// does; call this one directly only where the suite is already known to be
-/// H5 or H6. Specification section 20.2 requires the behaviour both
+/// ED-SH or SR-SH. Specification section 20.2 requires the behaviour both
 /// enforce: the primary stateless path is reserved for rotation and
 /// recovery, and a verifier for an ordinary application message MUST NOT
 /// accept it. The wire `PathSelector` is checked, and a signature naming
 /// the stateless path is refused, before either component signature is
-/// checked. A caller that genuinely needs to verify a stateless-path H5 or
-/// H6 signature calls [`pqhs_verify_stateless`] instead.
+/// checked. A caller that genuinely needs to verify a stateless-path ED-SH or
+/// SR-SH signature calls [`pqhs_verify_stateless`] instead.
 ///
 /// Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
 /// cases, on the same terms as [`pqhs_verify`](crate::sign::pqhs_verify).
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4; use
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512; use
 /// [`pqhs_verify`](crate::sign::pqhs_verify) instead.
 /// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
 /// `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
@@ -918,7 +918,7 @@ pub unsafe extern "C" fn pqhs_verify_stateless(
 /// signer-supplied verify key that must be the one `stored_public_key`
 /// commits to.
 ///
-/// This is the entry point for the deployment H5 and H6 are built for: the
+/// This is the entry point for the deployment ED-SH and SR-SH are built for: the
 /// verifier stores the small form (`ClassicalPK || commitment`,
 /// [`pqhs_stored_public_key_len`](crate::pqhs_stored_public_key_len) bytes
 /// -- 64 for both suites) and the signer supplies the full 164-byte
@@ -944,7 +944,7 @@ pub unsafe extern "C" fn pqhs_verify_stateless(
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: their public key is a
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: their public key is a
 /// single form with no commitment in it, so there is nothing for this
 /// entry point to bind; use [`pqhs_verify`](crate::pqhs_verify).
 /// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
@@ -1152,7 +1152,7 @@ pub struct PqhsStatefulKey {
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4.
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512.
 /// `PQHS_ERR_BAD_LENGTH` if `sk` is not
 /// [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
 /// `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
@@ -1715,9 +1715,9 @@ mod tests {
         assert_eq!(rc, PQHS_OK);
     }
 
-    fn h5_keypair(seed: u8) -> (Vec<u8>, Vec<u8>) {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H5)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H5)];
+    fn ed_sh_keypair(seed: u8) -> (Vec<u8>, Vec<u8>) {
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdSh)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdSh)];
         let seed_bytes = [seed; 32];
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
@@ -1740,14 +1740,14 @@ mod tests {
     }
 
     #[test]
-    fn h5_stateful_sign_and_verify_round_trip() {
+    fn ed_sh_stateful_sign_and_verify_round_trip() {
         COMMITTED.with(|c| c.borrow_mut().clear());
-        let (sk, pk) = h5_keypair(11);
+        let (sk, pk) = ed_sh_keypair(11);
         let journal = test_journal();
 
         let msg = b"stateful message";
         let mut sk_out = vec![0u8; sk.len()];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
@@ -1803,10 +1803,10 @@ mod tests {
     /// wire `LeafCount`.
     #[test]
     fn a_journal_that_never_adopted_this_key_is_refused_across_the_boundary() {
-        let (sk, pk) = h5_keypair(21);
+        let (sk, pk) = ed_sh_keypair(21);
         let msg = b"message one";
         let mut sk_out = vec![0u8; sk.len()];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         let journal = test_journal();
 
@@ -1862,7 +1862,7 @@ mod tests {
         );
 
         // A journal bound to another key is refused on the same terms.
-        let (_other_sk, other_pk) = h5_keypair(22);
+        let (_other_sk, other_pk) = ed_sh_keypair(22);
         assert_ne!(identity_of(5, &pk), identity_of(5, &other_pk));
         // SAFETY: as above.
         let rc = unsafe {
@@ -1891,7 +1891,7 @@ mod tests {
     /// `pqhs_key_identity_from_secret_key` agree.
     #[test]
     fn adopting_binds_one_key_and_refuses_another() {
-        let (sk, pk) = h5_keypair(23);
+        let (sk, pk) = ed_sh_keypair(23);
         let identity = identity_of(5, &pk);
 
         let mut from_sk = [0u8; PQHS_KEY_IDENTITY_LEN];
@@ -1910,7 +1910,7 @@ mod tests {
         assert_eq!(from_sk, identity, "public and secret name the same key");
 
         let journal = test_journal();
-        // Already bound by `h5_keypair`; re-adopting the same key is a
+        // Already bound by `ed_sh_keypair`; re-adopting the same key is a
         // no-op, so a provisioning step can be re-run.
         // SAFETY: as above.
         let rc = unsafe { pqhs_adopt_key(&journal, identity.as_ptr(), identity.len()) };
@@ -1947,7 +1947,7 @@ mod tests {
 
     #[test]
     fn the_identity_entry_points_check_their_pointers_and_lengths() {
-        let (sk, pk) = h5_keypair(25);
+        let (sk, pk) = ed_sh_keypair(25);
         let mut out = [0u8; PQHS_KEY_IDENTITY_LEN];
         let identity = identity_of(5, &pk);
 
@@ -2002,7 +2002,7 @@ mod tests {
             ..test_journal()
         };
         let mut sk_out = vec![0u8; sk.len()];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: as above.
         unsafe {
@@ -2042,14 +2042,14 @@ mod tests {
 
     #[test]
     fn a_failing_journal_reports_journal_failed_and_spends_nothing() {
-        let (sk, _pk) = h5_keypair(12);
+        let (sk, _pk) = ed_sh_keypair(12);
         let journal = PqhsLeafJournal {
             commit: Some(failing_commit),
             ..test_journal()
         };
         let msg = b"m";
         let mut sk_out = vec![0u8; sk.len()];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
@@ -2076,10 +2076,10 @@ mod tests {
 
     #[test]
     fn a_null_journal_or_null_callback_is_rejected_not_dereferenced() {
-        let (sk, _pk) = h5_keypair(13);
+        let (sk, _pk) = ed_sh_keypair(13);
         let msg = b"m";
         let mut sk_out = vec![0u8; sk.len()];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
@@ -2135,10 +2135,10 @@ mod tests {
     #[test]
     fn aliased_sk_and_sk_out_are_refused_and_spend_nothing() {
         COMMITTED.with(|c| c.borrow_mut().clear());
-        let (sk, _pk) = h5_keypair(15);
+        let (sk, _pk) = ed_sh_keypair(15);
         let journal = test_journal();
         let mut buf = sk.clone();
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
 
         // Exactly the same range for both.
@@ -2201,10 +2201,10 @@ mod tests {
     #[test]
     fn a_null_sig_written_is_refused_before_any_leaf_is_spent() {
         COMMITTED.with(|c| c.borrow_mut().clear());
-        let (sk, _pk) = h5_keypair(16);
+        let (sk, _pk) = ed_sh_keypair(16);
         let journal = test_journal();
         let mut sk_out = vec![0u8; sk.len()];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         // SAFETY: every pointer below is either null with a zero length, the
         // null `sig_written` under test, or a live, correctly sized local
         // buffer for the duration of the call.
@@ -2261,11 +2261,11 @@ mod tests {
     #[test]
     fn a_wrong_length_sk_out_spends_nothing_and_leaves_the_key_usable() {
         COMMITTED.with(|c| c.borrow_mut().clear());
-        let (sk, pk) = h5_keypair(17);
+        let (sk, pk) = ed_sh_keypair(17);
         let journal = test_journal();
         let msg = b"m";
         let mut short_sk_out = vec![0u8; sk.len() - 1];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live buffer of the length passed alongside it.
@@ -2333,11 +2333,11 @@ mod tests {
     }
 
     #[test]
-    fn h5_stateless_signing_spends_no_leaf_and_can_repeat() {
-        let (sk, pk) = h5_keypair(14);
+    fn ed_sh_stateless_signing_spends_no_leaf_and_can_repeat() {
+        let (sk, pk) = ed_sh_keypair(14);
         let msg = b"few-time message";
-        let mut sig_a = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
-        let mut sig_b = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig_a = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
+        let mut sig_b = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n_a = 0usize;
         let mut n_b = 0usize;
         // SAFETY: every pointer below is either null with a zero length or
@@ -2428,10 +2428,10 @@ mod tests {
     }
 
     /// `sig_out` only needs to be *at least* what a call actually writes for
-    /// H5 and H6 too, mirroring the contract `pqhs_sign`/
-    /// `pqhs_sign_deterministic` pin for H1-H4 in `crate::sign::tests`.
+    /// ED-SH and SR-SH too, mirroring the contract `pqhs_sign`/
+    /// `pqhs_sign_deterministic` pin for ED-ML-44 through SR-FN-512 in `crate::sign::tests`.
     ///
-    /// Unlike H1-H4, [`pqhybridsign_abi::signature_len`] for H5/H6 is a
+    /// Unlike ED-ML-44 through SR-FN-512, [`pqhybridsign_abi::signature_len`] for ED-SH/SR-SH is a
     /// worst-case upper bound (the largest authentication path any leaf
     /// budget could need -- see that function's doc comment), not the exact
     /// length any one call writes, so `signature_len - 1` is not
@@ -2450,7 +2450,7 @@ mod tests {
     /// spends no leaf), exact and oversized both succeed with the same
     /// `sig_written`.
     #[test]
-    fn sig_out_accepts_exact_or_larger_and_rejects_shorter_for_h5_and_h6() {
+    fn sig_out_accepts_exact_or_larger_and_rejects_shorter_for_ed_sh_and_sr_sh() {
         for suite in [5u8, 6u8] {
             let max_len =
                 pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::from_code(suite).unwrap());
@@ -2633,7 +2633,7 @@ mod tests {
                 crate::error::PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL,
                 "suite {suite} short pqhs_sign_stateful"
             );
-            // Unlike H1-H4, a short `sig_out` here does not mean nothing
+            // Unlike ED-ML-44 through SR-FN-512, a short `sig_out` here does not mean nothing
             // happened: the module doc (`PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL`
             // from `pqhs_sign_stateful`, in `include/pqhybridsign.h`)
             // documents that the leaf is already spent and `sk_out` already
@@ -2712,7 +2712,7 @@ mod tests {
     }
 
     #[test]
-    fn stateful_entry_points_reject_h1_through_h4() {
+    fn stateful_entry_points_reject_ed_ml44_through_sr_fn512() {
         let journal = test_journal();
         let mut buf = [0u8; 4096];
         let mut buf2 = [0u8; 4096];
@@ -2766,9 +2766,9 @@ mod tests {
     /// a vtable they never filled in.
     #[test]
     fn a_null_or_incomplete_budget_vtable_is_refused_before_anything_is_charged() {
-        let (sk, pk) = h5_keypair(0x31);
+        let (sk, pk) = ed_sh_keypair(0x31);
         provision_journal(5, &pk);
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
 
         let incomplete = [
@@ -2817,9 +2817,9 @@ mod tests {
     /// tell an operator to rotate a key whose only problem was a disk.
     #[test]
     fn a_budget_store_that_cannot_record_refuses_the_signature() {
-        let (sk, pk) = h5_keypair(0x32);
+        let (sk, pk) = ed_sh_keypair(0x32);
         provision_journal(5, &pk);
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
 
         let failing = PqhsStatelessBudget {
@@ -2911,9 +2911,9 @@ mod tests {
     /// below pins both directions.
     fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
         let mut stored =
-            vec![0u8; pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5)];
+            vec![0u8; pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::EdSh)];
         pqhybridsign_abi::stored_public_key(
-            pqhybridsign_abi::Suite::H5,
+            pqhybridsign_abi::Suite::EdSh,
             verify_public_key,
             &mut stored,
         )
@@ -2937,9 +2937,9 @@ mod tests {
     /// why these are the two offsets that matter.
     #[test]
     fn the_stored_form_helper_moves_with_pk_seed_not_the_carried_commitment() {
-        let (_sk, pk) = h5_keypair(41);
+        let (_sk, pk) = ed_sh_keypair(41);
         let classical_len =
-            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
+            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::EdSh) - 32;
 
         // The carried commitment field: recomputation must ignore it.
         let mut carried_tampered = pk.clone();
@@ -2963,7 +2963,7 @@ mod tests {
     /// The signer-supplied half: everything after the classical public key.
     fn bundle_of(verify_public_key: &[u8]) -> &[u8] {
         let classical_len =
-            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::H5) - 32;
+            pqhybridsign_abi::stored_public_key_len(pqhybridsign_abi::Suite::EdSh) - 32;
         &verify_public_key[classical_len..]
     }
 
@@ -2977,12 +2977,12 @@ mod tests {
     /// `verify_with_stored_public_key_stateful_refuses_a_stateless_path_signature`.
     #[test]
     fn verify_with_stored_public_key_refuses_a_bundle_the_stored_key_does_not_name() {
-        let (victim_sk, victim_pk) = h5_keypair(31);
-        let (attacker_sk, attacker_pk) = h5_keypair(32);
+        let (victim_sk, victim_pk) = ed_sh_keypair(31);
+        let (attacker_sk, attacker_pk) = ed_sh_keypair(32);
         let victim_stored = stored_form(&victim_pk);
 
         let msg = b"transfer everything";
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         let budget = test_budget();
         // SAFETY: every pointer below is either null with a zero length or
@@ -3007,7 +3007,7 @@ mod tests {
         let forged = &sig[..n];
 
         // Whole-key verification accepts it. `forged` is stateless-signed,
-        // and plain `pqhs_verify` accepts only the stateful path for H5/H6,
+        // and plain `pqhs_verify` accepts only the stateful path for ED-SH/SR-SH,
         // so this goes through `pqhs_verify_stateless`.
         let mut valid = false;
         // SAFETY: as above.
@@ -3054,7 +3054,7 @@ mod tests {
         // The victim's own signature and bundle pass, proving the refusal
         // above is the commitment check and not this entry point failing to
         // verify anything at all.
-        let mut honest = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut honest = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: as above.
         let rc = unsafe {
@@ -3104,13 +3104,13 @@ mod tests {
     /// signature would otherwise verify.
     #[test]
     fn the_stateful_and_stateless_stored_public_key_entry_points_each_refuse_the_others_path() {
-        let (victim_sk, victim_pk) = h5_keypair(33);
+        let (victim_sk, victim_pk) = ed_sh_keypair(33);
         let victim_stored = stored_form(&victim_pk);
         let victim_bundle = bundle_of(&victim_pk);
         let msg = b"transfer everything";
 
         let mut stateless_sig =
-            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut n = 0usize;
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
@@ -3136,7 +3136,7 @@ mod tests {
         provision_journal(5, &victim_pk);
         let journal = test_journal();
         let mut stateful_sig =
-            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+            vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut sk_out = victim_sk.clone();
         let mut n = 0usize;
         // SAFETY: as above.
@@ -3252,7 +3252,8 @@ mod tests {
     }
 
     #[test]
-    fn verify_with_stored_public_key_rejects_h1_through_h4_and_writes_false_on_every_path() {
+    fn verify_with_stored_public_key_rejects_ed_ml44_through_sr_fn512_and_writes_false_on_every_path(
+    ) {
         let stored = [0u8; 64];
         let bundle = [0u8; 164];
         for code in [1u8, 2, 3, 4] {
@@ -3303,8 +3304,8 @@ mod tests {
 
     #[test]
     fn an_opened_handle_signs_twice_and_both_signatures_verify() {
-        let suite = 5u8; // H5
-        let (sk, pk) = h5_keypair(41);
+        let suite = 5u8; // ED-SH
+        let (sk, pk) = ed_sh_keypair(41);
 
         let mut handle: *mut PqhsStatefulKey = std::ptr::null_mut();
         // SAFETY: `sk` is a live local of `sk.len()` bytes; `handle` is a
@@ -3331,7 +3332,7 @@ mod tests {
             PQHS_OK
         );
 
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
 
         for msg in [b"first".as_slice(), b"second".as_slice()] {
             let mut written = 0usize;
@@ -3377,7 +3378,7 @@ mod tests {
 
     #[test]
     fn a_null_handle_out_pointer_is_rejected() {
-        let (sk, _pk) = h5_keypair(42);
+        let (sk, _pk) = ed_sh_keypair(42);
         // SAFETY: `sk` is a live local of `sk.len()` bytes; the out-pointer
         // is the null pointer under test.
         let status =
@@ -3395,7 +3396,7 @@ mod tests {
     #[test]
     fn the_exported_blob_reopens_and_continues() {
         let suite = 5u8;
-        let (sk, pk) = h5_keypair(43);
+        let (sk, pk) = ed_sh_keypair(43);
         let mut handle: *mut PqhsStatefulKey = std::ptr::null_mut();
         // SAFETY: `sk` is a live local of `sk.len()` bytes; `handle` is a
         // live local written through as the out-parameter.
@@ -3417,7 +3418,7 @@ mod tests {
         unsafe {
             pqhs_adopt_key(&journal, identity.as_ptr(), identity.len());
         }
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut written = 0usize;
         // SAFETY: `handle` is the opened pointer; `journal` and every
         // buffer are live locals of the lengths passed alongside them.
@@ -3506,7 +3507,7 @@ mod tests {
     #[test]
     fn an_opened_handle_signs_stateless_and_the_signature_verifies() {
         let suite = 5u8;
-        let (sk, pk) = h5_keypair(44);
+        let (sk, pk) = ed_sh_keypair(44);
         let mut handle: *mut PqhsStatefulKey = std::ptr::null_mut();
         // SAFETY: `sk` is a live local of `sk.len()` bytes; `handle` is a
         // live local written through as the out-parameter.
@@ -3514,7 +3515,7 @@ mod tests {
             unsafe { pqhs_stateful_key_open(suite, sk.as_ptr(), sk.len(), &mut handle) },
             PQHS_OK
         );
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H5)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdSh)];
         let mut written = 0usize;
         let budget = test_budget();
         // SAFETY: `handle` is the opened pointer; `budget` and every buffer

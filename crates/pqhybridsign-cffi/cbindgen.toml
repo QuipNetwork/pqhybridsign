@@ -7,6 +7,14 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * result. `cargo test -p pqhybridsign-cffi` fails if this file drifts from
  * the source it was generated from.
  *
+ * Suite codes, as passed in every `uint8_t suite` parameter:
+ *   1  ED-ML-44   ed25519 + ML-DSA-44
+ *   2  ED-FN-512  ed25519 + FN-DSA-512
+ *   3  SR-ML-44   sr25519 + ML-DSA-44
+ *   4  SR-FN-512  sr25519 + FN-DSA-512
+ *   5  ED-SH      ed25519 + SHRINCS   (stateful)
+ *   6  SR-SH      sr25519 + SHRINCS   (stateful)
+ *
  * ===========================================================================
  * The contract this boundary keeps
  * ===========================================================================
@@ -96,9 +104,9 @@ header = """/* SPDX-License-Identifier: AGPL-3.0-or-later
  * that is never freed is never wiped, on top of leaking the memory it
  * occupies.
  *
- * --- H5 and H6 keep their guardrails ---
+ * --- ED-SH and SR-SH keep their guardrails ---
  *
- * H5 and H6 spend a one-time leaf per signature; reusing one is a total
+ * ED-SH and SR-SH spend a one-time leaf per signature; reusing one is a total
  * loss of the key's post-quantum security. This library offers no call
  * shaped like an ordinary stateless sign that can reach either suite:
  * pqhs_sign and pqhs_sign_deterministic reject them with
