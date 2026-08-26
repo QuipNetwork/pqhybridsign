@@ -160,28 +160,28 @@ fn check_delta<S: DeltaSuite>(v: &Vector) {
 }
 
 #[test]
-fn h1_matches_the_golden_vector() {
+fn ed_ml44_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h1.json")).expect("parse");
     assert_eq!(v.suite, "ED-ML-44");
     check::<EdMl44>(&v);
 }
 
 #[test]
-fn h3_matches_the_golden_vector() {
+fn sr_ml44_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h3.json")).expect("parse");
     assert_eq!(v.suite, "SR-ML-44");
     check::<SrMl44>(&v);
 }
 
 #[test]
-fn h2_matches_the_golden_vector() {
+fn ed_fn512_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h2.json")).expect("parse");
     assert_eq!(v.suite, "ED-FN-512");
     check_delta::<EdFn512>(&v);
 }
 
 #[test]
-fn h4_matches_the_golden_vector() {
+fn sr_fn512_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h4.json")).expect("parse");
     assert_eq!(v.suite, "SR-FN-512");
     check_delta::<SrFn512>(&v);

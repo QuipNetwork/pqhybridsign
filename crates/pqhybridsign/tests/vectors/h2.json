@@ -1,5 +1,5 @@
 {
-  "suite": "H2",
+  "suite": "ED-FN-512",
   "label_hex": "6879627269642d656432353531392d66616c636f6e3531322d763100",
   "hkdf_info_includes_label_null_byte": true,
   "master_seed_hex": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",

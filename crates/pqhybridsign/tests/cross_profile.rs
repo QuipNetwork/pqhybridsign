@@ -85,7 +85,7 @@ fn commitment_offset() -> usize {
 
 #[test]
 fn print_the_cross_profile_fingerprint() {
-    let f = fixture::h5();
+    let f = fixture::ed_sh();
     let pk = PublicKey::<EdSh>::from_bytes(&f.public_key).expect("public key from fixture");
 
     // Same stored form the golden vectors pin: classical public key followed
@@ -137,7 +137,7 @@ fn print_the_cross_profile_fingerprint() {
 /// so running both would double the cost for the same evidence.
 #[test]
 fn a_signature_does_not_verify_under_another_profiles_commitment() {
-    let f = fixture::h5();
+    let f = fixture::ed_sh();
     let at = commitment_offset();
 
     // The honest key verifies both of its own signatures. Without this the
@@ -163,7 +163,7 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
         "the fixture's own stateless signature must verify under its own key"
     );
 
-    let foreign = fixture::foreign_profiles("H5");
+    let foreign = fixture::foreign_profiles("ED-SH");
     assert_eq!(
         foreign.len(),
         3,

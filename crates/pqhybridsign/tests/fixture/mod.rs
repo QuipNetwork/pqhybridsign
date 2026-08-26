@@ -40,7 +40,7 @@ mod profile_id;
 #[derive(Debug, Clone)]
 pub struct Fixture {
     pub profile_name: String,
-    /// `"H5"` or `"H6"`.
+    /// `"ED-SH"` or `"SR-SH"`.
     pub suite: String,
     pub max_signatures: u32,
     pub master_seed: Vec<u8>,
@@ -271,13 +271,13 @@ pub fn foreign_profiles(want: &str) -> Vec<ForeignFixture> {
 }
 
 /// EdSh fixture for the active profile.
-pub fn h5() -> &'static Fixture {
+pub fn ed_sh() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| load_suite("H5"))
+    FIXTURE.get_or_init(|| load_suite("ED-SH"))
 }
 
 /// SrSh fixture for the active profile.
-pub fn h6() -> &'static Fixture {
+pub fn sr_sh() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| load_suite("H6"))
+    FIXTURE.get_or_init(|| load_suite("SR-SH"))
 }

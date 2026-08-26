@@ -279,14 +279,14 @@ where
 }
 
 #[test]
-fn h5_matches_the_golden_vector() {
+fn ed_sh_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h5.json")).expect("parse");
     assert_eq!(v.suite, "ED-SH");
     check::<EdSh>(&v);
 }
 
 #[test]
-fn h6_matches_the_golden_vector() {
+fn sr_sh_matches_the_golden_vector() {
     let v: Vector = serde_json::from_str(include_str!("vectors/h6.json")).expect("parse");
     assert_eq!(v.suite, "SR-SH");
     check::<SrSh>(&v);

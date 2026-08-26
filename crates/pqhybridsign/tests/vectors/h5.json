@@ -1,5 +1,5 @@
 {
-  "suite": "H5",
+  "suite": "ED-SH",
   "label_hex": "6879627269642d656432353531392d736872696e63732d323536732d763100",
   "hkdf_info_includes_label_null_byte": true,
   "profile_name": "shrincs-256s",

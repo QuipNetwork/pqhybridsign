@@ -1,5 +1,5 @@
 {
-  "suite": "H3",
+  "suite": "SR-ML-44",
   "label_hex": "6879627269642d737232353531392d6d6c64736134342d763100",
   "hkdf_info_includes_label_null_byte": true,
   "master_seed_hex": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
