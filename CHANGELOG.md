@@ -37,15 +37,6 @@ the stateful commitment and every public entry point do not change.
   drift. `hashsigs-rs` pins its own `version_tag` the same way and for the
   same reason.
 
-### Notes
-
-- `ShrincsVerifier::version_tag()` in `hashsigs-rs` moves from
-  `quip.shrincs-verifier.v1` to `quip.shrincs-verifier.v2`. The tag names a
-  key and envelope format family, not a release. A Solidity verifier pinned
-  to the old tag rejects a new signature at the envelope, rather than
-  failing inside the FORS check. That contract lives in `hashsigs-solidity`
-  and needs a matching update.
-
 ## 0.0.0-rc8
 
 rc8 changes nothing a caller of any published artifact can observe. Every
