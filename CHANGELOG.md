@@ -36,11 +36,13 @@ below for the full list of affected identifiers.
   old names are gone. The C API is unchanged, because it takes a numeric suite
   code and defines no constant for a suite name. The numeric codes (1 through 6) and the
   wire labels do not change, so signatures and stored artefacts are unaffected.
-- The `pqhybridsign` library marker types rename to match: `pqhybridsign::H1`
-  through `pqhybridsign::H6` become `pqhybridsign::EdMl44` through
-  `pqhybridsign::SrSh`. **This breaks every caller that names a suite as a Rust
-  type parameter**, such as `sign::<H1>(...)`, with no alias for the old
-  names.
+- The `pqhybridsign` library marker types rename to match. The four lattice
+  types at the crate root, `pqhybridsign::H1` through `H4`, become
+  `pqhybridsign::EdMl44` through `SrFn512`. The two SHRINCS types under
+  `pqhybridsign::shrincs`, `H5` and `H6`, become `EdSh` and `SrSh`.
+  **This breaks every caller that names a suite as a Rust type parameter**,
+  such as `composite::keypair_from_seed::<EdMl44>(...)`, with no alias for
+  the old names.
 - `pqhybridsign_abi::Suite::as_str()` and `impl FromStr for Suite` are
   removed. `Suite::name()` and `Suite::from_name()` replace them and return
   and accept the new suite strings. **This breaks every caller of the removed
