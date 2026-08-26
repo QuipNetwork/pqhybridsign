@@ -185,11 +185,11 @@ mod tests {
         // M' embeds the suite label (specification section 7.1), so two
         // messages differing only in that label must map to different
         // payload hashes.
-        let m_prime_ed_sh = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
-        let m_prime_sr_sh = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
-        let ctx_ed_sh = to_action_context(m_prime_ed_sh, ZERO, ZERO);
-        let ctx_sr_sh = to_action_context(m_prime_sr_sh, ZERO, ZERO);
-        assert_ne!(ctx_ed_sh.payload_hash, ctx_sr_sh.payload_hash);
+        let m_prime_a = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
+        let m_prime_b = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
+        let ctx_a = to_action_context(m_prime_a, ZERO, ZERO);
+        let ctx_b = to_action_context(m_prime_b, ZERO, ZERO);
+        assert_ne!(ctx_a.payload_hash, ctx_b.payload_hash);
     }
 
     #[test]
