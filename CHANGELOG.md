@@ -4,9 +4,12 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
-This release changes the stateless SHRINCS wire format. A stateless signature
-produced by an earlier version does not verify. The stateful (UXMSS) path,
-the stateful commitment and every public entry point do not change.
+This release changes the stateless SHRINCS wire format and renames every
+public suite identifier. A stateless signature produced by an earlier
+version does not verify. The stateful (UXMSS) path and the stateful
+commitment do not change, but Rust, Python, and JavaScript callers must
+update the suite names their code passes. See the suite rename entries
+below for the full list of affected identifiers.
 
 ### Changed
 
@@ -33,6 +36,17 @@ the stateful commitment and every public entry point do not change.
   old names are gone. The C API is unchanged, because it takes a numeric suite
   code and defines no constant for a suite name. The numeric codes (1 through 6) and the
   wire labels do not change, so signatures and stored artefacts are unaffected.
+- The `pqhybridsign` library marker types rename to match: `pqhybridsign::H1`
+  through `pqhybridsign::H6` become `pqhybridsign::EdMl44` through
+  `pqhybridsign::SrSh`. **This breaks every caller that names a suite as a Rust
+  type parameter**, such as `sign::<H1>(...)`, with no alias for the old
+  names.
+- `pqhybridsign_abi::Suite::as_str()` and `impl FromStr for Suite` are
+  removed. `Suite::name()` and `Suite::from_name()` replace them and return
+  and accept the new suite strings. **This breaks every caller of the removed
+  methods**, including a caller who already updated a Rust type parameter
+  from `H1` to `EdMl44` but still calls `.as_str()` or parses a suite string
+  with `.parse::<Suite>()`.
 - The two SHRINCS suites carry no profile suffix. One build selects one
   SHRINCS profile, so `ED-SH` means ed25519 plus SHRINCS at whatever profile
   the build chose.
