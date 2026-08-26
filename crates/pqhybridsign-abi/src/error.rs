@@ -167,7 +167,7 @@ impl fmt::Display for AbiError {
             Self::GrindAbort => "the randomizer grind bound was reached for this key and message",
             Self::JournalFailed => "the leaf journal could not durably commit",
             Self::SigningFailed => "signing failed",
-            Self::InvalidSuite => "the suite code or name is not one of EdMl44-SrSh",
+            Self::InvalidSuite => "the suite code or name is not one of ED-ML-44 through SR-SH",
             Self::WrongEntryPointForSuite => "this entry point does not accept this suite",
             Self::CountersDiverged => {
                 "the key counter and leaf journal diverged; this key can sign no more, rotate it"

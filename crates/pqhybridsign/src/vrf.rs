@@ -1114,64 +1114,64 @@ mod tests {
     const SR_HEADER: usize = header_len::<Sr25519>();
     const ED_HEADER: usize = header_len::<Ed25519>();
 
-    const H3_SK_LEN: usize = <SrMl44 as Suite>::SECRET_KEY_LEN;
-    const H3_PK_LEN: usize = <SrMl44 as Suite>::PUBLIC_KEY_LEN;
-    const H3_BINDING_LEN: usize = <<SrMl44 as Suite>::Pq as PqScheme>::SIGNATURE_LEN;
-    const H3_PROOF_LEN: usize = SR_HEADER + H3_BINDING_LEN;
-    const H3_CLASSICAL_SK_LEN: usize =
+    const SR_ML44_SK_LEN: usize = <SrMl44 as Suite>::SECRET_KEY_LEN;
+    const SR_ML44_PK_LEN: usize = <SrMl44 as Suite>::PUBLIC_KEY_LEN;
+    const SR_ML44_BINDING_LEN: usize = <<SrMl44 as Suite>::Pq as PqScheme>::SIGNATURE_LEN;
+    const SR_ML44_PROOF_LEN: usize = SR_HEADER + SR_ML44_BINDING_LEN;
+    const SR_ML44_CLASSICAL_SK_LEN: usize =
         <<SrMl44 as Suite>::Classical as ClassicalScheme>::SECRET_KEY_LEN;
-    const H3_CLASSICAL_PK_LEN: usize =
+    const SR_ML44_CLASSICAL_PK_LEN: usize =
         <<SrMl44 as Suite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
 
-    fn h3_keypair(seed: u8) -> ([u8; H3_SK_LEN], [u8; H3_PK_LEN]) {
-        let mut sk = [0u8; H3_SK_LEN];
-        let mut pk = [0u8; H3_PK_LEN];
+    fn sr_ml44_keypair(seed: u8) -> ([u8; SR_ML44_SK_LEN], [u8; SR_ML44_PK_LEN]) {
+        let mut sk = [0u8; SR_ML44_SK_LEN];
+        let mut pk = [0u8; SR_ML44_PK_LEN];
         composite::keypair_from_seed::<SrMl44>(&[seed; 32], &mut sk, &mut pk).expect("keygen");
         (sk, pk)
     }
 
-    fn h3_proof(sk: &[u8]) -> [u8; H3_PROOF_LEN] {
-        let mut proof = [0u8; H3_PROOF_LEN];
+    fn sr_ml44_proof(sk: &[u8]) -> [u8; SR_ML44_PROOF_LEN] {
+        let mut proof = [0u8; SR_ML44_PROOF_LEN];
         let written = sign_deterministic::<SrMl44>(sk, INPUT, &mut proof).expect("evaluate");
-        assert_eq!(written, H3_PROOF_LEN);
+        assert_eq!(written, SR_ML44_PROOF_LEN);
         proof
     }
 
-    fn h3_output(pk: &[u8], proof: &[u8]) -> [u8; 32] {
+    fn sr_ml44_output(pk: &[u8], proof: &[u8]) -> [u8; 32] {
         make_bytes::<SrMl44, [u8; 32]>(pk, INPUT, proof, OUT_CTX).expect("derive bytes")
     }
 
     #[test]
     fn a_proof_round_trips() {
-        let (sk, pk) = h3_keypair(1);
-        let proof = h3_proof(&sk);
+        let (sk, pk) = sr_ml44_keypair(1);
+        let proof = sr_ml44_proof(&sk);
         assert!(verify::<SrMl44>(&pk, INPUT, &proof));
     }
 
     #[test]
     fn proof_len_matches_what_evaluation_writes() {
-        assert_eq!(proof_len::<SrMl44>(), H3_PROOF_LEN);
+        assert_eq!(proof_len::<SrMl44>(), SR_ML44_PROOF_LEN);
     }
 
     #[test]
     fn a_proof_does_not_verify_over_another_input() {
-        let (sk, pk) = h3_keypair(2);
-        let proof = h3_proof(&sk);
+        let (sk, pk) = sr_ml44_keypair(2);
+        let proof = sr_ml44_proof(&sk);
         assert!(!verify::<SrMl44>(&pk, OTHER_INPUT, &proof));
     }
 
     #[test]
     fn a_proof_does_not_verify_under_another_key() {
-        let (sk, _) = h3_keypair(3);
-        let (_, other_pk) = h3_keypair(4);
-        let proof = h3_proof(&sk);
+        let (sk, _) = sr_ml44_keypair(3);
+        let (_, other_pk) = sr_ml44_keypair(4);
+        let proof = sr_ml44_proof(&sk);
         assert!(!verify::<SrMl44>(&other_pk, INPUT, &proof));
     }
 
     #[test]
     fn deterministic_evaluation_is_reproducible() {
-        let (sk, _) = h3_keypair(5);
-        assert_eq!(h3_proof(&sk), h3_proof(&sk));
+        let (sk, _) = sr_ml44_keypair(5);
+        assert_eq!(sr_ml44_proof(&sk), sr_ml44_proof(&sk));
     }
 
     /// The uniqueness property, from the prover's side. A prover who re-runs
@@ -1179,9 +1179,9 @@ mod tests {
     /// it, and the output must not move.
     #[test]
     fn randomness_cannot_move_the_output() {
-        let (sk, pk) = h3_keypair(6);
-        let mut first = [0u8; H3_PROOF_LEN];
-        let mut second = [0u8; H3_PROOF_LEN];
+        let (sk, pk) = sr_ml44_keypair(6);
+        let mut first = [0u8; SR_ML44_PROOF_LEN];
+        let mut second = [0u8; SR_ML44_PROOF_LEN];
         sign::<SrMl44>(&sk, INPUT, &mut OsRng, &mut first).expect("first");
         sign::<SrMl44>(&sk, INPUT, &mut OsRng, &mut second).expect("second");
 
@@ -1197,7 +1197,7 @@ mod tests {
             second[..PRE_OUTPUT_LEN],
             "the pre-output is a deterministic function of the key and the input"
         );
-        assert_eq!(h3_output(&pk, &first), h3_output(&pk, &second));
+        assert_eq!(sr_ml44_output(&pk, &first), sr_ml44_output(&pk, &second));
     }
 
     /// The uniqueness property, from the attacker's side, and the reason the
@@ -1211,14 +1211,14 @@ mod tests {
     /// build does, and this test is the grind.
     #[test]
     fn a_second_valid_binding_gives_the_same_output() {
-        let (sk, pk) = h3_keypair(7);
-        let honest = h3_proof(&sk);
+        let (sk, pk) = sr_ml44_keypair(7);
+        let honest = sr_ml44_proof(&sk);
         assert!(verify::<SrMl44>(&pk, INPUT, &honest));
 
         let message = binding_message(SrMl44::LABEL, INPUT, &honest[..PRE_OUTPUT_LEN]);
         let mut ground = honest;
         <<SrMl44 as Suite>::Pq as PqScheme>::sign(
-            &sk[H3_CLASSICAL_SK_LEN..],
+            &sk[SR_ML44_CLASSICAL_SK_LEN..],
             &message,
             &mut OsRng,
             &mut ground[SR_HEADER..],
@@ -1235,18 +1235,18 @@ mod tests {
             "the second binding is equally valid, which is the whole problem"
         );
         assert_eq!(
-            h3_output(&pk, &honest),
-            h3_output(&pk, &ground),
+            sr_ml44_output(&pk, &honest),
+            sr_ml44_output(&pk, &ground),
             "a chosen binding must not move a consensus-decisive byte"
         );
     }
 
     #[test]
     fn different_inputs_give_different_outputs() {
-        let (sk, pk) = h3_keypair(8);
-        let mut other = [0u8; H3_PROOF_LEN];
+        let (sk, pk) = sr_ml44_keypair(8);
+        let mut other = [0u8; SR_ML44_PROOF_LEN];
         sign_deterministic::<SrMl44>(&sk, OTHER_INPUT, &mut other).expect("evaluate");
-        let first = h3_output(&pk, &h3_proof(&sk));
+        let first = sr_ml44_output(&pk, &sr_ml44_proof(&sk));
         let second = make_bytes::<SrMl44, [u8; 32]>(&pk, OTHER_INPUT, &other, OUT_CTX)
             .expect("derive bytes");
         assert_ne!(first, second);
@@ -1254,9 +1254,9 @@ mod tests {
 
     #[test]
     fn different_output_contexts_give_different_outputs() {
-        let (sk, pk) = h3_keypair(9);
-        let proof = h3_proof(&sk);
-        let score = h3_output(&pk, &proof);
+        let (sk, pk) = sr_ml44_keypair(9);
+        let proof = sr_ml44_proof(&sk);
+        let score = sr_ml44_output(&pk, &proof);
         let randomness = make_bytes::<SrMl44, [u8; 32]>(&pk, INPUT, &proof, b"randomness")
             .expect("derive bytes");
         assert_ne!(score, randomness);
@@ -1264,32 +1264,36 @@ mod tests {
 
     #[test]
     fn a_tampered_pre_output_is_rejected() {
-        let (sk, pk) = h3_keypair(10);
-        let mut proof = h3_proof(&sk);
+        let (sk, pk) = sr_ml44_keypair(10);
+        let mut proof = sr_ml44_proof(&sk);
         proof[0] ^= 0x01;
         assert!(!verify::<SrMl44>(&pk, INPUT, &proof));
     }
 
     #[test]
     fn a_tampered_binding_is_rejected() {
-        let (sk, pk) = h3_keypair(11);
-        let mut proof = h3_proof(&sk);
+        let (sk, pk) = sr_ml44_keypair(11);
+        let mut proof = sr_ml44_proof(&sk);
         proof[SR_HEADER] ^= 0x01;
         assert!(!verify::<SrMl44>(&pk, INPUT, &proof));
     }
 
     #[test]
     fn a_proof_of_the_wrong_length_is_rejected() {
-        let (sk, pk) = h3_keypair(12);
-        let proof = h3_proof(&sk);
-        assert!(!verify::<SrMl44>(&pk, INPUT, &proof[..H3_PROOF_LEN - 1]));
+        let (sk, pk) = sr_ml44_keypair(12);
+        let proof = sr_ml44_proof(&sk);
+        assert!(!verify::<SrMl44>(
+            &pk,
+            INPUT,
+            &proof[..SR_ML44_PROOF_LEN - 1]
+        ));
         assert!(!verify::<SrMl44>(&pk, INPUT, &[]));
     }
 
     #[test]
     fn an_output_buffer_that_is_too_small_is_rejected() {
-        let (sk, _) = h3_keypair(13);
-        let mut proof = [0u8; H3_PROOF_LEN - 1];
+        let (sk, _) = sr_ml44_keypair(13);
+        let mut proof = [0u8; SR_ML44_PROOF_LEN - 1];
         assert!(sign_deterministic::<SrMl44>(&sk, INPUT, &mut proof).is_err());
     }
 
@@ -1298,16 +1302,16 @@ mod tests {
     /// separates them.
     #[test]
     fn the_suite_label_separates_pre_outputs() {
-        let sk = [7u8; H3_CLASSICAL_SK_LEN];
+        let sk = [7u8; SR_ML44_CLASSICAL_SK_LEN];
         let (mut left, mut right) = ([0u8; PRE_OUTPUT_LEN], [0u8; PRE_OUTPUT_LEN]);
         let (mut lp, mut rp) = (
             [0u8; <Sr25519 as ClassicalVrf>::PROOF_LEN],
             [0u8; <Sr25519 as ClassicalVrf>::PROOF_LEN],
         );
         Sr25519::vrf_evaluate_deterministic(&sk, SrMl44::LABEL, INPUT, &mut left, &mut lp)
-            .expect("h3");
+            .expect("sr_ml44");
         Sr25519::vrf_evaluate_deterministic(&sk, SrFn512::LABEL, INPUT, &mut right, &mut rp)
-            .expect("h4");
+            .expect("sr_fn512");
         assert_ne!(left, right);
     }
 
@@ -1408,12 +1412,12 @@ mod tests {
         // A verifier that holds only the classical half can still derive the
         // output, which is the structural statement that the post-quantum
         // binding contributes no entropy.
-        let (sk, pk) = h3_keypair(16);
-        let proof = h3_proof(&sk);
-        let from_composite = h3_output(&pk, &proof);
+        let (sk, pk) = sr_ml44_keypair(16);
+        let proof = sr_ml44_proof(&sk);
+        let from_composite = sr_ml44_output(&pk, &proof);
         let from_classical: [u8; 32] =
             <<SrMl44 as Suite>::Classical as ClassicalVrf>::vrf_make_bytes(
-                &pk[..H3_CLASSICAL_PK_LEN],
+                &pk[..SR_ML44_CLASSICAL_PK_LEN],
                 SrMl44::LABEL,
                 INPUT,
                 &proof[..PRE_OUTPUT_LEN],
@@ -1430,35 +1434,35 @@ mod tests {
     // is minted, and it must not move when the hedged path is re-run.
     // -----------------------------------------------------------------------
 
-    const H1_SK_LEN: usize = <EdMl44 as Suite>::SECRET_KEY_LEN;
-    const H1_PK_LEN: usize = <EdMl44 as Suite>::PUBLIC_KEY_LEN;
-    const H1_BINDING_LEN: usize = <<EdMl44 as Suite>::Pq as PqScheme>::SIGNATURE_LEN;
-    const H1_PROOF_LEN: usize = ED_HEADER + H1_BINDING_LEN;
-    const H1_CLASSICAL_SK_LEN: usize =
+    const ED_ML44_SK_LEN: usize = <EdMl44 as Suite>::SECRET_KEY_LEN;
+    const ED_ML44_PK_LEN: usize = <EdMl44 as Suite>::PUBLIC_KEY_LEN;
+    const ED_ML44_BINDING_LEN: usize = <<EdMl44 as Suite>::Pq as PqScheme>::SIGNATURE_LEN;
+    const ED_ML44_PROOF_LEN: usize = ED_HEADER + ED_ML44_BINDING_LEN;
+    const ED_ML44_CLASSICAL_SK_LEN: usize =
         <<EdMl44 as Suite>::Classical as ClassicalScheme>::SECRET_KEY_LEN;
 
-    fn h1_keypair(seed: u8) -> ([u8; H1_SK_LEN], [u8; H1_PK_LEN]) {
-        let mut sk = [0u8; H1_SK_LEN];
-        let mut pk = [0u8; H1_PK_LEN];
+    fn ed_ml44_keypair(seed: u8) -> ([u8; ED_ML44_SK_LEN], [u8; ED_ML44_PK_LEN]) {
+        let mut sk = [0u8; ED_ML44_SK_LEN];
+        let mut pk = [0u8; ED_ML44_PK_LEN];
         composite::keypair_from_seed::<EdMl44>(&[seed; 32], &mut sk, &mut pk).expect("keygen");
         (sk, pk)
     }
 
-    fn h1_proof(sk: &[u8]) -> [u8; H1_PROOF_LEN] {
-        let mut proof = [0u8; H1_PROOF_LEN];
+    fn ed_ml44_proof(sk: &[u8]) -> [u8; ED_ML44_PROOF_LEN] {
+        let mut proof = [0u8; ED_ML44_PROOF_LEN];
         let written = sign_deterministic::<EdMl44>(sk, INPUT, &mut proof).expect("evaluate");
-        assert_eq!(written, H1_PROOF_LEN);
+        assert_eq!(written, ED_ML44_PROOF_LEN);
         proof
     }
 
-    fn h1_output(pk: &[u8], proof: &[u8]) -> [u8; 32] {
+    fn ed_ml44_output(pk: &[u8], proof: &[u8]) -> [u8; 32] {
         make_bytes::<EdMl44, [u8; 32]>(pk, INPUT, proof, OUT_CTX).expect("derive bytes")
     }
 
     #[test]
     fn an_ed25519_proof_round_trips() {
-        let (sk, pk) = h1_keypair(20);
-        let proof = h1_proof(&sk);
+        let (sk, pk) = ed_ml44_keypair(20);
+        let proof = ed_ml44_proof(&sk);
         assert!(verify::<EdMl44>(&pk, INPUT, &proof));
         assert!(!verify::<EdMl44>(&pk, OTHER_INPUT, &proof));
     }
@@ -1470,8 +1474,8 @@ mod tests {
         // be writing past the end of an EdMl44 header.
         assert_eq!(SR_HEADER, PRE_OUTPUT_LEN + 64);
         assert_eq!(ED_HEADER, PRE_OUTPUT_LEN + 48);
-        assert_eq!(proof_len::<EdMl44>(), H1_PROOF_LEN);
-        assert_eq!(proof_len::<SrMl44>(), H3_PROOF_LEN);
+        assert_eq!(proof_len::<EdMl44>(), ED_ML44_PROOF_LEN);
+        assert_eq!(proof_len::<SrMl44>(), SR_ML44_PROOF_LEN);
     }
 
     /// The uniqueness property from the prover's side, for EdMl44. The ed25519
@@ -1480,9 +1484,9 @@ mod tests {
     /// has to repeat, not merely the pre-output.
     #[test]
     fn randomness_cannot_move_the_output_on_ed25519() {
-        let (sk, pk) = h1_keypair(21);
-        let mut first = [0u8; H1_PROOF_LEN];
-        let mut second = [0u8; H1_PROOF_LEN];
+        let (sk, pk) = ed_ml44_keypair(21);
+        let mut first = [0u8; ED_ML44_PROOF_LEN];
+        let mut second = [0u8; ED_ML44_PROOF_LEN];
         sign::<EdMl44>(&sk, INPUT, &mut OsRng, &mut first).expect("first");
         sign::<EdMl44>(&sk, INPUT, &mut OsRng, &mut second).expect("second");
 
@@ -1492,7 +1496,7 @@ mod tests {
             first, second,
             "the ed25519 ECVRF reads no randomness, so two hedged runs coincide"
         );
-        assert_eq!(h1_output(&pk, &first), h1_output(&pk, &second));
+        assert_eq!(ed_ml44_output(&pk, &first), ed_ml44_output(&pk, &second));
     }
 
     /// The uniqueness property from the attacker's side, for EdMl44. The grind is
@@ -1501,14 +1505,14 @@ mod tests {
     /// it likes.
     #[test]
     fn a_second_valid_binding_gives_the_same_output_on_ed25519() {
-        let (sk, pk) = h1_keypair(22);
-        let honest = h1_proof(&sk);
+        let (sk, pk) = ed_ml44_keypair(22);
+        let honest = ed_ml44_proof(&sk);
         assert!(verify::<EdMl44>(&pk, INPUT, &honest));
 
         let message = binding_message(EdMl44::LABEL, INPUT, &honest[..PRE_OUTPUT_LEN]);
         let mut ground = honest;
         <<EdMl44 as Suite>::Pq as PqScheme>::sign(
-            &sk[H1_CLASSICAL_SK_LEN..],
+            &sk[ED_ML44_CLASSICAL_SK_LEN..],
             &message,
             &mut OsRng,
             &mut ground[ED_HEADER..],
@@ -1525,8 +1529,8 @@ mod tests {
             "the second binding is equally valid, which is the whole problem"
         );
         assert_eq!(
-            h1_output(&pk, &honest),
-            h1_output(&pk, &ground),
+            ed_ml44_output(&pk, &honest),
+            ed_ml44_output(&pk, &ground),
             "a chosen binding must not move a consensus-decisive byte"
         );
     }
@@ -1537,16 +1541,16 @@ mod tests {
     /// `the_suite_label_separates_pre_outputs`.
     #[test]
     fn the_suite_label_separates_ed25519_pre_outputs() {
-        let sk = [7u8; H1_CLASSICAL_SK_LEN];
+        let sk = [7u8; ED_ML44_CLASSICAL_SK_LEN];
         let (mut left, mut right) = ([0u8; PRE_OUTPUT_LEN], [0u8; PRE_OUTPUT_LEN]);
         let (mut lp, mut rp) = (
             [0u8; <Ed25519 as ClassicalVrf>::PROOF_LEN],
             [0u8; <Ed25519 as ClassicalVrf>::PROOF_LEN],
         );
         Ed25519::vrf_evaluate_deterministic(&sk, EdMl44::LABEL, INPUT, &mut left, &mut lp)
-            .expect("h1");
+            .expect("ed_ml44");
         Ed25519::vrf_evaluate_deterministic(&sk, EdFn512::LABEL, INPUT, &mut right, &mut rp)
-            .expect("h2");
+            .expect("ed_fn512");
         assert_ne!(left, right);
     }
 
@@ -1623,8 +1627,8 @@ mod tests {
     /// classical half derives the identical bytes.
     #[test]
     fn the_ed25519_public_key_is_all_make_bytes_reads() {
-        let (sk, pk) = h1_keypair(25);
-        let proof = h1_proof(&sk);
+        let (sk, pk) = ed_ml44_keypair(25);
+        let proof = ed_ml44_proof(&sk);
         let from_classical: [u8; 32] =
             <<EdMl44 as Suite>::Classical as ClassicalVrf>::vrf_make_bytes(
                 &pk[..<<EdMl44 as Suite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN],
@@ -1634,7 +1638,7 @@ mod tests {
                 OUT_CTX,
             )
             .expect("derive bytes");
-        assert_eq!(h1_output(&pk, &proof), from_classical);
+        assert_eq!(ed_ml44_output(&pk, &proof), from_classical);
     }
 }
 
@@ -1723,7 +1727,7 @@ mod stateful_tests {
     /// dedicated key a real caller manages; the suite's actual identity key
     /// is never adopted this way outside the isolation tests below, which
     /// exist precisely to prove what happens if it were.
-    fn h6_key(seed: u8) -> (DedicatedVrfKey<SrSh>, Vec<u8>) {
+    fn sr_sh_key(seed: u8) -> (DedicatedVrfKey<SrSh>, Vec<u8>) {
         let (sk, pk) = keygen::<SrSh>(&[seed; 32], 8).expect("keygen");
         // The verify-form composite public key: classical public key followed
         // by the post-quantum verify key, the layout `verify_stateless` reads.
@@ -1743,7 +1747,7 @@ mod stateful_tests {
 
     #[test]
     fn a_stateless_proof_round_trips() {
-        let (sk, pk) = h6_key(1);
+        let (sk, pk) = sr_sh_key(1);
         let mut budget = MemoryBudget::default();
         let proof = evaluate(&sk, &mut budget);
         assert!(verify_stateless::<SrSh>(&pk, INPUT, &proof));
@@ -1754,7 +1758,7 @@ mod stateful_tests {
     /// stateful one: a per-evaluation leaf spend would exhaust the tree.
     #[test]
     fn evaluation_spends_budget_and_never_a_leaf() {
-        let (sk, _) = h6_key(2);
+        let (sk, _) = sr_sh_key(2);
         let before = sk.next_leaf();
         let mut budget = MemoryBudget::default();
 
@@ -1773,7 +1777,7 @@ mod stateful_tests {
 
     #[test]
     fn a_store_that_cannot_record_the_spend_refuses_to_evaluate() {
-        let (sk, _) = h6_key(3);
+        let (sk, _) = sr_sh_key(3);
         let mut budget = MemoryBudget {
             fail: true,
             ..MemoryBudget::default()
@@ -1791,7 +1795,7 @@ mod stateful_tests {
 
     #[test]
     fn an_exhausted_budget_refuses_to_evaluate() {
-        let (sk, _) = h6_key(4);
+        let (sk, _) = sr_sh_key(4);
         let material = <<SrSh as StatefulSuite>::Pq as PqStatefulScheme>::stateless_key_material(
             sk.pq_verify_key(),
         )
@@ -1816,7 +1820,7 @@ mod stateful_tests {
     /// signatures. So the same rule has to hold here.
     #[test]
     fn a_second_evaluation_gives_the_same_output() {
-        let (sk, pk) = h6_key(5);
+        let (sk, pk) = sr_sh_key(5);
         let mut budget = MemoryBudget::default();
         let first = evaluate(&sk, &mut budget);
         let second = evaluate(&sk, &mut budget);
@@ -1836,7 +1840,7 @@ mod stateful_tests {
         assert_eq!(a, b, "a re-evaluated binding must not move the output");
     }
 
-    fn h5_key(seed: u8) -> (DedicatedVrfKey<EdSh>, Vec<u8>) {
+    fn ed_sh_key(seed: u8) -> (DedicatedVrfKey<EdSh>, Vec<u8>) {
         let (sk, pk) = keygen::<EdSh>(&[seed; 32], 8).expect("keygen");
         let mut verify_pk = Vec::with_capacity(<EdSh as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN);
         verify_pk.extend_from_slice(pk.classical());
@@ -1844,7 +1848,7 @@ mod stateful_tests {
         (DedicatedVrfKey::adopt_unchecked(sk), verify_pk)
     }
 
-    fn evaluate_h5(sk: &DedicatedVrfKey<EdSh>, budget: &mut MemoryBudget) -> Vec<u8> {
+    fn evaluate_ed_sh(sk: &DedicatedVrfKey<EdSh>, budget: &mut MemoryBudget) -> Vec<u8> {
         let mut proof = vec![0u8; proof_len_stateless::<EdSh>()];
         let written =
             sign_stateless::<EdSh>(sk, budget, INPUT, &mut OsRng, &mut proof).expect("evaluate");
@@ -1854,9 +1858,9 @@ mod stateful_tests {
 
     #[test]
     fn an_ed25519_stateless_proof_round_trips() {
-        let (sk, pk) = h5_key(6);
+        let (sk, pk) = ed_sh_key(6);
         let mut budget = MemoryBudget::default();
-        let proof = evaluate_h5(&sk, &mut budget);
+        let proof = evaluate_ed_sh(&sk, &mut budget);
         assert_eq!(
             proof.len(),
             header_len::<Ed25519>()
@@ -1872,10 +1876,10 @@ mod stateful_tests {
     /// re-evaluation must land on the same output.
     #[test]
     fn a_second_ed25519_evaluation_gives_the_same_output() {
-        let (sk, pk) = h5_key(7);
+        let (sk, pk) = ed_sh_key(7);
         let mut budget = MemoryBudget::default();
-        let first = evaluate_h5(&sk, &mut budget);
-        let second = evaluate_h5(&sk, &mut budget);
+        let first = evaluate_ed_sh(&sk, &mut budget);
+        let second = evaluate_ed_sh(&sk, &mut budget);
 
         assert!(verify_stateless::<EdSh>(&pk, INPUT, &first));
         assert!(verify_stateless::<EdSh>(&pk, INPUT, &second));
@@ -1903,7 +1907,7 @@ mod stateful_tests {
     /// same master seed, even though both start from identical bytes.
     #[test]
     fn a_dedicated_stateless_key_shares_no_material_with_the_identity_key() {
-        let (identity_sk, _) = h6_key(8);
+        let (identity_sk, _) = sr_sh_key(8);
         let (dedicated_sk, dedicated_pk) =
             derive_stateless_key::<SrSh>(&[8u8; 32]).expect("derive dedicated key");
 
@@ -1945,13 +1949,13 @@ mod stateful_tests {
     #[test]
     fn evaluating_the_vrf_through_a_dedicated_key_leaves_the_identity_keys_budget_untouched() {
         // `identity_sk` stands in for the suite's real rotation/recovery
-        // identity key, adopted through the escape hatch (inside `h6_key`)
+        // identity key, adopted through the escape hatch (inside `sr_sh_key`)
         // for the sole purpose of computing its budget key below. This test
         // is asserting the isolation property directly -- that evaluating
         // through `dedicated_sk` never touches this key's reserve -- which
         // is exactly the case `adopt_unchecked` exists for: proving what the
         // type system otherwise prevents from happening by construction.
-        let (identity_sk, _) = h6_key(9);
+        let (identity_sk, _) = sr_sh_key(9);
         let (dedicated_sk, dedicated_pk_bytes) =
             derive_stateless_key::<SrSh>(&[9u8; 32]).expect("derive dedicated key");
         let mut dedicated_pk = Vec::with_capacity(<SrSh as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN);

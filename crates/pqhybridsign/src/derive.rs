@@ -391,23 +391,23 @@ mod tests {
     /// EdSh's registry label, exactly as `hybrid_stateful_suite!` declares it
     /// for the `shrincs-256s` classical/ed25519 suite: 30 ASCII bytes plus the
     /// trailing null the registry convention requires.
-    const H5_LABEL: &[u8] = b"hybrid-ed25519-shrincs-256s-v1\0";
-    /// SrSh's registry label, the sr25519 counterpart of [`H5_LABEL`].
-    const H6_LABEL: &[u8] = b"hybrid-sr25519-shrincs-256s-v1\0";
+    const ED_SH_LABEL: &[u8] = b"hybrid-ed25519-shrincs-256s-v1\0";
+    /// SrSh's registry label, the sr25519 counterpart of [`ED_SH_LABEL`].
+    const SR_SH_LABEL: &[u8] = b"hybrid-sr25519-shrincs-256s-v1\0";
 
     #[test]
     fn stateless_vrf_seed_derivation_is_deterministic() {
         assert_eq!(
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive")
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive")
         );
     }
 
     #[test]
     fn different_master_seeds_give_different_stateless_vrf_seeds() {
         assert_ne!(
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
-            derive_stateless_vrf_seed(&[1u8; 32], H5_LABEL).expect("derive")
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[1u8; 32], ED_SH_LABEL).expect("derive")
         );
     }
 
@@ -417,8 +417,8 @@ mod tests {
     #[test]
     fn different_suite_labels_give_different_stateless_vrf_seeds() {
         assert_ne!(
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
-            derive_stateless_vrf_seed(&[9u8; 32], H6_LABEL).expect("derive")
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[9u8; 32], SR_SH_LABEL).expect("derive")
         );
     }
 
@@ -429,8 +429,8 @@ mod tests {
     #[test]
     fn a_stateless_vrf_seed_cannot_collide_with_a_component_seed_or_a_junction_child() {
         let parent = [9u8; 32];
-        let vrf_seed = derive_stateless_vrf_seed(&parent, H5_LABEL).expect("derive");
-        let (classical, pq) = seeds(&parent, H5_LABEL);
+        let vrf_seed = derive_stateless_vrf_seed(&parent, ED_SH_LABEL).expect("derive");
+        let (classical, pq) = seeds(&parent, ED_SH_LABEL);
         let junction_child = derive_hard_junction(&parent, &[7u8; 32]).expect("derive");
 
         assert_ne!(vrf_seed, classical);
@@ -447,11 +447,11 @@ mod tests {
     #[test]
     fn the_stateless_vrf_seed_layout_is_pinned() {
         assert_eq!(
-            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive")),
+            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive")),
             "f2b6ec75aef05751bf39adaa9edd24f4916b52ff068533ed4f767486bdade6a8"
         );
         assert_eq!(
-            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], H6_LABEL).expect("derive")),
+            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], SR_SH_LABEL).expect("derive")),
             "45639b3bed9d951c52afcb2df79dc1f7ad0ea571e304baa1da51d17b4f7abdd7"
         );
         let mut sequential = [0u8; 32];
@@ -459,7 +459,7 @@ mod tests {
             *b = i as u8;
         }
         assert_eq!(
-            hex::encode(derive_stateless_vrf_seed(&sequential, H5_LABEL).expect("derive")),
+            hex::encode(derive_stateless_vrf_seed(&sequential, ED_SH_LABEL).expect("derive")),
             "29e1268fd5928311c416ab6039a7d87df30c1fab2d8251e5d8c05acabd48f9f2"
         );
     }

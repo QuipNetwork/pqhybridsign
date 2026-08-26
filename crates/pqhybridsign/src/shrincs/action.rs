@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn same_m_prime_maps_deterministically() {
-        let m_prime = b"suite-h5-hybrid-message";
+        let m_prime = b"suite-ed_sh-hybrid-message";
         let a = to_action_context(m_prime, NONZERO_NONCE, NONZERO_KEY_VERSION);
         let b = to_action_context(m_prime, NONZERO_NONCE, NONZERO_KEY_VERSION);
         assert_eq!(a, b);
@@ -185,11 +185,11 @@ mod tests {
         // M' embeds the suite label (specification section 7.1), so two
         // messages differing only in that label must map to different
         // payload hashes.
-        let m_prime_h5 = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
-        let m_prime_h6 = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
-        let ctx_h5 = to_action_context(m_prime_h5, ZERO, ZERO);
-        let ctx_h6 = to_action_context(m_prime_h6, ZERO, ZERO);
-        assert_ne!(ctx_h5.payload_hash, ctx_h6.payload_hash);
+        let m_prime_ed_sh = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
+        let m_prime_sr_sh = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
+        let ctx_ed_sh = to_action_context(m_prime_ed_sh, ZERO, ZERO);
+        let ctx_sr_sh = to_action_context(m_prime_sr_sh, ZERO, ZERO);
+        assert_ne!(ctx_ed_sh.payload_hash, ctx_sr_sh.payload_hash);
     }
 
     #[test]

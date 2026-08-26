@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     /// Every `PySuite` variant maps to the `pqhybridsign_abi::Suite`
-    /// variant with the same name, so the two enums cannot drift apart.
+    /// variant for the same suite, so the two enums cannot drift apart.
     ///
     /// `test = false` on this crate's lib target means `cargo test`
     /// does not run this function. The pytest

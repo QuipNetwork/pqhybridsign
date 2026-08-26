@@ -67,7 +67,7 @@ use zeroize::Zeroize;
 ///   reject genuinely malformed input identically. It is "a well-formed,
 ///   attacker-supplied input is accepted by one honest verifier and
 ///   rejected by another," which is the shape of a chain split.
-///   `tests/ed25519_strict.rs`'s `a_low_order_ed25519_half_splits_h1_verification`
+///   `tests/ed25519_strict.rs`'s `a_low_order_ed25519_half_splits_ed_ml44_verification`
 ///   shows this survives into the EdMl44 composite signature, not only the bare
 ///   ed25519 component: an EdMl44 signature with this classical forgery spliced
 ///   in and an honest ML-DSA-44 half still verifies under this crate,
@@ -235,7 +235,7 @@ fn raw_sign(sk: &[u8], msg: &[u8], sig_out: &mut [u8]) -> Result<()> {
 /// two different outputs on one input -- and this crate's whole reason to have
 /// a VRF is that exactly one output exists per key and input. The same
 /// low-order structure is what
-/// `tests/ed25519_strict.rs::a_low_order_ed25519_half_splits_h1_verification`
+/// `tests/ed25519_strict.rs::a_low_order_ed25519_half_splits_ed_ml44_verification`
 /// exercises against the signature path, where ZIP-215 acceptance leaves it
 /// open; here it is closed.
 ///
