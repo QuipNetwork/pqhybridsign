@@ -22,8 +22,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const pqhs = require(join(here, "..", "dist", "index.node.cjs"));
 
-const STATELESS_SUITES = ["H1", "H2", "H3", "H4"];
-const STATEFUL_SUITES = ["H5", "H6"];
+const STATELESS_SUITES = ["ED-ML-44", "ED-FN-512", "SR-ML-44", "SR-FN-512"];
+const STATEFUL_SUITES = ["ED-SH", "SR-SH"];
 const MSG = new TextEncoder().encode("the message the npm roundtrip test signs");
 const MSG2 = new TextEncoder().encode("a second npm roundtrip message");
 const CTX = new TextEncoder().encode("npm-roundtrip-test");
@@ -54,6 +54,12 @@ class MemoryLeafJournal {
   }
 }
 
+test("suite names are the algorithm pairs, and the old names are gone", async () => {
+  const { publicKey } = await pqhs.keygenFromSeed("ED-ML-44", new Uint8Array(32));
+  assert.ok(publicKey.length > 0);
+  await assert.rejects(() => pqhs.keygenFromSeed("H1", new Uint8Array(32)));
+});
+
 for (const [i, suite] of STATELESS_SUITES.entries()) {
   test(`${suite}: keygenFromSeed -> sign -> verify resolves true`, async () => {
     const { publicKey, secretKey } = await pqhs.keygenFromSeed(suite, seed(i + 1));
@@ -79,7 +85,7 @@ for (const [i, suite] of STATELESS_SUITES.entries()) {
 for (const suite of STATEFUL_SUITES) {
   test(`${suite}: the stateless entry points reject and name the stateful ones`, async () => {
     // keygenFromSeed/sign/signDeterministic are the stateless path; each must
-    // reject H5/H6 rather than silently spend a one-time leaf. sign() rejects
+    // reject ED-SH/SR-SH rather than silently spend a one-time leaf. sign() rejects
     // before it inspects the placeholder key's length.
     for (const call of [
       () => pqhs.keygenFromSeed(suite, seed(1)),
@@ -122,8 +128,8 @@ for (const suite of STATEFUL_SUITES) {
   });
 }
 
-test('storedPublicKeyLen("H5") resolves to a positive length', async () => {
-  const len = await pqhs.storedPublicKeyLen("H5");
+test('storedPublicKeyLen("ED-SH") resolves to a positive length', async () => {
+  const len = await pqhs.storedPublicKeyLen("ED-SH");
   assert.ok(len > 0);
 });
 
@@ -134,7 +140,7 @@ test("profileName resolves to a non-empty string", async () => {
 });
 
 test("a stateful key handle signs twice and both signatures verify", async () => {
-  const suite = "H5";
+  const suite = "ED-SH";
   const { publicKey, secretKey } = await pqhs.keygenStatefulFromSeed(suite, seed(0x21), 4);
 
   const key = await pqhs.openStatefulKey(suite, secretKey);
@@ -160,12 +166,12 @@ test("a stateful key handle signs twice and both signatures verify", async () =>
 });
 
 test("a stateful key handle rejects a stateless suite", async () => {
-  await assert.rejects(() => pqhs.openStatefulKey("H1", new Uint8Array(32)));
+  await assert.rejects(() => pqhs.openStatefulKey("ED-ML-44", new Uint8Array(32)));
 });
 
 // A synchronous in-memory StatelessBudgetStore. Not durable -- a real
 // integrator persists record() -- but it exercises the few-time budget
-// path the H5/H6 VRF spends on every evaluation.
+// path the ED-SH/SR-SH VRF spends on every evaluation.
 class MemoryStatelessBudget {
   #counts = new Map();
   static #hex(bytes) {
@@ -275,7 +281,7 @@ for (const [i, suite] of STATELESS_SUITES.entries()) {
 }
 
 test("vrfMakeBytes is stable across two proofs of one input", async () => {
-  const suite = "H3";
+  const suite = "SR-ML-44";
   const { publicKey, secretKey } = await pqhs.keygenFromSeed(suite, seed(3));
   const proofA = await pqhs.vrfProve(suite, secretKey, VRF_INPUT);
   const proofB = await pqhs.vrfProve(suite, secretKey, VRF_INPUT);
@@ -286,7 +292,7 @@ test("vrfMakeBytes is stable across two proofs of one input", async () => {
 });
 
 test("a different VRF output context gives different bytes", async () => {
-  const suite = "H3";
+  const suite = "SR-ML-44";
   const { publicKey, secretKey } = await pqhs.keygenFromSeed(suite, seed(3));
   const proof = await pqhs.vrfProve(suite, secretKey, VRF_INPUT);
   const score = await pqhs.vrfMakeBytes(
@@ -306,8 +312,8 @@ test("a different VRF output context gives different bytes", async () => {
   assert.notDeepEqual(score, randomness);
 });
 
-test("vrfProve refuses H5 and H6 and names deriveVrfStatelessKey", async () => {
-  // The placeholder key is 32 bytes, not a valid H5/H6 secret key -- but the
+test("vrfProve refuses ED-SH and SR-SH and names deriveVrfStatelessKey", async () => {
+  // The placeholder key is 32 bytes, not a valid ED-SH/SR-SH secret key -- but the
   // suite gate runs before the key length is ever inspected, exactly as the
   // sibling sign() test above documents, so the placeholder is safe here.
   for (const suite of STATEFUL_SUITES) {
@@ -318,7 +324,7 @@ test("vrfProve refuses H5 and H6 and names deriveVrfStatelessKey", async () => {
   }
 });
 
-test("vrfProveDeterministic refuses H5 and H6 and names deriveVrfStatelessKey", async () => {
+test("vrfProveDeterministic refuses ED-SH and SR-SH and names deriveVrfStatelessKey", async () => {
   for (const suite of STATEFUL_SUITES) {
     await assert.rejects(
       () => pqhs.vrfProveDeterministic(suite, new Uint8Array(32), VRF_INPUT),
