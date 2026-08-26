@@ -94,12 +94,14 @@ use them.
 
 ### Selecting a suite in the code
 
-The Rust API names each lattice suite with a short type (`EdMl44` through
-`SrFn512`), and the C, Python, and WebAssembly bindings take the matching
-short name as a string (`ED-ML-44` through `SR-FN-512`). The two SHRINCS
-types are `EdSh` (ed25519) and `SrSh` (sr25519), with short names `ED-SH` and
-`SR-SH`. The profile is a compile-time build feature, not a runtime argument,
-so one binary carries one profile.
+The Rust API names each suite with a short type (`EdMl44` through `SrSh`).
+The C ABI takes the matching numeric code (1 through 6) in every `uint8_t
+suite` parameter. The Python binding takes the matching `Suite` member
+(`Suite.ED_ML_44` through `Suite.SR_SH`). The WebAssembly binding takes the
+matching short name as a string (`"ED-ML-44"` through `"SR-SH"`). The two
+SHRINCS types are `EdSh` (ed25519) and `SrSh` (sr25519). The profile is a
+compile-time build feature, not a runtime argument, so one binary carries one
+profile.
 
 The short name (`ED-ML-44`) names the pair for humans. The wire label
 (`hybrid-ed25519-mldsa44-v1`) is the signed domain-separation value and is
