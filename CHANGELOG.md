@@ -2,7 +2,7 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.0.0-rc9
 
 This release changes the stateless SHRINCS wire format and renames every
 public suite identifier. A stateless signature produced by an earlier

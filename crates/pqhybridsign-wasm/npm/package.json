@@ -1,6 +1,6 @@
 {
   "name": "@quip.network/pqhybridsign",
-  "version": "0.0.0-rc8",
+  "version": "0.0.0-rc9",
   "description": "Hybrid classical/post-quantum signing (ED-ML-44, ED-FN-512, SR-ML-44, SR-FN-512, ED-SH, SR-SH) compiled to WebAssembly, with a Promise-based API for Node.js and browsers",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://quip.network",
