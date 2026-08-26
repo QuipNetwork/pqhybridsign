@@ -40,7 +40,7 @@ use pqhybridsign::shrincs::{EdSh, SrSh};
 use pqhybridsign::stateful_composite::SecretKey;
 use pqhybridsign::suite::{DeltaSuite, StatefulSuite, Suite as CoreSuite};
 use pqhybridsign::vrf::{self, ClassicalVrf, DedicatedVrfKey};
-use pqhybridsign::{EdMl44, EdFn512, SrMl44, SrFn512};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 
 use crate::error::AbiError;
 use crate::seed::MASTER_SEED_LEN;
@@ -363,7 +363,9 @@ impl VrfStatelessKey {
             Suite::SrSh => Ok(Self {
                 inner: Inner::SrSh(derive_suite::<SrSh>(master, pk_out)?),
             }),
-            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+                Err(AbiError::WrongEntryPointForSuite)
+            }
         }
     }
 
@@ -386,12 +388,18 @@ impl VrfStatelessKey {
     pub fn adopt_unchecked(suite: Suite, sk: &[u8]) -> Result<Self, AbiError> {
         match suite {
             Suite::EdSh => Ok(Self {
-                inner: Inner::EdSh(DedicatedVrfKey::adopt_unchecked(import_checked::<EdSh>(sk)?)),
+                inner: Inner::EdSh(DedicatedVrfKey::adopt_unchecked(import_checked::<EdSh>(
+                    sk,
+                )?)),
             }),
             Suite::SrSh => Ok(Self {
-                inner: Inner::SrSh(DedicatedVrfKey::adopt_unchecked(import_checked::<SrSh>(sk)?)),
+                inner: Inner::SrSh(DedicatedVrfKey::adopt_unchecked(import_checked::<SrSh>(
+                    sk,
+                )?)),
             }),
-            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+                Err(AbiError::WrongEntryPointForSuite)
+            }
         }
     }
 

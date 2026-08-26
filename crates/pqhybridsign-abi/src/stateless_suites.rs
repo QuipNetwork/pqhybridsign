@@ -8,7 +8,7 @@
 //! ordinary stateless sign must never be able to consume one.
 
 use pqhybridsign::{composite, composite_delta, suite::Suite as CoreSuite};
-use pqhybridsign::{EdMl44, EdFn512, SrMl44, SrFn512};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 use rand_core::CryptoRngCore;
 
 use crate::error::AbiError;
@@ -33,8 +33,12 @@ pub fn keygen_from_seed(
 ) -> Result<(), AbiError> {
     let seed: &[u8; 32] = seed.try_into().map_err(|_| AbiError::BadLength)?;
     match suite {
-        Suite::EdMl44 => composite::keypair_from_seed::<EdMl44>(seed, sk_out, pk_out).map_err(Into::into),
-        Suite::SrMl44 => composite::keypair_from_seed::<SrMl44>(seed, sk_out, pk_out).map_err(Into::into),
+        Suite::EdMl44 => {
+            composite::keypair_from_seed::<EdMl44>(seed, sk_out, pk_out).map_err(Into::into)
+        }
+        Suite::SrMl44 => {
+            composite::keypair_from_seed::<SrMl44>(seed, sk_out, pk_out).map_err(Into::into)
+        }
         Suite::EdFn512 => {
             composite_delta::keypair_from_seed::<EdFn512>(seed, sk_out, pk_out).map_err(Into::into)
         }
@@ -71,8 +75,12 @@ pub fn sign(
             composite::sign::<SrMl44>(sk, msg, ctx, rng, sig_out)?;
             Ok(<SrMl44 as CoreSuite>::SIGNATURE_LEN)
         }
-        Suite::EdFn512 => composite_delta::sign::<EdFn512>(sk, msg, ctx, rng, sig_out).map_err(Into::into),
-        Suite::SrFn512 => composite_delta::sign::<SrFn512>(sk, msg, ctx, rng, sig_out).map_err(Into::into),
+        Suite::EdFn512 => {
+            composite_delta::sign::<EdFn512>(sk, msg, ctx, rng, sig_out).map_err(Into::into)
+        }
+        Suite::SrFn512 => {
+            composite_delta::sign::<SrFn512>(sk, msg, ctx, rng, sig_out).map_err(Into::into)
+        }
         Suite::EdSh | Suite::SrSh => Err(AbiError::WrongEntryPointForSuite),
     }
 }
@@ -103,10 +111,14 @@ pub fn sign_deterministic(
             composite::sign_deterministic::<SrMl44>(sk, msg, ctx, nonce, sig_out)?;
             Ok(<SrMl44 as CoreSuite>::SIGNATURE_LEN)
         }
-        Suite::EdFn512 => composite_delta::sign_deterministic::<EdFn512>(sk, msg, ctx, nonce, sig_out)
-            .map_err(Into::into),
-        Suite::SrFn512 => composite_delta::sign_deterministic::<SrFn512>(sk, msg, ctx, nonce, sig_out)
-            .map_err(Into::into),
+        Suite::EdFn512 => {
+            composite_delta::sign_deterministic::<EdFn512>(sk, msg, ctx, nonce, sig_out)
+                .map_err(Into::into)
+        }
+        Suite::SrFn512 => {
+            composite_delta::sign_deterministic::<SrFn512>(sk, msg, ctx, nonce, sig_out)
+                .map_err(Into::into)
+        }
         Suite::EdSh | Suite::SrSh => Err(AbiError::WrongEntryPointForSuite),
     }
 }

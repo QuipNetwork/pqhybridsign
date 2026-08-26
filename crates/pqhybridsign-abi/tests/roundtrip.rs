@@ -23,7 +23,7 @@ use pqhybridsign::{
     composite, composite_delta,
     suite::{DeltaSuite, Suite as CoreSuite},
 };
-use pqhybridsign::{EdMl44, EdFn512, SrMl44, SrFn512};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 use pqhybridsign_abi::{AbiError, KeyIdentity, LeafJournal, Suite};
 use pqhybridsign_test_support::MemoryBudget;
 use rand_core::OsRng;
@@ -90,12 +90,19 @@ fn ed_ml44_matches_the_generic_api() {
     assert_eq!(abi_pk, generic_pk);
 
     let mut abi_sig = vec![0u8; pqhybridsign_abi::signature_len(Suite::EdMl44)];
-    let n =
-        pqhybridsign_abi::sign_deterministic(Suite::EdMl44, &abi_sk, MSG, CTX, b"nonce", &mut abi_sig)
-            .unwrap();
+    let n = pqhybridsign_abi::sign_deterministic(
+        Suite::EdMl44,
+        &abi_sk,
+        MSG,
+        CTX,
+        b"nonce",
+        &mut abi_sig,
+    )
+    .unwrap();
 
     let mut generic_sig = vec![0u8; <EdMl44 as CoreSuite>::SIGNATURE_LEN];
-    composite::sign_deterministic::<EdMl44>(&generic_sk, MSG, CTX, b"nonce", &mut generic_sig).unwrap();
+    composite::sign_deterministic::<EdMl44>(&generic_sk, MSG, CTX, b"nonce", &mut generic_sig)
+        .unwrap();
 
     assert_eq!(&abi_sig[..n], &generic_sig[..]);
     assert!(pqhybridsign_abi::verify(
@@ -105,7 +112,12 @@ fn ed_ml44_matches_the_generic_api() {
         CTX,
         &abi_sig[..n]
     ));
-    assert!(composite::verify::<EdMl44>(&generic_pk, MSG, CTX, &generic_sig));
+    assert!(composite::verify::<EdMl44>(
+        &generic_pk,
+        MSG,
+        CTX,
+        &generic_sig
+    ));
 }
 
 /// EdFn512: the delta-length suite. Round-trips through the enum and matches the
@@ -123,7 +135,8 @@ fn ed_fn512_matches_the_generic_api() {
     assert_eq!(abi_pk, generic_pk);
 
     let mut abi_sig = vec![0u8; pqhybridsign_abi::signature_len(Suite::EdFn512)];
-    let n = pqhybridsign_abi::sign(Suite::EdFn512, &abi_sk, MSG, CTX, &mut OsRng, &mut abi_sig).unwrap();
+    let n = pqhybridsign_abi::sign(Suite::EdFn512, &abi_sk, MSG, CTX, &mut OsRng, &mut abi_sig)
+        .unwrap();
     assert!(n <= pqhybridsign_abi::signature_len(Suite::EdFn512));
     assert!(pqhybridsign_abi::verify(
         Suite::EdFn512,
@@ -362,7 +375,8 @@ fn sr_ml44_dispatch_matches_the_generic_api() {
     pqhybridsign_abi::sign_deterministic(Suite::SrMl44, &abi_sk, MSG, CTX, b"nonce", &mut abi_sig)
         .unwrap();
     let mut generic_sig = vec![0u8; <SrMl44 as CoreSuite>::SIGNATURE_LEN];
-    composite::sign_deterministic::<SrMl44>(&generic_sk, MSG, CTX, b"nonce", &mut generic_sig).unwrap();
+    composite::sign_deterministic::<SrMl44>(&generic_sk, MSG, CTX, b"nonce", &mut generic_sig)
+        .unwrap();
     assert_eq!(abi_sig, generic_sig);
 
     assert!(pqhybridsign_abi::verify(
@@ -372,7 +386,12 @@ fn sr_ml44_dispatch_matches_the_generic_api() {
         CTX,
         &abi_sig
     ));
-    assert!(composite::verify::<SrMl44>(&generic_pk, MSG, CTX, &generic_sig));
+    assert!(composite::verify::<SrMl44>(
+        &generic_pk,
+        MSG,
+        CTX,
+        &generic_sig
+    ));
 }
 
 /// SrFn512 dispatch matches the generic API byte for byte, over the
@@ -390,9 +409,15 @@ fn sr_fn512_dispatch_matches_the_generic_api() {
     assert_eq!(abi_pk, generic_pk);
 
     let mut abi_sig = vec![0u8; pqhybridsign_abi::signature_len(Suite::SrFn512)];
-    let abi_n =
-        pqhybridsign_abi::sign_deterministic(Suite::SrFn512, &abi_sk, MSG, CTX, b"nonce", &mut abi_sig)
-            .unwrap();
+    let abi_n = pqhybridsign_abi::sign_deterministic(
+        Suite::SrFn512,
+        &abi_sk,
+        MSG,
+        CTX,
+        b"nonce",
+        &mut abi_sig,
+    )
+    .unwrap();
     let mut generic_sig = vec![0u8; <SrFn512 as DeltaSuite>::MAX_SIGNATURE_LEN];
     let generic_n = composite_delta::sign_deterministic::<SrFn512>(
         &generic_sk,

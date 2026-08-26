@@ -6,7 +6,7 @@ use pqhybridsign::{
     component::PqStatefulScheme,
     suite::{DeltaSuite, StatefulSuite, Suite as CoreSuite},
 };
-use pqhybridsign::{EdMl44, EdFn512, SrMl44, SrFn512};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 
 use crate::suite::Suite;
 

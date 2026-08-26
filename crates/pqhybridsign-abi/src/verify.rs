@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use pqhybridsign::{composite, composite_delta};
-use pqhybridsign::{EdMl44, EdFn512, SrMl44, SrFn512};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 
 use crate::stateful_suites::verify_stateful_pk;
 use crate::suite::Suite;

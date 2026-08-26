@@ -133,8 +133,12 @@ mod tests {
     #[test]
     fn names_round_trip_and_reject_the_old_spelling() {
         for suite in [
-            Suite::EdMl44, Suite::EdFn512, Suite::SrMl44,
-            Suite::SrFn512, Suite::EdSh, Suite::SrSh,
+            Suite::EdMl44,
+            Suite::EdFn512,
+            Suite::SrMl44,
+            Suite::SrFn512,
+            Suite::EdSh,
+            Suite::SrSh,
         ] {
             assert_eq!(Suite::from_name(suite.name()), Ok(suite));
         }

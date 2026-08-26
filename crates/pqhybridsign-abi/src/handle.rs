@@ -73,7 +73,9 @@ impl StatefulKeyHandle {
             Suite::SrSh => Ok(Self {
                 inner: Inner::SrSh(import_checked::<SrSh>(sk)?),
             }),
-            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+                Err(AbiError::WrongEntryPointForSuite)
+            }
         }
     }
 

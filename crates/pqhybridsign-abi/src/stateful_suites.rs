@@ -52,7 +52,9 @@ pub fn keygen_stateful_from_seed(
     match suite {
         Suite::EdSh => keygen_stateful::<EdSh>(seed, max_stateful_signatures, sk_out, pk_out),
         Suite::SrSh => keygen_stateful::<SrSh>(seed, max_stateful_signatures, sk_out, pk_out),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -96,7 +98,9 @@ pub fn key_identity(suite: Suite, public_key: &[u8]) -> Result<KeyIdentity, AbiE
     match suite {
         Suite::EdSh => key_identity_of::<EdSh>(public_key),
         Suite::SrSh => key_identity_of::<SrSh>(public_key),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -120,7 +124,9 @@ pub fn key_identity_from_secret_key(suite: Suite, sk: &[u8]) -> Result<KeyIdenti
     match suite {
         Suite::EdSh => secret_key_identity_of::<EdSh>(sk),
         Suite::SrSh => secret_key_identity_of::<SrSh>(sk),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -238,7 +244,9 @@ pub fn sign_stateful(
     match suite {
         Suite::EdSh => sign_stateful_suite::<EdSh>(sk, journal, msg, ctx, sk_out, sig_out),
         Suite::SrSh => sign_stateful_suite::<SrSh>(sk, journal, msg, ctx, sk_out, sig_out),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -327,7 +335,9 @@ pub fn sign_stateless(
     match suite {
         Suite::EdSh => sign_stateless_suite::<EdSh>(sk, budget, msg, ctx, sig_out),
         Suite::SrSh => sign_stateless_suite::<SrSh>(sk, budget, msg, ctx, sig_out),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -371,7 +381,9 @@ pub fn stored_public_key(
     match suite {
         Suite::EdSh => stored_form_of::<EdSh>(verify_public_key, out),
         Suite::SrSh => stored_form_of::<SrSh>(verify_public_key, out),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -450,7 +462,9 @@ pub fn verify_with_stored_public_key_stateful(
             sig,
             <SrSh as StatefulHybridSignatureScheme>::verify_stateful,
         )),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -492,7 +506,9 @@ pub fn verify_with_stored_public_key_stateless(
             sig,
             <SrSh as StatefulHybridSignatureScheme>::verify_stateless,
         )),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -545,7 +561,9 @@ pub fn verify_stateful(
     match suite {
         Suite::EdSh => Ok(verify_stateful_pk::<EdSh>(pk, msg, ctx, sig)),
         Suite::SrSh => Ok(verify_stateful_pk::<SrSh>(pk, msg, ctx, sig)),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -570,7 +588,9 @@ pub fn verify_stateless(
     match suite {
         Suite::EdSh => Ok(verify_stateless_pk::<EdSh>(pk, msg, ctx, sig)),
         Suite::SrSh => Ok(verify_stateless_pk::<SrSh>(pk, msg, ctx, sig)),
-        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -721,7 +741,8 @@ mod tests {
         // stateless-signed, and plain `crate::verify` accepts only the
         // stateful path for EdSh/SrSh, so this goes through `verify_stateless`.
         assert!(
-            verify_stateless(Suite::EdSh, &attacker_pk, MSG, b"", forged).expect("ed_sh is stateful")
+            verify_stateless(Suite::EdSh, &attacker_pk, MSG, b"", forged)
+                .expect("ed_sh is stateful")
         );
 
         // Against the victim's installed commitment it is refused.
