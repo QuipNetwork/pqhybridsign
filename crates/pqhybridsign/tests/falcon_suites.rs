@@ -32,7 +32,7 @@ fn keys<S: DeltaSuite>(seed: u8) -> (Vec<u8>, Vec<u8>) {
 }
 
 #[test]
-fn h2_round_trips() {
+fn ed_fn512_round_trips() {
     let (sk, pk) = keys::<EdFn512>(1);
     let mut sig = vec![0u8; EdFn512::MAX_SIGNATURE_LEN];
     let written =
@@ -42,7 +42,7 @@ fn h2_round_trips() {
 }
 
 #[test]
-fn h4_round_trips() {
+fn sr_fn512_round_trips() {
     let (sk, pk) = keys::<SrFn512>(2);
     let mut sig = vec![0u8; SrFn512::MAX_SIGNATURE_LEN];
     let written =
@@ -52,7 +52,7 @@ fn h4_round_trips() {
 }
 
 #[test]
-fn h2_hedged_signing_verifies() {
+fn ed_fn512_hedged_signing_verifies() {
     let (sk, pk) = keys::<EdFn512>(3);
     let mut sig = vec![0u8; EdFn512::MAX_SIGNATURE_LEN];
     let written = sign::<EdFn512>(&sk, b"hello", b"", &mut OsRng, &mut sig).expect("sign");
@@ -61,7 +61,7 @@ fn h2_hedged_signing_verifies() {
 }
 
 #[test]
-fn h2_wire_layout_matches_the_specification() {
+fn ed_fn512_wire_layout_matches_the_specification() {
     let (sk, _pk) = keys::<EdFn512>(4);
     let mut sig = vec![0u8; EdFn512::MAX_SIGNATURE_LEN];
     let written = sign_deterministic::<EdFn512>(&sk, b"m", b"", b"n", &mut sig).expect("sign");
@@ -103,13 +103,13 @@ fn a_signature_does_not_verify_under_a_different_suite() {
     // (731 bytes) that does not even match EdMl44::SIGNATURE_LEN (2484 bytes),
     // which `composite::verify`'s length check rejects outright.
     use pqhybridsign::{composite, suite::Suite};
-    let (_h1_sk, h1_pk) = {
+    let (_ed_ml44_sk, ed_ml44_pk) = {
         let mut sk = vec![0u8; EdMl44::SECRET_KEY_LEN];
         let mut pk = vec![0u8; EdMl44::PUBLIC_KEY_LEN];
         composite::keypair_from_seed::<EdMl44>(&[5u8; 32], &mut sk, &mut pk).expect("keygen");
         (sk, pk)
     };
-    assert!(!composite::verify::<EdMl44>(&h1_pk, b"m", b"", &sig2));
+    assert!(!composite::verify::<EdMl44>(&ed_ml44_pk, b"m", b"", &sig2));
 }
 
 #[test]

@@ -85,7 +85,7 @@ impl LeafJournal for MemoryJournal {
 // 1. keygen -> sign_stateful -> verify, for both EdSh and SrSh.
 
 #[test]
-fn h5_stateful_round_trip_verifies() {
+fn ed_sh_stateful_round_trip_verifies() {
     let (mut sk, pk) = keygen::<EdSh>(&[1u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
 
@@ -95,7 +95,7 @@ fn h5_stateful_round_trip_verifies() {
 }
 
 #[test]
-fn h6_stateful_round_trip_verifies() {
+fn sr_sh_stateful_round_trip_verifies() {
     let (mut sk, pk) = keygen::<SrSh>(&[1u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
 
@@ -133,14 +133,14 @@ fn successive_stateful_signatures_advance_the_leaf_and_both_verify() {
 // 4. A signature made under EdSh does NOT verify under SrSh.
 
 #[test]
-fn h5_signature_does_not_verify_under_h6() {
-    let (mut sk_h5, _pk_h5) = keygen::<EdSh>(&[4u8; 32], 4).expect("h5 keygen");
-    let (_sk_h6, pk_h6) = keygen::<SrSh>(&[4u8; 32], 4).expect("h6 keygen");
-    let mut journal = MemoryJournal::adopted(sk_h5.key_identity());
+fn ed_sh_signature_does_not_verify_under_sr_sh() {
+    let (mut sk_ed_sh, _pk_ed_sh) = keygen::<EdSh>(&[4u8; 32], 4).expect("ed_sh keygen");
+    let (_sk_sr_sh, pk_sr_sh) = keygen::<SrSh>(&[4u8; 32], 4).expect("sr_sh keygen");
+    let mut journal = MemoryJournal::adopted(sk_ed_sh.key_identity());
 
-    let sig = EdSh::sign_stateful(&mut sk_h5, &mut journal, b"cross-suite", b"").expect("sign");
+    let sig = EdSh::sign_stateful(&mut sk_ed_sh, &mut journal, b"cross-suite", b"").expect("sign");
 
-    assert!(!SrSh::verify_stateful(&pk_h6, b"cross-suite", b"", &sig));
+    assert!(!SrSh::verify_stateful(&pk_sr_sh, b"cross-suite", b"", &sig));
 }
 
 // 5. Tampering with the classical half alone fails verification; tampering
@@ -210,11 +210,11 @@ fn stateless_signature_verifies_and_resigning_is_byte_identical() {
 }
 
 #[test]
-fn h6_stateless_signature_verifies() {
+fn sr_sh_stateless_signature_verifies() {
     let (sk, pk) = keygen::<SrSh>(&[8u8; 32], 4).expect("keygen");
 
-    let sig = SrSh::sign_stateless(&sk, &mut MemoryBudget::default(), b"h6 stateless", b"")
+    let sig = SrSh::sign_stateless(&sk, &mut MemoryBudget::default(), b"sr_sh stateless", b"")
         .expect("sign");
 
-    assert!(SrSh::verify_stateless(&pk, b"h6 stateless", b"", &sig));
+    assert!(SrSh::verify_stateless(&pk, b"sr_sh stateless", b"", &sig));
 }

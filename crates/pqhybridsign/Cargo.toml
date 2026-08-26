@@ -1,6 +1,6 @@
 [package]
 name = "pqhybridsign"
-description = "Hybrid classical/post-quantum signatures: H1-H4 lattice (ML-DSA-44, FN-DSA-512) and H5/H6 stateful hash-based (SHRINCS)"
+description = "Hybrid classical/post-quantum signatures: ED-ML-44 through SR-FN-512 lattice (ML-DSA-44, FN-DSA-512) and ED-SH/SR-SH stateful hash-based (SHRINCS)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,7 +20,7 @@ ed25519-zebra.workspace = true
 schnorrkel.workspace = true
 fips204.workspace = true
 fn-dsa.workspace = true
-# Stateful hash-based backend for H5/H6. Optional: a SHRINCS profile feature
+# Stateful hash-based backend for ED-SH/SR-SH. Optional: a SHRINCS profile feature
 # is the only thing that turns it on, so a lattice-only build never compiles
 # or downloads it or `sha3`.
 hashsigs-rs = { workspace = true, optional = true }
@@ -92,7 +92,7 @@ alloc = []
 # itself, because only this feature wipes a heap-allocated buffer (the
 # PBKDF2 salt); the plain `alloc` feature never touches `zeroize` at all.
 mnemonic = ["alloc", "dep:bip39", "dep:pbkdf2", "dep:hmac", "zeroize/alloc"]
-# H5/H6 stateful hash-based suites, on by default. This is the friendly
+# ED-SH/SR-SH stateful hash-based suites, on by default. This is the friendly
 # on-switch: it selects the 256s profile. To use another profile, disable
 # default features and name it (each profile turns the suites on by itself).
 # hashsigs-rs allows exactly one profile per build.

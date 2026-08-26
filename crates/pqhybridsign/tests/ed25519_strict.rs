@@ -261,7 +261,7 @@ fn zip215_negative_vectors_diverge_from_strict_rfc8032() {
 /// it depends on `ed25519-zebra` acceptance behavior this crate does not
 /// own.
 #[test]
-fn a_low_order_ed25519_half_splits_h1_verification() {
+fn a_low_order_ed25519_half_splits_ed_ml44_verification() {
     let master = [0x7bu8; 32];
     let mut sk = vec![0u8; EdMl44::SECRET_KEY_LEN];
     let mut pk = vec![0u8; EdMl44::PUBLIC_KEY_LEN];

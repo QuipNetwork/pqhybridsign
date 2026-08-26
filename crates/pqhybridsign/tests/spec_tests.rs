@@ -182,8 +182,8 @@ macro_rules! suite_tests {
     };
 }
 
-suite_tests!(h1, EdMl44);
-suite_tests!(h3, SrMl44);
+suite_tests!(ed_ml44, EdMl44);
+suite_tests!(sr_ml44, SrMl44);
 
 #[test]
 fn t6_cross_suite_signatures_never_verify() {
@@ -218,7 +218,7 @@ fn one_master_seed_gives_two_independent_suites() {
 //   - ML-DSA-44 draws its FIPS 204 `rnd` from the caller's RNG in the
 //     hedged path, so the post-quantum half must not repeat.
 #[test]
-fn t2_h1_hedged_signing_varies_in_the_post_quantum_half_only() {
+fn t2_ed_ml44_hedged_signing_varies_in_the_post_quantum_half_only() {
     let (sk, pk) = keys!(EdMl44, 2);
     let mut a = vec![0u8; <EdMl44 as Suite>::SIGNATURE_LEN];
     let mut b = vec![0u8; <EdMl44 as Suite>::SIGNATURE_LEN];

@@ -138,15 +138,15 @@ where
 }
 
 #[test]
-fn h5_fixture_golden_vectors_verify() {
-    let f = fixture::h5();
-    let other = fixture::h6();
+fn ed_sh_fixture_golden_vectors_verify() {
+    let f = fixture::ed_sh();
+    let other = fixture::sr_sh();
     check_suite::<EdSh>(f, "ED-SH", &other.public_key);
 }
 
 #[test]
-fn h6_fixture_golden_vectors_verify() {
-    let f = fixture::h6();
-    let other = fixture::h5();
+fn sr_sh_fixture_golden_vectors_verify() {
+    let f = fixture::sr_sh();
+    let other = fixture::ed_sh();
     check_suite::<SrSh>(f, "SR-SH", &other.public_key);
 }

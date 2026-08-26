@@ -54,7 +54,7 @@ fn composite_sizes_match_the_specification() {
     assert_eq!(SrSh::VERIFY_PUBLIC_KEY_LEN, 196);
     assert_eq!(SrSh::SECRET_KEY_LEN, 328);
 
-    for (f, suite) in [(fixture::h5(), "ED-SH"), (fixture::h6(), "SR-SH")] {
+    for (f, suite) in [(fixture::ed_sh(), "ED-SH"), (fixture::sr_sh(), "SR-SH")] {
         assert_eq!(f.suite, suite);
         assert_eq!(f.profile_name, <ShrincsScheme as PqStatefulScheme>::NAME);
         assert_eq!(f.max_signatures, 4);
@@ -84,7 +84,7 @@ fn the_commitment_binds_the_profile_name() {
     // the commitment: two keys built from identical seeds under different
     // profiles commit to different values, so neither can verify against the
     // other's stored commitment.
-    let f = fixture::h5();
+    let f = fixture::ed_sh();
     let pk = PublicKey::<EdSh>::from_bytes(&f.public_key).expect("public key");
     let vk = pk.pq_verify_key();
     let (stateful_public_key, rest) = vk.split_at(68);
@@ -132,7 +132,7 @@ const COUNTER_AT: usize = PQ_AT + <ShrincsScheme as PqStatefulScheme>::SECRET_KE
 
 #[test]
 fn the_blob_layout_is_the_documented_one() {
-    let f = fixture::h5();
+    let f = fixture::ed_sh();
     let blob = &f.secret_key;
     let pk = PublicKey::<EdSh>::from_bytes(&f.public_key).expect("public key");
 

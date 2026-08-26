@@ -123,8 +123,8 @@ impl LeafJournal for MemoryJournal {
 
 #[test]
 #[ignore = "about 49s of keygen; the smoke-128s-q18 job runs this with --ignored"]
-fn keygen_matches_h5_fixture_and_stateful_leaf_1_is_reproducible() {
-    let f = fixture::h5();
+fn keygen_matches_ed_sh_fixture_and_stateful_leaf_1_is_reproducible() {
+    let f = fixture::ed_sh();
     let (mut sk, pk) = keygen::<EdSh>(&[0x50u8; 32], 4).expect("keygen");
 
     assert_eq!(

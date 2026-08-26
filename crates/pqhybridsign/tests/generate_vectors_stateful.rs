@@ -201,12 +201,12 @@ where
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
-fn generate_h5() {
+fn generate_ed_sh() {
     emit::<EdSh>("ED-SH", [0x50u8; 32]);
 }
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
-fn generate_h6() {
+fn generate_sr_sh() {
     emit::<SrSh>("SR-SH", [0x60u8; 32]);
 }
