@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Sign/verify roundtrip example for H1 through H4, built against the
-installed pqhybridsign package.
+"""Sign/verify roundtrip example for ED-ML-44 through SR-FN-512, built
+against the installed pqhybridsign package.
 
 For each suite: derive a keypair from a fixed seed, sign a message
 deterministically, verify the signature, tamper one message byte, and
@@ -27,10 +27,10 @@ NONCE = b"pqhybridsign-example-nonce"
 MESSAGE = b"pqhybridsign roundtrip message"
 
 SUITES = [
-    ("H1", phs.Suite.H1, 1),
-    ("H2", phs.Suite.H2, 2),
-    ("H3", phs.Suite.H3, 3),
-    ("H4", phs.Suite.H4, 4),
+    ("ED-ML-44", phs.Suite.ED_ML_44, 1),
+    ("ED-FN-512", phs.Suite.ED_FN_512, 2),
+    ("SR-ML-44", phs.Suite.SR_ML_44, 3),
+    ("SR-FN-512", phs.Suite.SR_FN_512, 4),
 ]
 
 

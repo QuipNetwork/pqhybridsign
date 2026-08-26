@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Sign/verify roundtrip example for H1 through H4, built against the
- * published @quip.network/pqhybridsign npm package.
+ * Sign/verify roundtrip example for ED-ML-44 through SR-FN-512, built
+ * against the published @quip.network/pqhybridsign npm package.
  *
  * For each suite: derive a keypair from a fixed seed, sign a message
  * deterministically, verify the signature, tamper one message byte, and
@@ -35,13 +35,13 @@ interface SuiteCase {
   readonly seedByte: number;
 }
 
-// H5 and H6 reject keygenFromSeed and both sign functions, so this
+// ED-SH and SR-SH reject keygenFromSeed and both sign functions, so this
 // example -- which signs -- covers only the four stateless suites.
 const SUITES: readonly SuiteCase[] = [
-  { suite: "H1", seedByte: 1 },
-  { suite: "H2", seedByte: 2 },
-  { suite: "H3", seedByte: 3 },
-  { suite: "H4", seedByte: 4 },
+  { suite: "ED-ML-44", seedByte: 1 },
+  { suite: "ED-FN-512", seedByte: 2 },
+  { suite: "SR-ML-44", seedByte: 3 },
+  { suite: "SR-FN-512", seedByte: 4 },
 ];
 
 /** Flip the first byte of `msg`, producing the tampered message this

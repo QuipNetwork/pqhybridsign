@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Sign/verify roundtrip example for H1 through H4, built against the
+ * Sign/verify roundtrip example for ED-ML-44 through SR-FN-512, built against the
  * pqhybridsign C ABI (crates/pqhybridsign-cffi/include/pqhybridsign.h).
  *
  * For each suite: derive a keypair from a fixed seed, sign a message
@@ -103,10 +103,10 @@ int main() {
     const char *name;
   };
   const Check checks[] = {
-      {1, "H1"},
-      {2, "H2"},
-      {3, "H3"},
-      {4, "H4"},
+      {1, "ED-ML-44"},
+      {2, "ED-FN-512"},
+      {3, "SR-ML-44"},
+      {4, "SR-FN-512"},
   };
 
   for (const auto &check : checks) {
