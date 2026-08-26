@@ -4,7 +4,7 @@
 use zeroize::Zeroize;
 
 use pqhybridsign::budget::StatelessBudgetStore;
-use pqhybridsign::shrincs::{H5, H6};
+use pqhybridsign::shrincs::{EdSh, SrSh};
 use pqhybridsign::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::stateful_composite::SecretKey;
 use pqhybridsign::suite::StatefulSuite;
@@ -38,9 +38,9 @@ use crate::suite::Suite;
 /// durable record of spent leaves and the only thing that survives a
 /// crash.
 ///
-/// # Only H5 and H6
+/// # Only EdSh and SrSh
 ///
-/// H1 through H4 are stateless and have nothing to hold open;
+/// EdMl44 through SrFn512 are stateless and have nothing to hold open;
 /// [`StatefulKeyHandle::open`] rejects them with
 /// [`AbiError::WrongEntryPointForSuite`].
 pub struct StatefulKeyHandle {
@@ -48,8 +48,8 @@ pub struct StatefulKeyHandle {
 }
 
 enum Inner {
-    H5(SecretKey<H5>),
-    H6(SecretKey<H6>),
+    EdSh(SecretKey<EdSh>),
+    SrSh(SecretKey<SrSh>),
 }
 
 impl StatefulKeyHandle {
@@ -61,19 +61,19 @@ impl StatefulKeyHandle {
     ///
     /// # Errors
     ///
-    /// [`AbiError::WrongEntryPointForSuite`] for H1-H4.
+    /// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512.
     /// [`AbiError::BadLength`] if `sk` is not [`crate::secret_key_len`]
     /// bytes for `suite`, checked before `import` runs.
     /// [`AbiError::ComponentFailure`] if the blob does not import.
     pub fn open(suite: Suite, sk: &[u8]) -> Result<Self, AbiError> {
         match suite {
-            Suite::H5 => Ok(Self {
-                inner: Inner::H5(import_checked::<H5>(sk)?),
+            Suite::EdSh => Ok(Self {
+                inner: Inner::EdSh(import_checked::<EdSh>(sk)?),
             }),
-            Suite::H6 => Ok(Self {
-                inner: Inner::H6(import_checked::<H6>(sk)?),
+            Suite::SrSh => Ok(Self {
+                inner: Inner::SrSh(import_checked::<SrSh>(sk)?),
             }),
-            Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => Err(AbiError::WrongEntryPointForSuite),
         }
     }
 
@@ -81,8 +81,8 @@ impl StatefulKeyHandle {
     #[must_use]
     pub fn suite(&self) -> Suite {
         match self.inner {
-            Inner::H5(_) => Suite::H5,
-            Inner::H6(_) => Suite::H6,
+            Inner::EdSh(_) => Suite::EdSh,
+            Inner::SrSh(_) => Suite::SrSh,
         }
     }
 
@@ -94,8 +94,8 @@ impl StatefulKeyHandle {
     #[must_use]
     pub fn key_identity(&self) -> KeyIdentity {
         match &self.inner {
-            Inner::H5(sk) => sk.key_identity(),
-            Inner::H6(sk) => sk.key_identity(),
+            Inner::EdSh(sk) => sk.key_identity(),
+            Inner::SrSh(sk) => sk.key_identity(),
         }
     }
 
@@ -113,8 +113,8 @@ impl StatefulKeyHandle {
     /// the key does not export.
     pub fn export(&self, sk_out: &mut [u8]) -> Result<usize, AbiError> {
         match &self.inner {
-            Inner::H5(sk) => export_checked::<H5>(sk, sk_out),
-            Inner::H6(sk) => export_checked::<H6>(sk, sk_out),
+            Inner::EdSh(sk) => export_checked::<EdSh>(sk, sk_out),
+            Inner::SrSh(sk) => export_checked::<SrSh>(sk, sk_out),
         }
     }
 }
@@ -185,8 +185,8 @@ pub fn sign_stateful_with_handle(
     sig_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match &mut handle.inner {
-        Inner::H5(sk) => sign_one::<H5>(sk, journal, msg, ctx, sig_out),
-        Inner::H6(sk) => sign_one::<H6>(sk, journal, msg, ctx, sig_out),
+        Inner::EdSh(sk) => sign_one::<EdSh>(sk, journal, msg, ctx, sig_out),
+        Inner::SrSh(sk) => sign_one::<SrSh>(sk, journal, msg, ctx, sig_out),
     }
 }
 
@@ -227,8 +227,8 @@ pub fn sign_stateless_with_handle(
     sig_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match &handle.inner {
-        Inner::H5(sk) => sign_one_stateless::<H5>(sk, budget, msg, ctx, sig_out),
-        Inner::H6(sk) => sign_one_stateless::<H6>(sk, budget, msg, ctx, sig_out),
+        Inner::EdSh(sk) => sign_one_stateless::<EdSh>(sk, budget, msg, ctx, sig_out),
+        Inner::SrSh(sk) => sign_one_stateless::<SrSh>(sk, budget, msg, ctx, sig_out),
     }
 }
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn a_handle_signs_twice_and_the_signatures_verify() {
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let (sk, pk) = fresh_key(suite);
         let mut handle = StatefulKeyHandle::open(suite, &sk).unwrap();
         assert_eq!(handle.suite(), suite);
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn the_exported_key_advances_with_each_signature() {
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let (sk, _pk) = fresh_key(suite);
         let mut handle = StatefulKeyHandle::open(suite, &sk).unwrap();
         let mut journal = MemoryJournal::default();
@@ -333,7 +333,7 @@ mod tests {
         // This is the property the whole handle rests on: exporting and
         // reopening must land on the same key state, or a restart would
         // reissue a leaf the journal has already recorded as spent.
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let (sk, pk) = fresh_key(suite);
         let mut handle = StatefulKeyHandle::open(suite, &sk).unwrap();
         let mut journal = MemoryJournal::default();
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn open_rejects_the_stateless_suites() {
         assert_eq!(
-            StatefulKeyHandle::open(Suite::H1, &[0u8; 32]).unwrap_err(),
+            StatefulKeyHandle::open(Suite::EdMl44, &[0u8; 32]).unwrap_err(),
             AbiError::WrongEntryPointForSuite
         );
     }
@@ -363,15 +363,15 @@ mod tests {
     #[test]
     fn open_rejects_a_wrong_length_blob() {
         assert_eq!(
-            StatefulKeyHandle::open(Suite::H5, &[0u8; 7]).unwrap_err(),
+            StatefulKeyHandle::open(Suite::EdSh, &[0u8; 7]).unwrap_err(),
             AbiError::BadLength
         );
     }
 
     #[test]
     fn export_rejects_a_wrong_length_buffer() {
-        let (sk, _pk) = fresh_key(Suite::H5);
-        let handle = StatefulKeyHandle::open(Suite::H5, &sk).unwrap();
+        let (sk, _pk) = fresh_key(Suite::EdSh);
+        let handle = StatefulKeyHandle::open(Suite::EdSh, &sk).unwrap();
         assert_eq!(
             handle.export(&mut [0u8; 7]).unwrap_err(),
             AbiError::BadLength
@@ -380,10 +380,10 @@ mod tests {
 
     #[test]
     fn signing_with_an_unbound_journal_is_refused() {
-        let (sk, _pk) = fresh_key(Suite::H5);
-        let mut handle = StatefulKeyHandle::open(Suite::H5, &sk).unwrap();
+        let (sk, _pk) = fresh_key(Suite::EdSh);
+        let mut handle = StatefulKeyHandle::open(Suite::EdSh, &sk).unwrap();
         let mut journal = MemoryJournal::default();
-        let mut sig = vec![0u8; signature_len(Suite::H5)];
+        let mut sig = vec![0u8; signature_len(Suite::EdSh)];
         assert_eq!(
             sign_stateful_with_handle(&mut handle, &mut journal, b"m", b"c", &mut sig).unwrap_err(),
             AbiError::JournalKeyMismatch
@@ -396,7 +396,7 @@ mod tests {
         // leaf counter must be untouched afterwards, which is why this takes
         // `&StatefulKeyHandle` and not `&mut`: there is nothing to advance and
         // nothing new to export.
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let (sk, pk) = fresh_key(suite);
         let handle = StatefulKeyHandle::open(suite, &sk).unwrap();
 
@@ -416,14 +416,14 @@ mod tests {
         handle.export(&mut after).unwrap();
         assert_eq!(before, after, "the stateless path advanced the key");
 
-        // `crate::verify` accepts only the stateful path for H5/H6; a
+        // `crate::verify` accepts only the stateful path for EdSh/SrSh; a
         // stateless-path signature is checked with `verify_stateless`.
         assert!(verify_stateless(suite, &pk, b"m", b"c", &sig[..n]).unwrap());
     }
 
     #[test]
     fn a_spent_budget_refuses_a_stateless_signature() {
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let (sk, _pk) = fresh_key(suite);
         let handle = StatefulKeyHandle::open(suite, &sk).unwrap();
         let mut budget = MemoryBudget::exhausted();

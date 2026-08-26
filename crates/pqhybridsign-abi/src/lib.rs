@@ -9,9 +9,9 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 #![doc = "Type-erased, runtime-dispatched API over the pqhybridsign suites.
 
-Every suite this workspace ships -- H1, H2, H3, H4, H5, H6 -- is a
+Every suite this workspace ships -- EdMl44, EdFn512, SrMl44, SrFn512, EdSh, SrSh -- is a
 compile-time type in `pqhybridsign`/`pqhybridsign-shrincs`; callers write
-`sign::<H1>(...)`. No C header, JavaScript function or Python module can
+`sign::<EdMl44>(...)`. No C header, JavaScript function or Python module can
 name a type parameter, so no binding can be built directly over that
 generic API. This crate is the runtime stand-in every binding wraps: the
 [`Suite`] enum replaces the type parameter, and every function here takes
@@ -20,12 +20,12 @@ internally.
 
 # Two paths, kept apart
 
-H1 through H4 are stateless: signing them costs nothing but CPU time, and
-[`sign`]/[`sign_deterministic`]/[`keygen_from_seed`] handle all four. H5
-and H6 are stateful: their post-quantum half spends a one-time leaf per
+EdMl44 through SrFn512 are stateless: signing them costs nothing but CPU time, and
+[`sign`]/[`sign_deterministic`]/[`keygen_from_seed`] handle all four. EdSh
+and SrSh are stateful: their post-quantum half spends a one-time leaf per
 signature, and reusing a leaf is a total loss of the key's post-quantum
 security. A stateless-looking call that silently spent a leaf would be the
-worst failure mode this crate could offer, so H5 and H6 have their own
+worst failure mode this crate could offer, so EdSh and SrSh have their own
 entry points -- [`sign_stateful`], [`sign_stateless`] and
 [`keygen_stateful_from_seed`] -- and the stateless functions reject them
 with [`AbiError::WrongEntryPointForSuite`] rather than doing anything with
@@ -37,7 +37,7 @@ verifying never spends anything.
 [`public_key_len`], [`secret_key_len`] and [`signature_len`] exist because
 every binding needs to allocate before it can call anything else that
 writes into a buffer. [`signature_len`] is a maximum, not an exact figure,
-for H2, H4, H5 and H6: see its documentation for why each is
+for EdFn512, SrFn512, EdSh and SrSh: see its documentation for why each is
 variable-length.
 
 # Out of scope
@@ -168,7 +168,7 @@ pub use pqhybridsign::shrincs::bundle::{verify_bundle, BundleError};
 /// wire.
 #[must_use]
 pub fn profile_name() -> &'static str {
-    <<pqhybridsign::shrincs::H5 as pqhybridsign::suite::StatefulSuite>::Pq as pqhybridsign::component::PqStatefulScheme>::NAME
+    <<pqhybridsign::shrincs::EdSh as pqhybridsign::suite::StatefulSuite>::Pq as pqhybridsign::component::PqStatefulScheme>::NAME
 }
 
 #[cfg(test)]
