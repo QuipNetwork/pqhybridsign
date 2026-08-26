@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `StatefulSecretKey`, the Python type for H5 and H6 secret keys, and the
+//! `StatefulSecretKey`, the Python type for ED_SH and SR_SH secret keys, and the
 //! module functions that create and load one.
 //!
 //! In the generic Rust API a stateful secret key is deliberately not
@@ -286,7 +286,7 @@ impl pqhybridsign_abi::StatelessBudgetStore for PyBudget<'_> {
 #[derive(Debug)]
 struct BudgetCallFailed;
 
-/// A loaded H5 or H6 secret key.
+/// A loaded ED_SH or SR_SH secret key.
 ///
 /// Holds the imported key, so the hypertree root is derived once when the
 /// object is constructed rather than once per signature. At profile-128s-q18
@@ -386,7 +386,7 @@ impl StatefulSecretKey {
     /// Sign `msg` under `ctx` without spending any leaf, spending one unit
     /// of this key's few-time stateless budget instead.
     ///
-    /// Available because H5 and H6 pair their stateful fast path with a
+    /// Available because ED_SH and SR_SH pair their stateful fast path with a
     /// stateless few-time path (SHRINCS specification section 21). No leaf
     /// is spent and this key is not modified, but the stateless path has a
     /// hard bound of its own -- `2**20` signatures, `2**18` under the
@@ -490,7 +490,7 @@ impl StatefulSecretKey {
 
 impl PySuite {
     fn as_repr_str(self) -> &'static str {
-        pqhybridsign_abi::Suite::from(self).as_str()
+        pqhybridsign_abi::Suite::from(self).name()
     }
 }
 
@@ -506,9 +506,9 @@ impl PySuite {
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4, which have no journal
-/// and so no identity. `BadLengthError` if `public_key` is the wrong length
-/// for `suite`.
+/// `WrongEntryPointForSuiteError` for the four stateless suites, which
+/// have no journal and so no identity. `BadLengthError` if `public_key`
+/// is the wrong length for `suite`.
 #[pyfunction]
 fn key_identity<'py>(
     py: Python<'py>,
@@ -529,9 +529,9 @@ fn key_identity<'py>(
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4. `BadLengthError` if
-/// `blob` is not `secret_key_len(suite)` bytes. `ComponentFailureError` if
-/// the blob does not import.
+/// `WrongEntryPointForSuiteError` for the four stateless suites.
+/// `BadLengthError` if `blob` is not `secret_key_len(suite)` bytes.
+/// `ComponentFailureError` if the blob does not import.
 #[pyfunction]
 fn key_identity_from_secret_key<'py>(
     py: Python<'py>,
@@ -632,7 +632,7 @@ fn require_journal_owns(identity: KeyIdentity, journal: &Bound<'_, PyAny>) -> Py
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4: use
+/// `WrongEntryPointForSuiteError` for the four stateless suites: use
 /// `keygen_from_seed` instead. `BadLengthError` if `seed` is not 32 bytes.
 /// `ComponentFailureError` if `max_stateful_signatures` is zero or exceeds
 /// the component's leaf capacity limit. `JournalKeyMismatchError` if
@@ -722,8 +722,9 @@ fn keygen_stateful_from_seed(
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4. `BadLengthError` if
-/// `blob` is not exactly `secret_key_len(suite)` bytes for `suite`.
+/// `WrongEntryPointForSuiteError` for the four stateless suites.
+/// `BadLengthError` if `blob` is not exactly `secret_key_len(suite)`
+/// bytes for `suite`.
 /// `JournalKeyMismatchError` if `journal` does not already belong to this
 /// key. Any exception `journal.bound_key` itself raised is re-raised
 /// unchanged.
@@ -751,12 +752,13 @@ fn load_stateful_secret_key(
 /// keeps, which is what `verify_with_stored_public_key_stateful` and
 /// `verify_with_stored_public_key_stateless` take as `stored_public_key`.
 ///
-/// For H5 and H6 this is the classical public key and a 32-byte commitment
-/// to the post-quantum verify key, smaller than the verify-form length
-/// `keygen_stateful_from_seed`'s public key uses, because the verify key
-/// itself is supplied per signature rather than stored. For H1 through H4
-/// the stored and verify forms are the same bytes, so this equals the
-/// public key length for `suite`; there is no error case for any suite.
+/// For ED_SH and SR_SH this is the classical public key and a 32-byte
+/// commitment to the post-quantum verify key, smaller than the
+/// verify-form length `keygen_stateful_from_seed`'s public key uses,
+/// because the verify key itself is supplied per signature rather than
+/// stored. For the four stateless suites the stored and verify forms are
+/// the same bytes, so this equals the public key length for `suite`;
+/// there is no error case for any suite.
 #[pyfunction]
 fn stored_public_key_len(suite: PySuite) -> usize {
     pqhybridsign_abi::stored_public_key_len(suite.into())
@@ -772,11 +774,11 @@ fn stored_public_key_len(suite: PySuite) -> usize {
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4: they have no stored
-/// form. `BadLengthError` if `public_key` is not the verify-form public
-/// key length for `suite`. `ComponentFailureError` if the commitment
-/// computation itself fails. `TypeError` if `public_key` is neither
-/// `bytes` nor `bytearray`.
+/// `WrongEntryPointForSuiteError` for the four stateless suites: they
+/// have no stored form. `BadLengthError` if `public_key` is not the
+/// verify-form public key length for `suite`. `ComponentFailureError` if
+/// the commitment computation itself fails. `TypeError` if `public_key`
+/// is neither `bytes` nor `bytearray`.
 #[pyfunction]
 fn stored_public_key(
     py: Python<'_>,
@@ -794,19 +796,20 @@ fn stored_public_key(
 /// only a signature produced by `sign_stateful`, against one whole
 /// verify-form public key `pk`.
 ///
-/// `verify` is the total dispatcher across all six suites and, for H5 and
-/// H6, behaves exactly as this function does; call this one directly only
-/// where the suite is already known to be H5 or H6. A signature whose wire
-/// `PathSelector` names the stateless path is refused before either
-/// component signature is checked. Call `verify_stateless` for a message
-/// deliberately signed on that path.
+/// `verify` is the total dispatcher across all six suites and, for ED_SH
+/// and SR_SH, behaves exactly as this function does; call this one
+/// directly only where the suite is already known to be ED_SH or SR_SH.
+/// A signature whose wire `PathSelector` names the stateless path is
+/// refused before either component signature is checked. Call
+/// `verify_stateless` for a message deliberately signed on that path.
 ///
 /// Returns `False`, never raises, for a malformed `pk` or `sig`, on the
 /// same terms as `verify`.
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4; use `verify` instead.
+/// `WrongEntryPointForSuiteError` for the four stateless suites; use
+/// `verify` instead.
 #[pyfunction]
 fn verify_stateful(
     py: Python<'_>,
@@ -854,8 +857,8 @@ fn verify_stateless(
 /// only a signature produced by `sign_stateful`, against a signer-supplied
 /// verify key that must be the one `stored_public_key` commits to.
 ///
-/// This is the entry point the H5/H6 deployment is built for: the verifier
-/// stores the small form (`ClassicalPK || commitment`,
+/// This is the entry point the ED_SH/SR_SH deployment is built for: the
+/// verifier stores the small form (`ClassicalPK || commitment`,
 /// `stored_public_key_len(suite)` bytes -- 64 for both suites) and the
 /// signer supplies the full 164-byte commitment bundle alongside every
 /// signature, because the bundle is too large to keep on an account.
@@ -882,9 +885,9 @@ fn verify_stateless(
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H1 through H4: their public key is a
-/// single form with no commitment in it, so there is nothing for this
-/// entry point to bind; use `verify`.
+/// `WrongEntryPointForSuiteError` for the four stateless suites: their
+/// public key is a single form with no commitment in it, so there is
+/// nothing for this entry point to bind; use `verify`.
 #[pyfunction]
 fn verify_with_stored_public_key_stateful(
     py: Python<'_>,

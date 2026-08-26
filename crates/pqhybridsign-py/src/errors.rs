@@ -37,7 +37,7 @@ sub_exception!(
 );
 sub_exception!(
     BadPathSelectorError,
-    "A path-selected signature (H5/H6) carried an unknown selector."
+    "A path-selected signature (ED_SH/SR_SH) carried an unknown selector."
 );
 sub_exception!(
     LeafCountOutOfRangeError,
@@ -57,7 +57,7 @@ sub_exception!(
 );
 sub_exception!(
     DeltaLengthOutOfRangeError,
-    "A delta-encoded (H2/H4) signature's length was out of range."
+    "A delta-encoded (ED_FN_512/SR_FN_512) signature's length was out of range."
 );
 sub_exception!(
     LeavesExhaustedError,
@@ -74,7 +74,7 @@ sub_exception!(
 sub_exception!(SigningFailedError, "Signing failed.");
 sub_exception!(
     InvalidSuiteError,
-    "The suite code or name is not one of H1-H6."
+    "The suite code or name is not one of the six suites."
 );
 sub_exception!(
     WrongEntryPointForSuiteError,
@@ -109,7 +109,7 @@ sub_exception!(
 );
 sub_exception!(
     StatefulKeyNotCloneableError,
-    "A stateful (H5/H6) secret key cannot be copied, deep-copied or pickled: \
+    "A stateful (ED_SH/SR_SH) secret key cannot be copied, deep-copied or pickled: \
      doing so would let the same one-time leaf be spent twice."
 );
 sub_exception!(

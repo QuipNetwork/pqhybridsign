@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The hybrid verifiable random function, dispatched by suite.
 //!
-//! `vrf_prove` and `vrf_prove_deterministic` cover H1 through H4 and reject
-//! H5 and H6, on the same terms `sign` refuses them: those two suites spend
-//! one unit of the few-time stateless budget per evaluation and need a
-//! durable store to record it, so a call that looked free and was not would
-//! be the worst failure this module could offer. [`VrfStatelessKey`] and its
-//! `prove` method cover H5 and H6 through a dedicated key and a caller-
-//! supplied budget store.
+//! `vrf_prove` and `vrf_prove_deterministic` cover the four stateless
+//! suites and reject ED_SH and SR_SH, on the same terms `sign` refuses
+//! them: those two suites spend one unit of the few-time stateless budget
+//! per evaluation and need a durable store to record it, so a call that
+//! looked free and was not would be the worst failure this module could
+//! offer. [`VrfStatelessKey`] and its `prove` method cover ED_SH and SR_SH
+//! through a dedicated key and a caller-supplied budget store.
 
 use std::cell::RefCell;
 
@@ -100,8 +100,8 @@ struct BudgetCallFailed;
 
 /// Length in bytes of a hybrid VRF proof for `suite`.
 ///
-/// For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-/// delta-length binding can occupy. For H5 and H6 this is exact.
+/// For ED_ML_44 and SR_ML_44 this is exact. For ED_FN_512 and SR_FN_512 this is the maximum a
+/// delta-length binding can occupy. For ED_SH and SR_SH this is exact.
 #[pyfunction]
 fn vrf_proof_len(suite: PySuite) -> PyResult<usize> {
     pqhybridsign_abi::vrf_proof_len(suite.into()).map_err(to_py_err)
@@ -114,15 +114,16 @@ fn vrf_proof_len(suite: PySuite) -> PyResult<usize> {
 /// that holds for every suite regardless of whether the classical half
 /// hedges its nonce.
 ///
-/// H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
-/// budget on every evaluation and need a durable store to record it, so
-/// they have their own entry point, `VrfStatelessKey.prove`, for the same
-/// reason `sign` refuses them there: a call that looks free and is not is
-/// the worst failure mode this module could offer.
+/// The four stateless suites only. ED_SH and SR_SH spend one unit of a
+/// few-time stateless budget on every evaluation and need a durable store
+/// to record it, so they have their own entry point,
+/// `VrfStatelessKey.prove`, for the same reason `sign` refuses them
+/// there: a call that looks free and is not is the worst failure mode
+/// this module could offer.
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H5 and H6. `BadLengthError` if
+/// `WrongEntryPointForSuiteError` for ED_SH and SR_SH. `BadLengthError` if
 /// `secret_key` is not the suite's secret-key length. `ComponentFailureError`
 /// if either component rejects its key.
 #[pyfunction]
@@ -145,8 +146,9 @@ fn vrf_prove(
 /// Evaluate the hybrid VRF for `suite` with a reproducible classical proof.
 /// Returns the proof as `bytes`.
 ///
-/// H1 through H4 only, on the same terms as `vrf_prove`: H5 and H6 spend a
-/// few-time budget unit and prove through `VrfStatelessKey.prove`.
+/// The four stateless suites only, on the same terms as `vrf_prove`:
+/// ED_SH and SR_SH spend a few-time budget unit and prove through
+/// `VrfStatelessKey.prove`.
 ///
 /// # Errors
 ///
@@ -237,7 +239,7 @@ fn vrf_make_bytes(
 
 /// A SHRINCS key dedicated to VRF evaluation, held across calls.
 ///
-/// H5 and H6 evaluate the VRF through their post-quantum half's few-time
+/// ED_SH and SR_SH evaluate the VRF through their post-quantum half's few-time
 /// stateless path, which draws on a budget shared with rotation and
 /// recovery. The key that carries an identity's rotation and recovery
 /// authority must not also spend that budget on VRF evaluations, so this
@@ -283,8 +285,8 @@ impl VrfStatelessKey {
     ///
     /// # Errors
     ///
-    /// `WrongEntryPointForSuiteError` for H1 through H4: they have no
-    /// stateful half and so no dedicated VRF key to derive.
+    /// `WrongEntryPointForSuiteError` for the four stateless suites: they
+    /// have no stateful half and so no dedicated VRF key to derive.
     /// `BadLengthError` if `master` is not 32 bytes. `ComponentFailureError`
     /// if derivation fails.
     #[classmethod]
@@ -303,7 +305,7 @@ impl VrfStatelessKey {
         // rather than admitted by default.
         if !matches!(
             suite,
-            pqhybridsign_abi::Suite::H5 | pqhybridsign_abi::Suite::H6
+            pqhybridsign_abi::Suite::EdSh | pqhybridsign_abi::Suite::SrSh
         ) {
             return Err(to_py_err(AbiError::WrongEntryPointForSuite));
         }

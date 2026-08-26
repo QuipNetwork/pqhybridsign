@@ -8,18 +8,23 @@
 //! `eq_int` enum support needs an exhaustive match to generate `__eq__`.
 //! This local copy is kept in lock-step by `suite_round_trips_every_value`.
 
+// PyO3 exposes each variant's Rust spelling to Python as-is, and Python
+// enum members are conventionally upper snake case, not Rust type names.
+#![allow(non_camel_case_types)]
+
 use pyo3::prelude::*;
 
 use crate::errors::to_py_err;
 
 /// One of the six hybrid suites `pqhybridsign` ships.
 ///
-/// `H1`/`H3` pair a classical scheme with ML-DSA-44. `H2`/`H4` pair a
-/// classical scheme with FN-DSA-512. `H5`/`H6` pair a classical scheme
-/// with SHRINCS, a stateful hash-based scheme -- see
-/// [`StatefulSecretKey`](crate::stateful::StatefulSecretKey) for why H5
-/// and H6 secret keys are a distinct Python type from the `bytes` the
-/// other four suites use.
+/// `ED_ML_44`/`SR_ML_44` pair a classical scheme with ML-DSA-44.
+/// `ED_FN_512`/`SR_FN_512` pair a classical scheme with FN-DSA-512.
+/// `ED_SH`/`SR_SH` pair a classical scheme with SHRINCS, a stateful
+/// hash-based scheme -- see
+/// [`StatefulSecretKey`](crate::stateful::StatefulSecretKey) for why
+/// `ED_SH` and `SR_SH` secret keys are a distinct Python type from the
+/// `bytes` the other four suites use.
 ///
 /// Frozen and hashable. Compares equal to its integer suite code. Not a
 /// Python `IntEnum`: construct from a stored code with [`Self::from_code`].
@@ -34,17 +39,17 @@ use crate::errors::to_py_err;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PySuite {
     /// ed25519 + ML-DSA-44.
-    H1 = 1,
+    ED_ML_44 = 1,
     /// ed25519 + FN-DSA-512.
-    H2 = 2,
+    ED_FN_512 = 2,
     /// sr25519 + ML-DSA-44.
-    H3 = 3,
+    SR_ML_44 = 3,
     /// sr25519 + FN-DSA-512.
-    H4 = 4,
+    SR_FN_512 = 4,
     /// ed25519 + SHRINCS (stateful).
-    H5 = 5,
+    ED_SH = 5,
     /// sr25519 + SHRINCS (stateful).
-    H6 = 6,
+    SR_SH = 6,
 }
 
 #[pymethods]
@@ -67,13 +72,13 @@ impl PySuite {
         *self as u8
     }
 
-    /// Same as [`Self::value`]: `int(Suite.H1) == 1`.
+    /// Same as [`Self::value`]: `int(Suite.ED_ML_44) == 1`.
     fn __int__(&self) -> u8 {
         *self as u8
     }
 
-    /// Hash as the integer suite code, so `Suite.H1 == 1` and
-    /// `hash(Suite.H1) == hash(1)` stay consistent.
+    /// Hash as the integer suite code, so `Suite.ED_ML_44 == 1` and
+    /// `hash(Suite.ED_ML_44) == hash(1)` stay consistent.
     ///
     /// `#[pyclass(hash)]` is not used: it would hash with Rust's hasher
     /// and break the `eq_int` contract that this class compares equal
@@ -86,12 +91,12 @@ impl PySuite {
 impl PySuite {
     fn from_abi(suite: pqhybridsign_abi::Suite) -> Option<Self> {
         match suite {
-            pqhybridsign_abi::Suite::H1 => Some(Self::H1),
-            pqhybridsign_abi::Suite::H2 => Some(Self::H2),
-            pqhybridsign_abi::Suite::H3 => Some(Self::H3),
-            pqhybridsign_abi::Suite::H4 => Some(Self::H4),
-            pqhybridsign_abi::Suite::H5 => Some(Self::H5),
-            pqhybridsign_abi::Suite::H6 => Some(Self::H6),
+            pqhybridsign_abi::Suite::EdMl44 => Some(Self::ED_ML_44),
+            pqhybridsign_abi::Suite::EdFn512 => Some(Self::ED_FN_512),
+            pqhybridsign_abi::Suite::SrMl44 => Some(Self::SR_ML_44),
+            pqhybridsign_abi::Suite::SrFn512 => Some(Self::SR_FN_512),
+            pqhybridsign_abi::Suite::EdSh => Some(Self::ED_SH),
+            pqhybridsign_abi::Suite::SrSh => Some(Self::SR_SH),
             _ => None,
         }
     }
@@ -100,12 +105,12 @@ impl PySuite {
 impl From<PySuite> for pqhybridsign_abi::Suite {
     fn from(s: PySuite) -> Self {
         match s {
-            PySuite::H1 => Self::H1,
-            PySuite::H2 => Self::H2,
-            PySuite::H3 => Self::H3,
-            PySuite::H4 => Self::H4,
-            PySuite::H5 => Self::H5,
-            PySuite::H6 => Self::H6,
+            PySuite::ED_ML_44 => Self::EdMl44,
+            PySuite::ED_FN_512 => Self::EdFn512,
+            PySuite::SR_ML_44 => Self::SrMl44,
+            PySuite::SR_FN_512 => Self::SrFn512,
+            PySuite::ED_SH => Self::EdSh,
+            PySuite::SR_SH => Self::SrSh,
         }
     }
 }
@@ -123,12 +128,12 @@ mod tests {
     #[test]
     fn suite_round_trips_every_value() {
         for (py_suite, expected) in [
-            (PySuite::H1, pqhybridsign_abi::Suite::H1),
-            (PySuite::H2, pqhybridsign_abi::Suite::H2),
-            (PySuite::H3, pqhybridsign_abi::Suite::H3),
-            (PySuite::H4, pqhybridsign_abi::Suite::H4),
-            (PySuite::H5, pqhybridsign_abi::Suite::H5),
-            (PySuite::H6, pqhybridsign_abi::Suite::H6),
+            (PySuite::ED_ML_44, pqhybridsign_abi::Suite::EdMl44),
+            (PySuite::ED_FN_512, pqhybridsign_abi::Suite::EdFn512),
+            (PySuite::SR_ML_44, pqhybridsign_abi::Suite::SrMl44),
+            (PySuite::SR_FN_512, pqhybridsign_abi::Suite::SrFn512),
+            (PySuite::ED_SH, pqhybridsign_abi::Suite::EdSh),
+            (PySuite::SR_SH, pqhybridsign_abi::Suite::SrSh),
         ] {
             let converted: pqhybridsign_abi::Suite = py_suite.into();
             assert_eq!(converted, expected);

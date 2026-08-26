@@ -16,7 +16,7 @@ class OutputBufferTooSmallError(PqHybridSignError):
     """An internal output buffer was too small for this signature."""
 
 class BadPathSelectorError(PqHybridSignError):
-    """A path-selected signature (H5/H6) carried an unknown selector."""
+    """A path-selected signature (ED_SH/SR_SH) carried an unknown selector."""
 
 class LeafCountOutOfRangeError(PqHybridSignError):
     """A stateful signature's declared leaf count was out of range."""
@@ -31,7 +31,7 @@ class BadRotationKindError(PqHybridSignError):
     """A rotation payload carried an unknown rotation kind."""
 
 class DeltaLengthOutOfRangeError(PqHybridSignError):
-    """A delta-encoded (H2/H4) signature's length was out of range."""
+    """A delta-encoded (ED_FN_512/SR_FN_512) signature's length was out of range."""
 
 class LeavesExhaustedError(PqHybridSignError):
     """The key's one-time leaf budget is spent; rotate the key."""
@@ -46,7 +46,7 @@ class SigningFailedError(PqHybridSignError):
     """Signing failed."""
 
 class InvalidSuiteError(PqHybridSignError):
-    """The suite code or name is not one of H1-H6."""
+    """The suite code or name is not one of the six suites."""
 
 class WrongEntryPointForSuiteError(PqHybridSignError):
     """This entry point does not accept this suite."""
@@ -92,7 +92,7 @@ class BudgetStoreFailedError(PqHybridSignError):
     """
 
 class StatefulKeyNotCloneableError(PqHybridSignError):
-    """A stateful (H5/H6) secret key cannot be copied, deep-copied or pickled."""
+    """A stateful (ED_SH/SR_SH) secret key cannot be copied, deep-copied or pickled."""
 
 class InvalidMnemonicError(PqHybridSignError):
     """The recovery phrase is not a valid English BIP39 mnemonic."""
@@ -101,18 +101,18 @@ class Suite:
     """One of the six hybrid suites pqhybridsign ships.
 
     Frozen and hashable. Compares equal to the integer suite code
-    (`Suite.H1 == 1`). Not an `IntEnum`: `isinstance(Suite.H1, int)` is
+    (`Suite.ED_ML_44 == 1`). Not an `IntEnum`: `isinstance(Suite.ED_ML_44, int)` is
     False, `Suite(1)` does not construct, and the class is not iterable
     or subscriptable. Use `from_code` to recover a `Suite` from a stored
     integer code.
     """
 
-    H1: Suite
-    H2: Suite
-    H3: Suite
-    H4: Suite
-    H5: Suite
-    H6: Suite
+    ED_ML_44: Suite
+    ED_FN_512: Suite
+    SR_ML_44: Suite
+    SR_FN_512: Suite
+    ED_SH: Suite
+    SR_SH: Suite
 
     @property
     def value(self) -> int:
@@ -170,7 +170,7 @@ class StatelessBudgetStore(Protocol):
     def record(self, key: bytes, count: int) -> None: ...
 
 class StatefulSecretKey:
-    """A loaded H5 or H6 secret key.
+    """A loaded ED_SH or SR_SH secret key.
 
     The durability contract is unchanged. After every sign_stateful call,
     including one that raised, call export() and persist the result
@@ -212,7 +212,8 @@ class StatefulSecretKey:
     def __reduce__(self) -> Any: ...
 
 def keygen_from_seed(suite: Suite, seed: ReadableBuffer) -> tuple[bytes, bytes]:
-    """Derive a keypair for `suite` (H1-H4) from a 32-byte master seed.
+    """Derive a keypair for `suite` (one of the four stateless suites) from a
+    32-byte master seed.
 
     Returns `(secret_key, public_key)`. The returned secret key is a
     Python `bytes` object and cannot be zeroized. Callers that need
@@ -222,7 +223,8 @@ def keygen_from_seed(suite: Suite, seed: ReadableBuffer) -> tuple[bytes, bytes]:
 def sign(
     suite: Suite, sk: ReadableBuffer, msg: ReadableBuffer, ctx: ReadableBuffer
 ) -> bytes:
-    """Hedged (randomized) signing for `suite` (H1-H4)."""
+    """Hedged (randomized) signing for `suite` (one of the four stateless
+    suites)."""
 
 def sign_deterministic(
     suite: Suite,
@@ -231,7 +233,8 @@ def sign_deterministic(
     ctx: ReadableBuffer,
     nonce: ReadableBuffer,
 ) -> bytes:
-    """Deterministic signing for `suite` (H1-H4)."""
+    """Deterministic signing for `suite` (one of the four stateless
+    suites)."""
 
 def verify(
     suite: Suite,
@@ -241,7 +244,7 @@ def verify(
     sig: ReadableBuffer,
 ) -> bool:
     """Verify `sig` over `msg` under `ctx` for `suite`, against `pk`.
-    Covers all six suites. For H5 and H6 this accepts only a signature
+    Covers all six suites. For ED_SH and SR_SH this accepts only a signature
     produced by `StatefulSecretKey.sign_stateful`, the same behaviour
     `verify_stateful` gives directly; call `verify_stateless` for a message
     deliberately signed on the stateless path. Returns `False`, never
@@ -254,15 +257,15 @@ def verify_stateful(
     ctx: ReadableBuffer,
     sig: ReadableBuffer,
 ) -> bool:
-    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (H5 or
-    H6), accepting only a signature produced by `sign_stateful`, against one
+    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (ED_SH or
+    SR_SH), accepting only a signature produced by `sign_stateful`, against one
     whole verify-form public key `pk`.
 
-    `verify` is the total dispatcher across all six suites and, for H5 and
-    H6, behaves exactly as this function does. A signature whose wire
+    `verify` is the total dispatcher across all six suites and, for ED_SH and
+    SR_SH, behaves exactly as this function does. A signature whose wire
     `PathSelector` names the stateless path is refused before either
     component signature is checked. Raises `WrongEntryPointForSuiteError`
-    for H1 through H4."""
+    for the four stateless suites."""
 
 def verify_stateless(
     suite: Suite,
@@ -283,7 +286,7 @@ def keygen_stateful_from_seed(
     journal: LeafJournal,
     budget: StatelessBudgetStore,
 ) -> tuple[StatefulSecretKey, bytes]:
-    """Derive a stateful keypair for `suite` (H5 or H6) from a 32-byte
+    """Derive a stateful keypair for `suite` (ED_SH or SR_SH) from a 32-byte
     master seed, with a budget of `max_stateful_signatures` one-time
     leaves. `journal` is bound to the returned key for its whole lifetime,
     and is adopted for it -- the key is brand new, so there is no spending
@@ -371,9 +374,9 @@ def stored_public_key(suite: Suite, public_key: ReadableBuffer) -> bytes:
     bytes for a well-formed key and hides a divergence between the
     compute path and the verify path.
 
-    Raises `WrongEntryPointForSuiteError` for H1 through H4: they have no
-    stored form. Raises `BadLengthError` if `public_key` is not the
-    verify-form public key length for `suite`. Raises
+    Raises `WrongEntryPointForSuiteError` for the four stateless suites:
+    they have no stored form. Raises `BadLengthError` if `public_key` is
+    not the verify-form public key length for `suite`. Raises
     `ComponentFailureError` if the commitment computation itself fails."""
 
 def stored_public_key_len(suite: Suite) -> int:
@@ -382,12 +385,13 @@ def stored_public_key_len(suite: Suite) -> int:
     and `verify_with_stored_public_key_stateless` take as
     `stored_public_key`.
 
-    For H5 and H6 this is the classical public key and a 32-byte commitment
-    to the post-quantum verify key, smaller than the verify-form length
-    `keygen_stateful_from_seed`'s public key uses, because the verify key
-    itself is supplied per signature rather than stored. For H1 through H4
-    the stored and verify forms are the same bytes, so this equals the
-    public key length for `suite`; there is no error case for any suite."""
+    For ED_SH and SR_SH this is the classical public key and a 32-byte
+    commitment to the post-quantum verify key, smaller than the
+    verify-form length `keygen_stateful_from_seed`'s public key uses,
+    because the verify key itself is supplied per signature rather than
+    stored. For the four stateless suites the stored and verify forms are
+    the same bytes, so this equals the public key length for `suite`;
+    there is no error case for any suite."""
 
 def verify_with_stored_public_key_stateful(
     suite: Suite,
@@ -397,8 +401,8 @@ def verify_with_stored_public_key_stateful(
     ctx: ReadableBuffer,
     sig: ReadableBuffer,
 ) -> bool:
-    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (H5 or
-    H6), accepting only a signature produced by `sign_stateful`, against a
+    """Verify `sig` over `msg` under `ctx` for a stateful `suite` (ED_SH or
+    SR_SH), accepting only a signature produced by `sign_stateful`, against a
     signer-supplied verify key that must be the one `stored_public_key`
     commits to.
 
@@ -480,17 +484,18 @@ def derive_hard_junction_path(
 def vrf_proof_len(suite: Suite) -> int:
     """Length in bytes of a hybrid VRF proof for `suite`.
 
-    For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-    delta-length binding can occupy. For H5 and H6 this is exact."""
+    For ED_ML_44 and SR_ML_44 this is exact. For ED_FN_512 and SR_FN_512
+    this is the maximum a delta-length binding can occupy. For ED_SH and
+    SR_SH this is exact."""
 
 def vrf_prove(suite: Suite, secret_key: ReadableBuffer, input: ReadableBuffer) -> bytes:
     """Evaluate the hybrid VRF for `suite`.
 
-    H1 through H4 only: H5 and H6 spend one unit of a few-time stateless
-    budget per evaluation and prove through `VrfStatelessKey.prove`
-    instead.
+    The four stateless suites only: ED_SH and SR_SH spend one unit of a
+    few-time stateless budget per evaluation and prove through
+    `VrfStatelessKey.prove` instead.
 
-    Raises `WrongEntryPointForSuiteError` for H5 and H6."""
+    Raises `WrongEntryPointForSuiteError` for ED_SH and SR_SH."""
 
 def vrf_prove_deterministic(
     suite: Suite, secret_key: ReadableBuffer, input: ReadableBuffer
@@ -529,7 +534,7 @@ def vrf_make_bytes(
 class VrfStatelessKey:
     """A SHRINCS key dedicated to VRF evaluation, held across calls.
 
-    H5 and H6 evaluate the VRF through their post-quantum half's few-time
+    ED_SH and SR_SH evaluate the VRF through their post-quantum half's few-time
     stateless path, which draws on a budget shared with rotation and
     recovery. The key that carries an identity's rotation and recovery
     authority must not also spend that budget on VRF evaluations, so this
@@ -549,7 +554,8 @@ class VrfStatelessKey:
         Runs a real key generation: about 47 seconds at a 128s profile.
         Released from the GIL while it runs.
 
-        Raises `WrongEntryPointForSuiteError` for H1 through H4.
+        Raises `WrongEntryPointForSuiteError` for the four stateless
+        suites.
         Raises `BadLengthError` if `master` is not 32 bytes."""
 
     def prove(self, budget: StatelessBudgetStore, input: ReadableBuffer) -> bytes:
