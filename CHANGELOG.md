@@ -2,6 +2,50 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+This release changes the stateless SHRINCS wire format. A stateless signature
+produced by an earlier version does not verify. The stateful (UXMSS) path,
+the stateful commitment and every public entry point do not change.
+
+### Changed
+
+- The `hashsigs-rs` pin moves from `0.2.1-rc2` to `0.2.1-rc6`. Version rc6
+  binds the profile identifier into the FORS message digest. The preimage is
+  now `H("fors-digest" || PROFILE_ID || pkSeed || hypertreeRoot ||
+  randomizer || counter || message)`. Without the profile identifier, two
+  profiles that share a hash suite derive the same leaf indices for a
+  message. Upstream made this change to answer external audit issue
+  `oak-sol-02`.
+- Stateless SHRINCS signatures written before rc6 do not verify under rc6,
+  and rc6 offers no compatibility mode. This release regenerates the
+  committed stateless fixtures and golden vectors under every profile:
+  `fixture-256s.json`, `fixture-256s-sha2.json`, `fixture-128s-q18.json`,
+  `fixture-128s-q20.json`, `h5.json` and `h6.json`.
+- The stateful path produces the same bytes it did before. In all six
+  regenerated files, the master seed, the secret key, the public key, the
+  stateful signatures and the public-key commitment are identical to the
+  values rc2 produced. Only the stateless signature fields moved.
+
+### Added
+
+- Each fixture and golden vector records `profile_id_hex`, the `keccak256`
+  of the active profile's `hashsigs-rs` identity string, and every loader
+  asserts it. `crates/pqhybridsign/tests/profile_id/mod.rs` holds the
+  expected value as bytes, rather than reading it from `hashsigs-rs`. A
+  constant that reads through the library it checks cannot detect its own
+  drift. `hashsigs-rs` pins its own `version_tag` the same way and for the
+  same reason.
+
+### Notes
+
+- `ShrincsVerifier::version_tag()` in `hashsigs-rs` moves from
+  `quip.shrincs-verifier.v1` to `quip.shrincs-verifier.v2`. The tag names a
+  key and envelope format family, not a release. A Solidity verifier pinned
+  to the old tag rejects a new signature at the envelope, rather than
+  failing inside the FORS check. That contract lives in `hashsigs-solidity`
+  and needs a matching update.
+
 ## 0.0.0-rc8
 
 rc8 changes nothing a caller of any published artifact can observe. Every

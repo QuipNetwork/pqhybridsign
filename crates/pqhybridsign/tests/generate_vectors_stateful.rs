@@ -40,6 +40,9 @@ use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[path = "profile_id/mod.rs"]
+mod profile_id;
+
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
@@ -147,6 +150,10 @@ where
     println!(
         "  \"profile_name\": \"{}\",",
         <S::Pq as PqStatefulScheme>::NAME
+    );
+    println!(
+        "  \"profile_id_hex\": \"{}\",",
+        hex::encode(profile_id::PROFILE_ID)
     );
     println!("  \"max_signatures\": {MAX_SIGNATURES},");
     println!("  \"master_seed_hex\": \"{}\",", hex::encode(master));

@@ -44,6 +44,9 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+#[path = "profile_id/mod.rs"]
+mod profile_id;
+
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
@@ -207,8 +210,9 @@ fn generate_fixtures() {
     let h5 = emit_suite::<H5>("H5", [0x50u8; 32]);
     let h6 = emit_suite::<H6>("H6", [0x60u8; 32]);
 
+    let profile_id_hex = hex::encode(profile_id::PROFILE_ID);
     let body = format!(
-        "{{\n  \"profile_name\": \"{profile_name}\",\n  \"suites\": [\n{h5},\n{h6}\n  ]\n}}\n"
+        "{{\n  \"profile_name\": \"{profile_name}\",\n  \"profile_id_hex\": \"{profile_id_hex}\",\n  \"suites\": [\n{h5},\n{h6}\n  ]\n}}\n"
     );
 
     let out_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors"));

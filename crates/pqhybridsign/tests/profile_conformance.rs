@@ -31,11 +31,14 @@
 
 mod fixture;
 
-use hashsigs_rs::shrincs::PROFILE_NAME;
+use hashsigs_rs::profiles::selected::SelectedProfile;
+use hashsigs_rs::shrincs::Profile;
 use pqhybridsign::shrincs::{ShrincsScheme, H5, H6};
 use pqhybridsign::stateful_composite::{PublicKey, SecretKey};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use sha3::{Digest, Keccak256};
+
+const PROFILE_NAME: &str = <SelectedProfile as Profile>::PROFILE_NAME;
 
 // Composite sizes are exactly 64 / 196 / 328 (specification section 4).
 

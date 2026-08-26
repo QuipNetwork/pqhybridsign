@@ -67,6 +67,9 @@ use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[path = "profile_id/mod.rs"]
+mod profile_id;
+
 #[derive(Default, Clone)]
 struct MemoryJournal {
     committed: Rc<RefCell<Vec<u32>>>,
@@ -125,6 +128,7 @@ struct Vector {
     label_hex: String,
     hkdf_info_includes_label_null_byte: bool,
     profile_name: String,
+    profile_id_hex: String,
     max_signatures: u32,
     master_seed_hex: String,
     stored_public_key_hex: String,
@@ -167,6 +171,14 @@ where
         <S::Pq as PqStatefulScheme>::NAME,
         v.profile_name,
         "{} vector is keyed on the active profile",
+        v.suite
+    );
+    assert_eq!(
+        hex::encode(profile_id::PROFILE_ID),
+        v.profile_id_hex,
+        "{} vector was generated under a different hashsigs-rs profile identity; \
+         the FORS digest binds this value, so the stateless signature below \
+         cannot verify",
         v.suite
     );
 

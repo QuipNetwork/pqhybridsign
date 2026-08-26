@@ -33,6 +33,9 @@ use pqhybridsign::component::PqStatefulScheme;
 use pqhybridsign::shrincs::ShrincsScheme;
 use std::sync::OnceLock;
 
+#[path = "../profile_id/mod.rs"]
+mod profile_id;
+
 /// One suite entry from a per-profile fixture file.
 #[derive(Debug, Clone)]
 pub struct Fixture {
@@ -60,6 +63,7 @@ pub struct Fixture {
 #[derive(serde::Deserialize)]
 struct File {
     profile_name: String,
+    profile_id_hex: String,
     suites: Vec<SuiteEntry>,
 }
 
@@ -156,6 +160,20 @@ fn load_suite(want: &str) -> Fixture {
             fixture_basename(),
             file.profile_name,
             active_name,
+            active_profile_feature(),
+        );
+    }
+    let active_profile_id = hex::encode(profile_id::PROFILE_ID);
+    if file.profile_id_hex != active_profile_id {
+        panic!(
+            "fixture {} is keyed on profile_id_hex {:?}, but the active profile's pinned \
+             PROFILE_ID is {:?}. The FORS digest binds this value, so the stateless \
+             signatures below cannot verify. Regenerate with:\n  cargo test -p \
+             pqhybridsign-shrincs --release --no-default-features --features {} \
+             --test generate_fixtures -- --ignored --nocapture",
+            fixture_basename(),
+            file.profile_id_hex,
+            active_profile_id,
             active_profile_feature(),
         );
     }

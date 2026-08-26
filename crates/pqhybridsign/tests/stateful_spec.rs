@@ -47,6 +47,7 @@
 // negatives) do not depend on the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
+use hashsigs_rs::profiles::selected::{SelectedProfile, NUM_CHAINS, NUM_LAYERS};
 use hashsigs_rs::shrincs::{Keys, PublicKey as ShrincsBundlePublicKey, ShrincsSigner};
 use pqhybridsign::encoding_path::{
     decode_path_selected, PathBody, PathProfile, TrustedMaxSignatures, AUTH_PATH_NODE_LEN,
@@ -230,10 +231,16 @@ const UPSTREAM_MAX: u32 = 2;
 fn upstream() -> &'static UpstreamKeys {
     static UPSTREAM: OnceLock<UpstreamKeys> = OnceLock::new();
     UPSTREAM.get_or_init(|| {
-        let (keys, public_key) =
-            ShrincsSigner::keygen(b"spec-17 upstream seed", UPSTREAM_MAX).expect("keygen");
-        let (other, _) =
-            ShrincsSigner::keygen(b"spec-17 upstream other seed", UPSTREAM_MAX).expect("keygen");
+        let (keys, public_key) = ShrincsSigner::keygen::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(
+            b"spec-17 upstream seed",
+            UPSTREAM_MAX,
+        )
+        .expect("keygen");
+        let (other, _) = ShrincsSigner::keygen::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(
+            b"spec-17 upstream other seed",
+            UPSTREAM_MAX,
+        )
+        .expect("keygen");
         UpstreamKeys {
             keys,
             public_key,
@@ -575,11 +582,17 @@ fn export_import_round_trip_preserves_the_advanced_counter() {
 
     assert_eq!(keys.stateful().next_leaf_index(), 1, "a fresh key");
 
-    ShrincsSigner::sign_stateful_action(&mut keys, &public_key, &ctx).expect("first sign");
+    ShrincsSigner::sign_stateful_action::<SelectedProfile, NUM_CHAINS>(
+        &mut keys,
+        &public_key,
+        &ctx,
+    )
+    .expect("first sign");
     let bytes = keys.to_bytes();
     assert_eq!(counter_of(&bytes), 2);
 
-    let imported = Keys::import(&bytes).expect("a self-consistent key imports");
+    let imported = Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&bytes)
+        .expect("a self-consistent key imports");
     assert_eq!(imported.stateful().next_leaf_index(), 2);
     assert_eq!(
         imported.to_bytes(),
@@ -595,7 +608,12 @@ fn export_import_round_trip_preserves_the_exhausted_counter() {
     let ctx = action::to_action_context(b"exhausted counter", [0u8; 32], [0u8; 32]);
 
     for _ in 0..UPSTREAM_MAX {
-        ShrincsSigner::sign_stateful_action(&mut keys, &public_key, &ctx).expect("sign");
+        ShrincsSigner::sign_stateful_action::<SelectedProfile, NUM_CHAINS>(
+            &mut keys,
+            &public_key,
+            &ctx,
+        )
+        .expect("sign");
     }
 
     let bytes = keys.to_bytes();
@@ -608,13 +626,19 @@ fn export_import_round_trip_preserves_the_exhausted_counter() {
     // The exhausted value is a legitimate state, not corruption: it is what
     // spending the last leaf produces, and it must survive a restart --
     // otherwise a restore would silently hand back the final leaf.
-    let imported = Keys::import(&bytes).expect("the exhausted counter imports");
+    let imported = Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&bytes)
+        .expect("the exhausted counter imports");
     assert_eq!(imported.stateful().next_leaf_index(), UPSTREAM_MAX + 1);
 
     // And an exhausted key signs nothing more.
     let mut exhausted = imported;
     assert!(
-        ShrincsSigner::sign_stateful_action(&mut exhausted, &public_key, &ctx).is_none(),
+        ShrincsSigner::sign_stateful_action::<SelectedProfile, NUM_CHAINS>(
+            &mut exhausted,
+            &public_key,
+            &ctx
+        )
+        .is_none(),
         "no leaf remains"
     );
 }
@@ -622,7 +646,10 @@ fn export_import_round_trip_preserves_the_exhausted_counter() {
 #[test]
 fn import_rejects_a_tampered_root() {
     let bytes = upstream().keys.to_bytes();
-    assert!(Keys::import(&bytes).is_some(), "the untampered key imports");
+    assert!(
+        Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&bytes).is_some(),
+        "the untampered key imports"
+    );
 
     // The root is recomputed from the seeds on import, so a root that does
     // not match the seeds beside it is rejected. A trusted root is an input
@@ -632,7 +659,7 @@ fn import_rejects_a_tampered_root() {
         let mut tampered = bytes;
         tampered[offset] ^= 0x01;
         assert!(
-            Keys::import(&tampered).is_none(),
+            Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&tampered).is_none(),
             "a flipped root byte at {offset} must be rejected"
         );
     }
@@ -653,13 +680,13 @@ fn import_rejects_a_spliced_field() {
     // combination is wrong, which is exactly what a structural parse would
     // wave through.
     spliced[PK_SEED_AT..PK_SEED_AT + 32].copy_from_slice(&other[PK_SEED_AT..PK_SEED_AT + 32]);
-    assert!(Keys::import(&spliced).is_none());
+    assert!(Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&spliced).is_none());
 
     // The same at the stateless half: its private seeds swapped for another
     // key's, leaving its public root in place.
     let mut spliced_stateless = upstream().keys.to_bytes();
     spliced_stateless[136..136 + 64].copy_from_slice(&other[136..136 + 64]);
-    assert!(Keys::import(&spliced_stateless).is_none());
+    assert!(Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&spliced_stateless).is_none());
 }
 
 #[test]
@@ -668,16 +695,35 @@ fn import_rejects_out_of_range_counters() {
 
     // Below the first leaf. The counter is 1-based upstream, so 0 is not a
     // fresh key -- it is a value no signer can produce.
-    assert!(Keys::import(&with_counter(&bytes, 0)).is_none());
+    assert!(
+        Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&with_counter(&bytes, 0)).is_none()
+    );
 
     // One past the exhausted position, which would claim a leaf the tree does
     // not have.
-    assert!(Keys::import(&with_counter(&bytes, UPSTREAM_MAX + 2)).is_none());
-    assert!(Keys::import(&with_counter(&bytes, u32::MAX)).is_none());
+    assert!(
+        Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&with_counter(
+            &bytes,
+            UPSTREAM_MAX + 2
+        ))
+        .is_none()
+    );
+    assert!(
+        Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&with_counter(&bytes, u32::MAX))
+            .is_none()
+    );
 
     // The two ends of the accepted range still import.
-    assert!(Keys::import(&with_counter(&bytes, 1)).is_some());
-    assert!(Keys::import(&with_counter(&bytes, UPSTREAM_MAX + 1)).is_some());
+    assert!(
+        Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&with_counter(&bytes, 1)).is_some()
+    );
+    assert!(
+        Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(&with_counter(
+            &bytes,
+            UPSTREAM_MAX + 1
+        ))
+        .is_some()
+    );
 }
 
 // ---------------------------------------------------------------------
