@@ -400,8 +400,8 @@ mod tests {
     use super::*;
     use crate::component::ClassicalScheme;
 
-    const H1: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
-    const H3: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";
+    const ED_ML44: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
+    const SR_ML44: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";
 
     fn keypair(seed: u8) -> ([u8; 64], [u8; 32]) {
         let (mut sk, mut pk) = ([0u8; 64], [0u8; 32]);
@@ -413,8 +413,8 @@ mod tests {
     fn round_trip_verifies() {
         let (sk, pk) = keypair(1);
         let mut sig = [0u8; 64];
-        Sr25519::sign_deterministic(&sk, b"msg", b"nonce", H3, &mut sig).expect("sign");
-        assert!(bool::from(Sr25519::verify(&pk, b"msg", H3, &sig)));
+        Sr25519::sign_deterministic(&sk, b"msg", b"nonce", SR_ML44, &mut sig).expect("sign");
+        assert!(bool::from(Sr25519::verify(&pk, b"msg", SR_ML44, &sig)));
     }
 
     #[test]
@@ -423,16 +423,16 @@ mod tests {
         // separation layer below M-prime, per beads pqhs-8ep.9.
         let (sk, pk) = keypair(2);
         let mut sig = [0u8; 64];
-        Sr25519::sign_deterministic(&sk, b"msg", b"nonce", H3, &mut sig).expect("sign");
-        assert!(!bool::from(Sr25519::verify(&pk, b"msg", H1, &sig)));
+        Sr25519::sign_deterministic(&sk, b"msg", b"nonce", SR_ML44, &mut sig).expect("sign");
+        assert!(!bool::from(Sr25519::verify(&pk, b"msg", ED_ML44, &sig)));
     }
 
     #[test]
     fn deterministic_signing_is_canonical() {
         let (sk, _) = keypair(3);
         let (mut a, mut b) = ([0u8; 64], [0u8; 64]);
-        Sr25519::sign_deterministic(&sk, b"m", b"n", H3, &mut a).expect("sign");
-        Sr25519::sign_deterministic(&sk, b"m", b"n", H3, &mut b).expect("sign");
+        Sr25519::sign_deterministic(&sk, b"m", b"n", SR_ML44, &mut a).expect("sign");
+        Sr25519::sign_deterministic(&sk, b"m", b"n", SR_ML44, &mut b).expect("sign");
         assert_eq!(a, b);
     }
 
@@ -450,8 +450,8 @@ mod tests {
         let mut left = [0u8; Sr25519::SIGNATURE_LEN];
         let mut right = [0u8; Sr25519::SIGNATURE_LEN];
 
-        Sr25519::sign_deterministic(&sk, b"c", b"ab", H3, &mut left).expect("sign left");
-        Sr25519::sign_deterministic(&sk, b"bc", b"a", H3, &mut right).expect("sign right");
+        Sr25519::sign_deterministic(&sk, b"c", b"ab", SR_ML44, &mut left).expect("sign left");
+        Sr25519::sign_deterministic(&sk, b"bc", b"a", SR_ML44, &mut right).expect("sign right");
 
         assert_ne!(
             left.as_slice(),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Delta-length composite encoding for the FN-DSA-512 hybrids H2 and H4.
+//! Delta-length composite encoding for the FN-DSA-512 hybrids EdFn512 and SrFn512.
 //!
 //! ```text
 //! ClassicalSig(64) || DeltaLen(1) || PqSig(min_len + DeltaLen)
@@ -8,7 +8,7 @@
 //! `DeltaLen` encodes `pq_sig.len() - min_len` in a single byte, so the
 //! post-quantum component's signature length must fall within
 //! `min_len..=min_len + 255`, per specification section 6. `min_len` is
-//! `MIN_FALCON512_SIG_LEN` for H2 and H4; this module stays independent of
+//! `MIN_FALCON512_SIG_LEN` for EdFn512 and SrFn512; this module stays independent of
 //! Falcon and takes it as a parameter, mirroring how `encoding_path` takes
 //! its component lengths as a [`PathProfile`](crate::encoding_path::PathProfile)
 //! rather than hard-coding them.

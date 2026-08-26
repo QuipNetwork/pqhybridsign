@@ -36,7 +36,7 @@
 //! at all, yet accounted for 3259 s under `profile-128s-q18` against 0.39 s
 //! under `profile-256s`. Per-operation numbers settle it.
 use pqhybridsign::component::PqStatefulScheme;
-use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5};
+use pqhybridsign::shrincs::{keygen, EdSh, ShrincsScheme};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_test_support::MemoryBudget;
 use std::time::Instant;
@@ -70,22 +70,23 @@ fn time_the_costly_operations() {
     let profile = <ShrincsScheme as PqStatefulScheme>::NAME;
 
     let t = Instant::now();
-    let (mut sk, pk) = keygen::<H5>(&SEED, MAX_SIGNATURES).expect("keygen");
+    let (mut sk, pk) = keygen::<EdSh>(&SEED, MAX_SIGNATURES).expect("keygen");
     let keygen_secs = t.elapsed().as_secs_f64();
 
     let mut journal = CountingJournal(0, None);
     adopt_key(&mut journal, sk.key_identity()).expect("adopt");
     let t = Instant::now();
-    let stateful = H5::sign_stateful(&mut sk, &mut journal, b"message", b"ctx").expect("stateful");
+    let stateful =
+        EdSh::sign_stateful(&mut sk, &mut journal, b"message", b"ctx").expect("stateful");
     let stateful_secs = t.elapsed().as_secs_f64();
 
     let t = Instant::now();
-    let stateless = H5::sign_stateless(&sk, &mut MemoryBudget::default(), b"message", b"ctx")
+    let stateless = EdSh::sign_stateless(&sk, &mut MemoryBudget::default(), b"message", b"ctx")
         .expect("stateless");
     let stateless_secs = t.elapsed().as_secs_f64();
 
     let t = Instant::now();
-    let ok = H5::verify_stateful(&pk, b"message", b"ctx", &stateful);
+    let ok = EdSh::verify_stateful(&pk, b"message", b"ctx", &stateful);
     let verify_secs = t.elapsed().as_secs_f64();
     assert!(ok, "the stateful signature must verify");
 

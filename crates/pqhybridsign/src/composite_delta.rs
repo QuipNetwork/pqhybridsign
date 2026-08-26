@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Composite signing, verification and keygen for any [`DeltaSuite`] (H2,
-//! H4).
+//! Composite signing, verification and keygen for any [`DeltaSuite`] (EdFn512,
+//! SrFn512).
 //!
 //! [`crate::composite::sign`], [`crate::composite::sign_deterministic`] and
 //! [`crate::composite::verify`] assume a suite's wire signature is
@@ -12,7 +12,7 @@
 //! parallel to it for [`StatefulSuite`](crate::suite::StatefulSuite) -- supplies
 //! the delta-length-aware sign/verify/keygen triple over any `S:
 //! DeltaSuite`, without perturbing `composite` or the fixed-offset
-//! functions H1 and H3 already use.
+//! functions EdMl44 and SrMl44 already use.
 //!
 //! `sign` and `sign_deterministic` write directly into the caller's
 //! `sig_out`, slicing it into the classical, delta and post-quantum
@@ -121,8 +121,8 @@ pub fn sign<S: DeltaSuite>(
 
 /// Deterministic composite signing. See [`crate::composite::sign_deterministic`]
 /// for which components honour `nonce`; FN-DSA-512 does not sign
-/// deterministically by specification, so H2 and H4 always vary their
-/// post-quantum half with `nonce`, unlike ML-DSA-44 under H1/H3.
+/// deterministically by specification, so EdFn512 and SrFn512 always vary their
+/// post-quantum half with `nonce`, unlike ML-DSA-44 under EdMl44/SrMl44.
 ///
 /// # Errors
 ///

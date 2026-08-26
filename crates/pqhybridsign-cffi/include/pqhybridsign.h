@@ -5,6 +5,14 @@
  * result. `cargo test -p pqhybridsign-cffi` fails if this file drifts from
  * the source it was generated from.
  *
+ * Suite codes, as passed in every `uint8_t suite` parameter:
+ *   1  ED-ML-44   ed25519 + ML-DSA-44
+ *   2  ED-FN-512  ed25519 + FN-DSA-512
+ *   3  SR-ML-44   sr25519 + ML-DSA-44
+ *   4  SR-FN-512  sr25519 + FN-DSA-512
+ *   5  ED-SH      ed25519 + SHRINCS   (stateful)
+ *   6  SR-SH      sr25519 + SHRINCS   (stateful)
+ *
  * ===========================================================================
  * The contract this boundary keeps
  * ===========================================================================
@@ -94,9 +102,9 @@
  * that is never freed is never wiped, on top of leaking the memory it
  * occupies.
  *
- * --- H5 and H6 keep their guardrails ---
+ * --- ED-SH and SR-SH keep their guardrails ---
  *
- * H5 and H6 spend a one-time leaf per signature; reusing one is a total
+ * ED-SH and SR-SH spend a one-time leaf per signature; reusing one is a total
  * loss of the key's post-quantum security. This library offers no call
  * shaped like an ordinary stateless sign that can reach either suite:
  * pqhs_sign and pqhs_sign_deterministic reject them with
@@ -183,7 +191,7 @@
 #define PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL 3
 
 /**
- * A path-selected signature (H5/H6) carried an unknown selector. Mirrors
+ * A path-selected signature (ED-SH/SR-SH) carried an unknown selector. Mirrors
  * `AbiError::BadPathSelector`.
  *
  * Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: the `AbiError`
@@ -222,32 +230,32 @@
 #define PQHS_ERR_BAD_ROTATION_KIND 9
 
 /**
- * A delta-length-encoded (H2/H4) signature's length did not fit its field.
+ * A delta-length-encoded (ED-FN-512/SR-FN-512) signature's length did not fit its field.
  * Mirrors `AbiError::DeltaLengthOutOfRange`.
  */
 #define PQHS_ERR_DELTA_LENGTH_OUT_OF_RANGE 10
 
 /**
- * H5/H6 only: the key's one-time leaf budget is spent. Permanent; rotate
+ * ED-SH/SR-SH only: the key's one-time leaf budget is spent. Permanent; rotate
  * the key. Mirrors `AbiError::LeavesExhausted`.
  */
 #define PQHS_ERR_LEAVES_EXHAUSTED 11
 
 /**
- * H5/H6 only: the signature-randomizer grind reached its bound. Mirrors
+ * ED-SH/SR-SH only: the signature-randomizer grind reached its bound. Mirrors
  * `AbiError::GrindAbort`. As with the Rust API, `sk_out` is still written
  * on this error: see [`crate::pqhs_sign_stateful`].
  */
 #define PQHS_ERR_GRIND_ABORT 12
 
 /**
- * H5/H6 only: the caller's journal callback could not durably record the
+ * ED-SH/SR-SH only: the caller's journal callback could not durably record the
  * advancing leaf. No leaf was consumed. Mirrors `AbiError::JournalFailed`.
  */
 #define PQHS_ERR_JOURNAL_FAILED 13
 
 /**
- * H5/H6 only: a transient or internal failure inside the signing
+ * ED-SH/SR-SH only: a transient or internal failure inside the signing
  * primitive. Mirrors `AbiError::SigningFailed`.
  */
 #define PQHS_ERR_SIGNING_FAILED 14
@@ -265,7 +273,7 @@
 #define PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE 16
 
 /**
- * H5/H6 only: the secret key's leaf counter and the leaf journal no longer
+ * ED-SH/SR-SH only: the secret key's leaf counter and the leaf journal no longer
  * agree, so this key can sign no more. Rotate it. Do not repair the
  * counters by hand: that reissues a spent leaf, which destroys the key's
  * security. Distinct from `PQHS_ERR_SIGNING_FAILED`, which may be worth
@@ -274,7 +282,7 @@
 #define PQHS_ERR_COUNTERS_DIVERGED 17
 
 /**
- * H5/H6 only: the journal does not belong to this key. Its `bound_key`
+ * ED-SH/SR-SH only: the journal does not belong to this key. Its `bound_key`
  * callback reported no binding at all, or a binding to a different key.
  * Nothing was spent and the key is intact -- unlike
  * `PQHS_ERR_COUNTERS_DIVERGED`, this is not a reason to rotate. Reopen the
@@ -285,7 +293,7 @@
 #define PQHS_ERR_JOURNAL_KEY_MISMATCH 18
 
 /**
- * H5/H6 only: the few-time stateless budget for this key's stateless
+ * ED-SH/SR-SH only: the few-time stateless budget for this key's stateless
  * material is spent (specification section 21). Nothing was spent on the
  * refused attempt.
  *
@@ -299,7 +307,7 @@
 #define PQHS_ERR_STATELESS_BUDGET_EXHAUSTED 19
 
 /**
- * H5/H6 only: the caller's [`crate::PqhsStatelessBudget`] reported that it
+ * ED-SH/SR-SH only: the caller's [`crate::PqhsStatelessBudget`] reported that it
  * could not durably record the spend, so no stateless signature was
  * released. The stateless counterpart of `PQHS_ERR_JOURNAL_FAILED`, and
  * transient on the same terms: nothing was recorded, so the same unit of
@@ -436,10 +444,10 @@
 typedef struct PqhsStatefulKey PqhsStatefulKey;
 
 /**
- * A SHRINCS key dedicated to VRF evaluation under H5 or H6, held across
+ * A SHRINCS key dedicated to VRF evaluation under ED-SH or SR-SH, held across
  * calls.
  *
- * H5 and H6 evaluate the VRF through their post-quantum half's few-time
+ * ED-SH and SR-SH evaluate the VRF through their post-quantum half's few-time
  * stateless path, which draws on a budget shared with rotation and
  * recovery. The key that carries an identity's rotation and recovery
  * authority must not also spend that budget on VRF evaluations, so this
@@ -654,7 +662,7 @@ extern "C" {
 const char *pqhs_error_message(int code);
 
 /**
- * Derive a stateless (H1-H4) keypair for `suite` from a 32-byte master
+ * Derive a stateless (ED-ML-44 through SR-FN-512) keypair for `suite` from a 32-byte master
  * `seed`.
  *
  * `sk_out` and `pk_out` must be exactly
@@ -663,7 +671,7 @@ const char *pqhs_error_message(int code);
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH or SR-SH: use
  * [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
  * instead. `PQHS_ERR_BAD_LENGTH` if `seed` is not 32 bytes, or `sk_out`/
  * `pk_out` are not exactly the suite's key lengths.
@@ -687,7 +695,7 @@ int pqhs_keygen_from_seed(uint8_t suite,
                           size_t pk_out_len);
 
 /**
- * Derive a stateful (H5, H6) keypair for `suite` from a 32-byte master
+ * Derive a stateful (ED-SH, SR-SH) keypair for `suite` from a 32-byte master
  * `seed`, giving it a budget of `max_stateful_signatures` one-time leaves.
  *
  * `sk_out` and `pk_out` must be exactly
@@ -700,7 +708,7 @@ int pqhs_keygen_from_seed(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: use
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: use
  * [`pqhs_keygen_from_seed`](crate::pqhs_keygen_from_seed) instead.
  * `PQHS_ERR_BAD_LENGTH` if `seed` is not 32 bytes, or `sk_out`/`pk_out` are
  * not exactly the suite's key lengths. `PQHS_ERR_COMPONENT_FAILURE` if
@@ -883,7 +891,7 @@ int pqhs_derive_hard_junction_path(const uint8_t *parent,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH or SR-SH: use
  * [`pqhs_sign_stateful`](crate::pqhs_sign_stateful) or
  * [`pqhs_sign_stateless`](crate::pqhs_sign_stateless) instead.
  * `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if `sig_out` is smaller than
@@ -988,7 +996,7 @@ int pqhs_verify(uint8_t suite,
 /**
  * Write the public key length for `suite`, in bytes, into `*out`.
  *
- * For H5 and H6 this is the verify-key form: the form every function in
+ * For ED-SH and SR-SH this is the verify-key form: the form every function in
  * this crate that reads or writes a public key uses.
  *
  * # Errors
@@ -1005,7 +1013,7 @@ int pqhs_public_key_len(uint8_t suite, size_t *out);
 /**
  * Write the secret key length for `suite`, in bytes, into `*out`.
  *
- * For H5 and H6 this is the exported stateful key blob length -- the
+ * For ED-SH and SR-SH this is the exported stateful key blob length -- the
  * composite secret key plus the leaf counter and cached verify key -- not
  * the raw component secret key length. See
  * [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed).
@@ -1023,7 +1031,7 @@ int pqhs_secret_key_len(uint8_t suite, size_t *out);
 /**
  * Write the maximum signature length for `suite`, in bytes, into `*out`.
  *
- * H2, H4, H5 and H6 produce variable-length signatures; this is the
+ * ED-FN-512, SR-FN-512, ED-SH and SR-SH produce variable-length signatures; this is the
  * maximum any signature under `suite` can reach, not the length any one
  * signature actually writes. Every signing function in this crate reports
  * the actual length written separately.
@@ -1046,11 +1054,11 @@ int pqhs_signature_len(uint8_t suite, size_t *out);
  * [`pqhs_verify_with_stored_public_key_stateless`](crate::pqhs_verify_with_stored_public_key_stateless)
  * take as `stored_public_key`.
  *
- * Total over `1..=6`. For H5 and H6 this is the classical public key and a
+ * Total over `1..=6`. For ED-SH and SR-SH this is the classical public key and a
  * 32-byte commitment to the post-quantum verify key, smaller than
  * [`pqhs_public_key_len`] reports for the same suite because the verify
- * key itself is supplied per signature rather than stored. For H1 through
- * H4 the stored and verify forms are the same bytes, so this equals
+ * key itself is supplied per signature rather than stored. For ED-ML-44 through
+ * SR-FN-512 the stored and verify forms are the same bytes, so this equals
  * [`pqhs_public_key_len`].
  *
  * # Errors
@@ -1114,7 +1122,7 @@ int pqhs_adopt_key(const PqhsLeafJournal *journal, const uint8_t *key, size_t ke
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4, which have no journal
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512, which have no journal
  * and so no identity. `PQHS_ERR_BAD_LENGTH` if `pk` is not the suite's
  * public key length or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
  * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is null.
@@ -1143,7 +1151,7 @@ int pqhs_key_identity(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4. `PQHS_ERR_BAD_LENGTH` if
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512. `PQHS_ERR_BAD_LENGTH` if
  * `sk` is not [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for
  * `suite` or `out_len` is not [`PQHS_KEY_IDENTITY_LEN`].
  * `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
@@ -1204,7 +1212,7 @@ int pqhs_key_identity_from_secret_key(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: use
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: use
  * [`pqhs_sign`](crate::pqhs_sign) or
  * [`pqhs_sign_deterministic`](crate::pqhs_sign_deterministic) instead.
  * `PQHS_ERR_BAD_LENGTH` if `sk` or `sk_out` is not exactly
@@ -1260,7 +1268,7 @@ int pqhs_sign_stateful(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4. `PQHS_ERR_BAD_LENGTH`
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512. `PQHS_ERR_BAD_LENGTH`
  * if `sk` is not exactly
  * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
  * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
@@ -1301,22 +1309,22 @@ int pqhs_sign_stateless(uint8_t suite,
  * verify-form public key `pk`.
  *
  * [`pqhs_verify`](crate::sign::pqhs_verify) is the total dispatcher across
- * all six suites and, for H5 and H6, behaves exactly as this function
+ * all six suites and, for ED-SH and SR-SH, behaves exactly as this function
  * does; call this one directly only where the suite is already known to be
- * H5 or H6. Specification section 20.2 requires the behaviour both
+ * ED-SH or SR-SH. Specification section 20.2 requires the behaviour both
  * enforce: the primary stateless path is reserved for rotation and
  * recovery, and a verifier for an ordinary application message MUST NOT
  * accept it. The wire `PathSelector` is checked, and a signature naming
  * the stateless path is refused, before either component signature is
- * checked. A caller that genuinely needs to verify a stateless-path H5 or
- * H6 signature calls [`pqhs_verify_stateless`] instead.
+ * checked. A caller that genuinely needs to verify a stateless-path ED-SH or
+ * SR-SH signature calls [`pqhs_verify_stateless`] instead.
  *
  * Writes `true` or `false` into `*valid_out` and returns `PQHS_OK` in both
  * cases, on the same terms as [`pqhs_verify`](crate::sign::pqhs_verify).
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4; use
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512; use
  * [`pqhs_verify`](crate::sign::pqhs_verify) instead.
  * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
  * `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero length is
@@ -1377,7 +1385,7 @@ int pqhs_verify_stateless(uint8_t suite,
  * signer-supplied verify key that must be the one `stored_public_key`
  * commits to.
  *
- * This is the entry point for the deployment H5 and H6 are built for: the
+ * This is the entry point for the deployment ED-SH and SR-SH are built for: the
  * verifier stores the small form (`ClassicalPK || commitment`,
  * [`pqhs_stored_public_key_len`](crate::pqhs_stored_public_key_len) bytes
  * -- 64 for both suites) and the signer supplies the full 164-byte
@@ -1403,7 +1411,7 @@ int pqhs_verify_stateless(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: their public key is a
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: their public key is a
  * single form with no commitment in it, so there is nothing for this
  * entry point to bind; use [`pqhs_verify`](crate::pqhs_verify).
  * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
@@ -1480,7 +1488,7 @@ int pqhs_verify_with_stored_public_key_stateless(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4.
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512.
  * `PQHS_ERR_BAD_LENGTH` if `sk` is not
  * [`pqhs_secret_key_len`](crate::pqhs_secret_key_len) bytes for `suite`.
  * `PQHS_ERR_COMPONENT_FAILURE` if the blob does not import.
@@ -1667,8 +1675,8 @@ int pqhs_stateful_key_sign_stateless(const PqhsStatefulKey *key,
 /**
  * Write the hybrid VRF proof length for `suite`, in bytes, into `*out`.
  *
- * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
- * delta-length binding can occupy. For H5 and H6 this is exact.
+ * For ED-ML-44 and SR-ML-44 this is exact. For ED-FN-512 and SR-FN-512 this is the maximum a
+ * delta-length binding can occupy. For ED-SH and SR-SH this is exact.
  *
  * # Errors
  *
@@ -1686,7 +1694,7 @@ int pqhs_vrf_proof_len(uint8_t suite, size_t *out);
  * random source. Writes the proof into `proof_out` and the number of bytes
  * written into `*proof_written`.
  *
- * H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
+ * ED-ML-44 through SR-FN-512 only. ED-SH and SR-SH spend one unit of a few-time stateless
  * budget on every evaluation and need a durable store to record it, so
  * they prove through [`pqhs_vrf_prove_stateless`] instead, on the same terms
  * [`crate::pqhs_sign`] refuses them: a call that looks free and is not is
@@ -1694,7 +1702,7 @@ int pqhs_vrf_proof_len(uint8_t suite, size_t *out);
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH or SR-SH: use
  * [`pqhs_vrf_prove_stateless`] instead. `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if
  * `proof_out` is smaller than [`pqhs_vrf_proof_len`] needs for this input.
  * `PQHS_ERR_BAD_LENGTH` if `sk` is not the suite's secret-key length.
@@ -1724,7 +1732,7 @@ int pqhs_vrf_prove(uint8_t suite,
  * Writes the proof into `proof_out` and the number of bytes written into
  * `*proof_written`.
  *
- * H1 through H4 only, on the same terms as [`pqhs_vrf_prove`]: H5 and H6
+ * ED-ML-44 through SR-FN-512 only, on the same terms as [`pqhs_vrf_prove`]: ED-SH and SR-SH
  * spend a few-time budget unit and prove through [`pqhs_vrf_prove_stateless`].
  *
  * # Errors
@@ -1761,9 +1769,9 @@ int pqhs_vrf_prove_deterministic(uint8_t suite,
  *
  * `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
  * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
- * the capacity of the buffer that held it. For H1, H3, H5 and H6 those are
+ * the capacity of the buffer that held it. For ED-ML-44, SR-ML-44, ED-SH and SR-SH those are
  * the same number, because [`crate::pqhs_vrf_proof_len`] is exact for
- * those suites. For H2 and H4, [`crate::pqhs_vrf_proof_len`] reports only a
+ * those suites. For ED-FN-512 and SR-FN-512, [`crate::pqhs_vrf_proof_len`] reports only a
  * maximum, and passing that maximum here instead of `*proof_written`
  * verifies a proof that is not the one produced: this function fails
  * closed on it, the same as any other malformed `proof`, with no error
@@ -1811,7 +1819,7 @@ int pqhs_vrf_verify(uint8_t suite,
  * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
  * the capacity of the buffer that held it, on the same terms as
  * [`pqhs_vrf_verify`]'s `proof_len`. Passing
- * [`crate::pqhs_vrf_proof_len`]'s maximum for H2 or H4 instead derives
+ * [`crate::pqhs_vrf_proof_len`]'s maximum for ED-FN-512 or SR-FN-512 instead derives
  * bytes from the wrong proof.
  *
  * # Errors
@@ -1853,7 +1861,7 @@ int pqhs_vrf_make_bytes(uint8_t suite,
  * [`crate::pqhs_public_key_len`] bytes for `suite`.
  *
  * **This key is not the identity key.** Deriving it under the same master
- * seed as an H5/H6 identity key produces a different key, disjoint from
+ * seed as an ED-SH/SR-SH identity key produces a different key, disjoint from
  * the identity's rotation and recovery authority, by construction of the
  * derivation label. Do not adopt an identity key here: doing so would
  * spend the identity's rotation and recovery budget on VRF evaluations.
@@ -1863,7 +1871,7 @@ int pqhs_vrf_make_bytes(uint8_t suite,
  *
  * # Errors
  *
- * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: they have no stateful
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: they have no stateful
  * half and therefore no dedicated stateless VRF key.
  * `PQHS_ERR_BAD_LENGTH` if `master_len` is not `PQHS_MASTER_SEED_LEN`, or
  * `pk_out_len` is not [`crate::pqhs_public_key_len`] for `suite`.
@@ -1904,7 +1912,7 @@ int pqhs_vrf_key_derive(uint8_t suite,
 void pqhs_vrf_key_free(PqhsVrfKey *key);
 
 /**
- * Evaluate the hybrid VRF under H5 or H6 through `key`, spending one unit
+ * Evaluate the hybrid VRF under ED-SH or SR-SH through `key`, spending one unit
  * of the few-time stateless budget. Writes the proof into `proof_out` and
  * the number of bytes written into `*proof_written`.
  *

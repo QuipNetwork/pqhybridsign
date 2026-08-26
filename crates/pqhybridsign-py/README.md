@@ -1,13 +1,14 @@
 # pqhybridsign (Python)
 
 Python bindings for `pqhybridsign`, a suite of six hybrid classical /
-post-quantum signature schemes (H1 through H6), built on
-[`pyo3`](https://pyo3.rs) over the workspace's type-erased `pqhybridsign-abi`
-crate.
+post-quantum signature schemes (ED-ML-44, ED-FN-512, SR-ML-44, SR-FN-512,
+ED-SH, SR-SH), built on [`pyo3`](https://pyo3.rs) over the workspace's
+type-erased `pqhybridsign-abi` crate.
 
-H1 through H4 are stateless: sign and verify with `bytes` in, `bytes` out.
+ED-ML-44 through SR-FN-512 are stateless: sign and verify with `bytes` in,
+`bytes` out.
 
-H5 and H6 pair a classical scheme with SHRINCS, a stateful hash-based
+ED-SH and SR-SH pair a classical scheme with SHRINCS, a stateful hash-based
 scheme whose post-quantum half spends a one-time leaf per signature.
 Their secret key is `StatefulSecretKey`, not `bytes`: reusing a leaf is a
 total loss of the key's post-quantum security, so `StatefulSecretKey`
@@ -38,9 +39,9 @@ Callers that need the binding to zeroize the secret key on drop must use
 ```python
 import pqhybridsign as phs
 
-sk, pk = phs.keygen_from_seed(phs.Suite.H1, seed)
-sig = phs.sign(phs.Suite.H1, sk, b"message", b"context")
-assert phs.verify(phs.Suite.H1, pk, b"message", b"context", sig)
+sk, pk = phs.keygen_from_seed(phs.Suite.ED_ML_44, seed)
+sig = phs.sign(phs.Suite.ED_ML_44, sk, b"message", b"context")
+assert phs.verify(phs.Suite.ED_ML_44, pk, b"message", b"context", sig)
 ```
 
 Every wheel this crate ships is built against exactly one SHRINCS profile;

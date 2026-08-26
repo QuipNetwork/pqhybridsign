@@ -102,7 +102,7 @@ const VRF_STATELESS_INFO_PREFIX: &[u8] = b"vrf-stateless/";
 ///
 /// # What this is for
 ///
-/// H5 and H6 bind their hybrid VRF through the SHRINCS **stateless** path
+/// EdSh and SrSh bind their hybrid VRF through the SHRINCS **stateless** path
 /// (`vrf::sign_stateless`, behind the `vrf` feature -- named here rather
 /// than linked because this module compiles whether or not that feature is
 /// on, and rustdoc cannot resolve a link into a module that is not there),
@@ -193,7 +193,7 @@ pub fn derive_stateless_vrf_seed(master: &[u8; 32], label: &[u8]) -> Result<[u8;
 ///
 /// # The re-keygen hazard this inherits from section 9
 ///
-/// A hard-derived child for a stateful suite (H5, H6) is a **fresh SHRINCS
+/// A hard-derived child for a stateful suite (EdSh, SrSh) is a **fresh SHRINCS
 /// tree that starts at leaf 1**. Derivation is a deterministic function of
 /// `(parent seed, chain code)`: deriving "the same child" a second time --
 /// on a second host that also holds the parent seed, or by re-running
@@ -264,8 +264,8 @@ pub fn derive_hard_junction_path(
 mod tests {
     use super::*;
 
-    const H1: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
-    const H3: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";
+    const ED_ML44: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
+    const SR_ML44: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";
 
     fn seeds(master: &[u8; 32], label: &[u8]) -> ([u8; 32], [u8; 32]) {
         let (mut c, mut p) = ([0u8; 32], [0u8; 32]);
@@ -275,31 +275,31 @@ mod tests {
 
     #[test]
     fn derivation_is_deterministic() {
-        assert_eq!(seeds(&[9u8; 32], H1), seeds(&[9u8; 32], H1));
+        assert_eq!(seeds(&[9u8; 32], ED_ML44), seeds(&[9u8; 32], ED_ML44));
     }
 
     #[test]
     fn classical_and_pq_seeds_differ() {
-        let (c, p) = seeds(&[9u8; 32], H1);
+        let (c, p) = seeds(&[9u8; 32], ED_ML44);
         assert_ne!(c, p, "info strings must separate the two components");
     }
 
     #[test]
     fn suites_derive_independent_trees() {
         // Specification section 9: without suite separation two suites from
-        // one master seed collide. For H5/H6 that collision means leaf reuse.
-        assert_ne!(seeds(&[9u8; 32], H1), seeds(&[9u8; 32], H3));
+        // one master seed collide. For EdSh/SrSh that collision means leaf reuse.
+        assert_ne!(seeds(&[9u8; 32], ED_ML44), seeds(&[9u8; 32], SR_ML44));
     }
 
     #[test]
     fn different_master_seeds_differ() {
-        assert_ne!(seeds(&[1u8; 32], H1), seeds(&[2u8; 32], H1));
+        assert_ne!(seeds(&[1u8; 32], ED_ML44), seeds(&[2u8; 32], ED_ML44));
     }
 
     #[test]
     fn pq_output_length_is_caller_chosen() {
         let (mut c, mut p) = ([0u8; 32], [0u8; 48]);
-        derive_component_seeds(&[3u8; 32], H1, &mut c, &mut p).expect("48-byte pq seed");
+        derive_component_seeds(&[3u8; 32], ED_ML44, &mut c, &mut p).expect("48-byte pq seed");
         assert!(p.iter().any(|b| *b != 0));
     }
 
@@ -370,7 +370,7 @@ mod tests {
     fn a_junction_child_cannot_collide_with_a_component_seed() {
         let parent = [9u8; 32];
         let child = derive_hard_junction(&parent, &[7u8; 32]).expect("derive");
-        let (classical, pq) = seeds(&parent, H1);
+        let (classical, pq) = seeds(&parent, ED_ML44);
         assert_ne!(child, classical);
         assert_ne!(child, pq);
     }
@@ -388,37 +388,37 @@ mod tests {
         );
     }
 
-    /// H5's registry label, exactly as `hybrid_stateful_suite!` declares it
+    /// EdSh's registry label, exactly as `hybrid_stateful_suite!` declares it
     /// for the `shrincs-256s` classical/ed25519 suite: 30 ASCII bytes plus the
     /// trailing null the registry convention requires.
-    const H5_LABEL: &[u8] = b"hybrid-ed25519-shrincs-256s-v1\0";
-    /// H6's registry label, the sr25519 counterpart of [`H5_LABEL`].
-    const H6_LABEL: &[u8] = b"hybrid-sr25519-shrincs-256s-v1\0";
+    const ED_SH_LABEL: &[u8] = b"hybrid-ed25519-shrincs-256s-v1\0";
+    /// SrSh's registry label, the sr25519 counterpart of [`ED_SH_LABEL`].
+    const SR_SH_LABEL: &[u8] = b"hybrid-sr25519-shrincs-256s-v1\0";
 
     #[test]
     fn stateless_vrf_seed_derivation_is_deterministic() {
         assert_eq!(
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive")
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive")
         );
     }
 
     #[test]
     fn different_master_seeds_give_different_stateless_vrf_seeds() {
         assert_ne!(
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
-            derive_stateless_vrf_seed(&[1u8; 32], H5_LABEL).expect("derive")
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[1u8; 32], ED_SH_LABEL).expect("derive")
         );
     }
 
-    /// H5 and H6 must derive independent dedicated stateless keys from one
+    /// EdSh and SrSh must derive independent dedicated stateless keys from one
     /// master seed, the same separation `suites_derive_independent_trees`
     /// checks for the ordinary component seeds.
     #[test]
     fn different_suite_labels_give_different_stateless_vrf_seeds() {
         assert_ne!(
-            derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive"),
-            derive_stateless_vrf_seed(&[9u8; 32], H6_LABEL).expect("derive")
+            derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive"),
+            derive_stateless_vrf_seed(&[9u8; 32], SR_SH_LABEL).expect("derive")
         );
     }
 
@@ -429,8 +429,8 @@ mod tests {
     #[test]
     fn a_stateless_vrf_seed_cannot_collide_with_a_component_seed_or_a_junction_child() {
         let parent = [9u8; 32];
-        let vrf_seed = derive_stateless_vrf_seed(&parent, H5_LABEL).expect("derive");
-        let (classical, pq) = seeds(&parent, H5_LABEL);
+        let vrf_seed = derive_stateless_vrf_seed(&parent, ED_SH_LABEL).expect("derive");
+        let (classical, pq) = seeds(&parent, ED_SH_LABEL);
         let junction_child = derive_hard_junction(&parent, &[7u8; 32]).expect("derive");
 
         assert_ne!(vrf_seed, classical);
@@ -447,11 +447,11 @@ mod tests {
     #[test]
     fn the_stateless_vrf_seed_layout_is_pinned() {
         assert_eq!(
-            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], H5_LABEL).expect("derive")),
+            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], ED_SH_LABEL).expect("derive")),
             "f2b6ec75aef05751bf39adaa9edd24f4916b52ff068533ed4f767486bdade6a8"
         );
         assert_eq!(
-            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], H6_LABEL).expect("derive")),
+            hex::encode(derive_stateless_vrf_seed(&[9u8; 32], SR_SH_LABEL).expect("derive")),
             "45639b3bed9d951c52afcb2df79dc1f7ad0ea571e304baa1da51d17b4f7abdd7"
         );
         let mut sequential = [0u8; 32];
@@ -459,7 +459,7 @@ mod tests {
             *b = i as u8;
         }
         assert_eq!(
-            hex::encode(derive_stateless_vrf_seed(&sequential, H5_LABEL).expect("derive")),
+            hex::encode(derive_stateless_vrf_seed(&sequential, ED_SH_LABEL).expect("derive")),
             "29e1268fd5928311c416ab6039a7d87df30c1fab2d8251e5d8c05acabd48f9f2"
         );
     }

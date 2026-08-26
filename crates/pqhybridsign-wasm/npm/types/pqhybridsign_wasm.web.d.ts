@@ -4,8 +4,8 @@
 /**
  * A keypair: a secret key and its matching public key.
  *
- * Returned by both [`keygenFromSeed`](keygen_from_seed) (H1 through H4)
- * and [`keygenStatefulFromSeed`](keygen_stateful_from_seed) (H5 and H6);
+ * Returned by both [`keygenFromSeed`](keygen_from_seed) (ED-ML-44 through SR-FN-512)
+ * and [`keygenStatefulFromSeed`](keygen_stateful_from_seed) (ED-SH and SR-SH);
  * for the stateful suites the secret key is the exported blob, still
  * `secretKeyLen(suite)` bytes.
  *
@@ -95,9 +95,9 @@ export class SignStatefulResult {
  * it may never happen at all. A handle dropped without `free()` cannot
  * be relied on to release its secret key material.
  *
- * # Only H5 and H6
+ * # Only ED-SH and SR-SH
  *
- * H1 through H4 are stateless and have nothing to hold open;
+ * ED-ML-44 through SR-FN-512 are stateless and have nothing to hold open;
  * [`open`](Self::open) rejects them.
  */
 export class StatefulKey {
@@ -131,7 +131,7 @@ export class StatefulKey {
      *
      * # Errors
      *
-     * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if
+     * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if
      * `secret_key` is not `secretKeyLen(suite)` bytes, or if the blob
      * does not import.
      */
@@ -180,8 +180,8 @@ export class StatefulKey {
 }
 
 /**
- * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"`
- * or `"H6"`), held across calls.
+ * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"ED-SH"`
+ * or `"SR-SH"`), held across calls.
  *
  * Returned by
  * [`deriveVrfStatelessKey`](derive_vrf_stateless_key). This key is
@@ -295,7 +295,7 @@ export function deriveHardJunction(parent_master: Uint8Array, chain_code: Uint8A
 export function deriveHardJunctionPath(parent_master: Uint8Array, chain_codes: Array<any>): Uint8Array;
 
 /**
- * Derive a dedicated VRF key for a stateful `suite` (`"H5"` or `"H6"`)
+ * Derive a dedicated VRF key for a stateful `suite` (`"ED-SH"` or `"SR-SH"`)
  * from a 32-byte master seed, disjoint from the identity key
  * (`pqhs-1l6`).
  *
@@ -306,14 +306,14 @@ export function deriveHardJunctionPath(parent_master: Uint8Array, chain_codes: A
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `master` is
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `master` is
  * not exactly 32 bytes, or if derivation fails.
  */
 export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
 
 /**
  * The 32-byte identity of the key `public_key` describes, for a stateful
- * `suite` (`"H5"` or `"H6"`).
+ * `suite` (`"ED-SH"` or `"SR-SH"`).
  *
  * `public_key` is the verify-form public key
  * [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returned. It is
@@ -323,7 +323,7 @@ export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, or if
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, or if
  * `public_key` is not `publicKeyLen(suite)` bytes.
  */
 export function keyIdentity(suite: string, public_key: Uint8Array): Uint8Array;
@@ -339,7 +339,7 @@ export function keyIdentity(suite: string, public_key: Uint8Array): Uint8Array;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `secret_key`
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `secret_key`
  * is not `secretKeyLen(suite)` bytes, or if the blob does not import.
  */
 export function keyIdentityFromSecretKey(suite: string, secret_key: Uint8Array): Uint8Array;
@@ -355,7 +355,7 @@ export function keyIdentityFromSecretKey(suite: string, secret_key: Uint8Array):
 export function keygenFromSeed(suite: string, seed: Uint8Array): KeyPair;
 
 /**
- * Derive a stateful keypair for `suite` (`"H5"` or `"H6"`) from a 32-byte
+ * Derive a stateful keypair for `suite` (`"ED-SH"` or `"SR-SH"`) from a 32-byte
  * master seed, with a budget of `max_stateful_signatures` one-time leaves.
  *
  * Returns a [`KeyPair`] whose `secretKey` is the exported blob
@@ -372,7 +372,7 @@ export function keygenFromSeed(suite: string, seed: Uint8Array): KeyPair;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `seed` is not
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `seed` is not
  * exactly 32 bytes, or if `max_stateful_signatures` is zero or exceeds the
  * component's leaf capacity limit.
  */
@@ -409,7 +409,7 @@ export function profileName(): string;
  * Public key length, in bytes, for `suite`.
  *
  * Total over all six suites, matching `pqhybridsign_abi::public_key_len`
- * and the C and Python bindings. For H5 and H6 this is the verify-key
+ * and the C and Python bindings. For ED-SH and SR-SH this is the verify-key
  * form [`keygenStatefulFromSeed`](keygen_stateful_from_seed) writes,
  * larger than the on-storage commitment form
  * [`storedPublicKeyLen`](stored_public_key_len) reports for the same suite
@@ -418,7 +418,7 @@ export function profileName(): string;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function publicKeyLen(suite: string): number;
 
@@ -426,8 +426,8 @@ export function publicKeyLen(suite: string): number;
  * Secret key length, in bytes, for `suite`.
  *
  * Total over all six suites, matching `pqhybridsign_abi::secret_key_len`
- * and the C and Python bindings. For H1 through H4 this is the raw
- * composite secret key. For H5 and H6 it is the length of the exported
+ * and the C and Python bindings. For ED-ML-44 through SR-FN-512 this is the raw
+ * composite secret key. For ED-SH and SR-SH it is the length of the exported
  * blob [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returns and
  * [`signStateful`](sign_stateful) reads and hands forward: the composite
  * secret key plus the leaf counter and the cached verify key, because a
@@ -436,7 +436,7 @@ export function publicKeyLen(suite: string): number;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function secretKeyLen(suite: string): number;
 
@@ -464,7 +464,7 @@ export function sign(suite: string, secret_key: Uint8Array, msg: Uint8Array, ctx
 export function signDeterministic(suite: string, secret_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, nonce: Uint8Array): Uint8Array;
 
 /**
- * Sign `msg` under `ctx` for a stateful `suite` (`"H5"` or `"H6"`), spending
+ * Sign `msg` under `ctx` for a stateful `suite` (`"ED-SH"` or `"SR-SH"`), spending
  * one leaf recorded through `journal`.
  *
  * `secret_key` is the exported blob from
@@ -483,7 +483,7 @@ export function signDeterministic(suite: string, secret_key: Uint8Array, msg: Ui
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `secret_key`
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `secret_key`
  * is not `secretKeyLen(suite)` bytes, if the key's leaf budget is spent
  * (`LeavesExhausted`), if `journal` is not this key's journal
  * (`JournalKeyMismatch`), if the key and journal counters disagree
@@ -499,7 +499,7 @@ export function signStateful(suite: string, secret_key: Uint8Array, journal: any
  * Sign `msg` under `ctx` for a stateful `suite` without spending a leaf,
  * spending one unit of the few-time stateless budget instead.
  *
- * Available because H5 and H6 pair their stateful fast path with a stateless
+ * Available because ED-SH and SR-SH pair their stateful fast path with a stateless
  * few-time path (SHRINCS specification section 21). No leaf is spent and
  * `secret_key` is not advanced, so there is nothing to persist afterward --
  * but the stateless path has a hard bound of its own, `2^20` signatures
@@ -512,7 +512,7 @@ export function signStateful(suite: string, secret_key: Uint8Array, journal: any
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `secret_key`
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `secret_key`
  * is not `secretKeyLen(suite)` bytes, if the stateless budget is spent
  * (`StatelessBudgetExhausted`), or if the store could not durably record
  * (`BudgetStoreFailed`). Any exception a budget method itself threw is
@@ -521,7 +521,7 @@ export function signStateful(suite: string, secret_key: Uint8Array, journal: any
 export function signStateless(suite: string, secret_key: Uint8Array, budget: any, msg: Uint8Array, ctx: Uint8Array): Uint8Array;
 
 /**
- * Maximum signature length, in bytes, for `suite`. H2, H4, H5 and H6 are
+ * Maximum signature length, in bytes, for `suite`. ED-FN-512, SR-FN-512, ED-SH and SR-SH are
  * variable-length; see [`pqhybridsign_abi::signature_len`] for why each
  * is. Size the buffer you expect a signature to fit in with this value,
  * not the length of any one signature you have already seen.
@@ -531,7 +531,7 @@ export function signStateless(suite: string, secret_key: Uint8Array, budget: any
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function signatureLen(suite: string): number;
 
@@ -545,11 +545,11 @@ export function signatureLen(suite: string): number;
  *
  * Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
  * the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
- * for H5 and H6 this is the classical public key and a 32-byte commitment
+ * for ED-SH and SR-SH this is the classical public key and a 32-byte commitment
  * to the post-quantum verify key, smaller than
  * [`publicKeyLen`](public_key_len) reports for the same suite because the
- * verify key itself is supplied per signature rather than stored. For H1
- * through H4 the stored and verify forms are the same bytes, so this
+ * verify key itself is supplied per signature rather than stored. For ED-ML-44
+ * through SR-FN-512 the stored and verify forms are the same bytes, so this
  * equals [`publicKeyLen`](public_key_len). Deliberately routed through
  * `any_suite` rather than `stateful_suite`: this is a pure length
  * accessor over public data, not a signing or verification call, so it has
@@ -558,15 +558,15 @@ export function signatureLen(suite: string): number;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function storedPublicKeyLen(suite: string): number;
 
 /**
  * Verify `sig` over `msg` under `ctx` for `suite`, against `public_key`.
  *
- * Total over all six suites, matching `pqhybridsign_abi::verify`. For H5
- * and H6, `public_key` is the whole verify-form public key
+ * Total over all six suites, matching `pqhybridsign_abi::verify`. For ED-SH
+ * and SR-SH, `public_key` is the whole verify-form public key
  * [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returns, and no
  * commitment is checked because there is nothing to check one against; use
  * this only where that verify key came from a trusted place, and
@@ -574,7 +574,7 @@ export function storedPublicKeyLen(suite: string): number;
  * -- which binds a signer-supplied bundle to a stored commitment --
  * otherwise.
  *
- * For H5 and H6 this accepts only a signature produced by
+ * For ED-SH and SR-SH this accepts only a signature produced by
  * [`signStateful`](sign_stateful), the same behaviour
  * [`verifyStateful`](verify_stateful) gives directly: specification section
  * 20.2 reserves the primary stateless path for rotation and recovery, and
@@ -588,19 +588,19 @@ export function storedPublicKeyLen(suite: string): number;
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function verify(suite: string, public_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
 
 /**
- * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
- * `"H6"`), accepting only a signature produced by
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+ * `"SR-SH"`), accepting only a signature produced by
  * [`signStateful`](sign_stateful), against one whole verify-form
  * `public_key`.
  *
- * [`verify`] is the total dispatcher across all six suites and, for H5 and
- * H6, behaves exactly as this function does; call this one directly only
- * where the suite is already known to be H5 or H6. A signature whose wire
+ * [`verify`] is the total dispatcher across all six suites and, for ED-SH and
+ * SR-SH, behaves exactly as this function does; call this one directly only
+ * where the suite is already known to be ED-SH or SR-SH. A signature whose wire
  * `PathSelector` names the stateless path is refused before either
  * component signature is checked. Call
  * [`verifyStateless`](verify_stateless) for a message deliberately signed
@@ -611,13 +611,13 @@ export function verify(suite: string, public_key: Uint8Array, msg: Uint8Array, c
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`.
  */
 export function verifyStateful(suite: string, public_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
 
 /**
- * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
- * `"H6"`), accepting only a signature produced by
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+ * `"SR-SH"`), accepting only a signature produced by
  * [`signStateless`](sign_stateless), against one whole verify-form
  * `public_key`.
  *
@@ -633,12 +633,12 @@ export function verifyStateful(suite: string, public_key: Uint8Array, msg: Uint8
 export function verifyStateless(suite: string, public_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
 
 /**
- * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
- * `"H6"`), accepting only a signature produced by
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+ * `"SR-SH"`), accepting only a signature produced by
  * [`signStateful`](sign_stateful), against a signer-supplied verify key
  * that must be the one `stored_public_key` commits to.
  *
- * This is the entry point the H5/H6 deployment is built for: the
+ * This is the entry point the ED-SH/SR-SH deployment is built for: the
  * verifier stores the small form (`ClassicalPK || commitment`,
  * [`storedPublicKeyLen`](stored_public_key_len) bytes -- 64 for both
  * suites) and the signer supplies the full 164-byte commitment bundle
@@ -667,13 +667,13 @@ export function verifyStateless(suite: string, public_key: Uint8Array, msg: Uint
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+ * A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`.
  */
 export function verifyWithStoredPublicKeyStateful(suite: string, stored_public_key: Uint8Array, pq_verify_key: Uint8Array, msg: Uint8Array, ctx: Uint8Array, sig: Uint8Array): boolean;
 
 /**
- * Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
- * `"H6"`), accepting only a signature produced by
+ * Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+ * `"SR-SH"`), accepting only a signature produced by
  * [`signStateless`](sign_stateless), against a signer-supplied verify key
  * that must be the one `stored_public_key` commits to.
  *
@@ -704,7 +704,7 @@ export function verifyWithStoredPublicKeyStateless(suite: string, stored_public_
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`, if
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`, if
  * `proof` is shorter than the proof header or `publicKey` shorter than
  * the classical public key, or if `publicKey` or the pre-output does not
  * decode.
@@ -714,25 +714,25 @@ export function vrfMakeBytes(suite: string, public_key: Uint8Array, input: Uint8
 /**
  * Length in bytes of a hybrid VRF proof for `suite`.
  *
- * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
- * delta-length binding can occupy. For H5 and H6 this is exact.
+ * For ED-ML-44 and SR-ML-44 this is exact. For ED-FN-512 and SR-FN-512 this is the maximum a
+ * delta-length binding can occupy. For ED-SH and SR-SH this is exact.
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function vrfProofLen(suite: string): number;
 
 /**
  * Evaluate the hybrid VRF for a stateless suite. Returns the proof.
  *
- * H1 through H4 only; see the section documentation above for why H5 and
- * H6 have their own entry point.
+ * ED-ML-44 through SR-FN-512 only; see the section documentation above for why ED-SH and
+ * SR-SH have their own entry point.
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H4"`, if
- * `suite` is `"H5"` or `"H6"` (naming `deriveVrfStatelessKey` as the entry
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-FN-512"`, if
+ * `suite` is `"ED-SH"` or `"SR-SH"` (naming `deriveVrfStatelessKey` as the entry
  * point to use instead), if `secretKey` is not the suite's secret-key
  * length, or if either component rejects its key.
  */
@@ -740,7 +740,7 @@ export function vrfProve(suite: string, secret_key: Uint8Array, input: Uint8Arra
 
 /**
  * Evaluate the hybrid VRF for a stateless suite with a reproducible
- * classical proof. H1 through H4 only, on the same terms as
+ * classical proof. ED-ML-44 through SR-FN-512 only, on the same terms as
  * [`vrfProve`](vrf_prove).
  *
  * # Errors
@@ -758,7 +758,7 @@ export function vrfProveDeterministic(suite: string, secret_key: Uint8Array, inp
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+ * A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
  */
 export function vrfVerify(suite: string, public_key: Uint8Array, input: Uint8Array, proof: Uint8Array): boolean;
 

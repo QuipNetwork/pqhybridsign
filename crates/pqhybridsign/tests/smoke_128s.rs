@@ -20,7 +20,7 @@
         unreachable_pub
     )
 )]
-//! Real 128s keygen smoke against the pinned H5 fixture.
+//! Real 128s keygen smoke against the pinned EdSh fixture.
 //!
 //! Sections 2 and 3 of the fixture design removed every live 128s operation
 //! from the ordinary matrix. Other tests verify stored signatures. This file
@@ -67,11 +67,11 @@
 #![cfg(feature = "profile-128s-q18")]
 
 // Shared loader exposes fields for every consumer. This binary only needs the
-// H5 public key and stateful leaf-1 material; the loader allows the unused
+// EdSh public key and stateful leaf-1 material; the loader allows the unused
 // rest.
 mod fixture;
 
-use pqhybridsign::shrincs::{keygen, H5};
+use pqhybridsign::shrincs::{keygen, EdSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -123,28 +123,28 @@ impl LeafJournal for MemoryJournal {
 
 #[test]
 #[ignore = "about 49s of keygen; the smoke-128s-q18 job runs this with --ignored"]
-fn keygen_matches_h5_fixture_and_stateful_leaf_1_is_reproducible() {
-    let f = fixture::h5();
-    let (mut sk, pk) = keygen::<H5>(&[0x50u8; 32], 4).expect("keygen");
+fn keygen_matches_ed_sh_fixture_and_stateful_leaf_1_is_reproducible() {
+    let f = fixture::ed_sh();
+    let (mut sk, pk) = keygen::<EdSh>(&[0x50u8; 32], 4).expect("keygen");
 
     assert_eq!(
         pk.as_ref(),
         f.public_key.as_slice(),
-        "keygen public key must match the pinned H5 fixture bytes"
+        "keygen public key must match the pinned EdSh fixture bytes"
     );
 
     let mut journal = MemoryJournal::adopted(sk.key_identity());
-    let sig = H5::sign_stateful(&mut sk, &mut journal, &f.stateful_msg, &f.stateful_ctx)
+    let sig = EdSh::sign_stateful(&mut sk, &mut journal, &f.stateful_msg, &f.stateful_ctx)
         .expect("stateful leaf 1");
 
     assert_eq!(
         sig.as_slice(),
         f.stateful_signature.as_slice(),
-        "stateful leaf-1 signature must match the pinned H5 fixture bytes"
+        "stateful leaf-1 signature must match the pinned EdSh fixture bytes"
     );
 
     assert!(
-        H5::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &sig),
+        EdSh::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &sig),
         "stateful leaf-1 signature must verify against the keygen public key"
     );
 }

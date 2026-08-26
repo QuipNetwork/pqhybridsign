@@ -2,7 +2,7 @@
 //! Generic composite signing, verification and keygen for any
 //! [`StatefulSuite`].
 //!
-//! This module is where a stateful hybrid suite (H5, H6, ...) becomes a real
+//! This module is where a stateful hybrid suite (EdSh, SrSh, ...) becomes a real
 //! [`StatefulHybridSignatureScheme`]: a blanket implementation over every
 //! `S: StatefulSuite` at the bottom of this file. A concrete suite crate
 //! only has to declare its labels with [`crate::hybrid_stateful_suite!`] and
@@ -89,7 +89,7 @@ impl<S: StatefulSuite> PublicKey<S> {
     /// itself. Whatever `PqVerifyKey` the caller passes becomes the key the
     /// signature is verified against, so a caller who takes those bytes from
     /// the wire verifies against whichever key the sender chose. For a
-    /// component whose stored form is a commitment -- SHRINCS for H5 and H6
+    /// component whose stored form is a commitment -- SHRINCS for EdSh and SrSh
     /// -- that is the whole of the post-quantum guarantee, and the composite
     /// then reduces to its classical half alone.
     ///
@@ -343,8 +343,8 @@ impl<S: StatefulSuite> Zeroize for SecretKey<S> {
 /// Wipe the key when it goes out of scope.
 ///
 /// `zeroize::Zeroize` generates no destructor, so without this impl every
-/// drop left `classical` -- the 32-byte ed25519 seed for H5, the 64-byte
-/// sr25519 secret for H6 -- in freed heap verbatim. The post-quantum half
+/// drop left `classical` -- the 32-byte ed25519 seed for EdSh, the 64-byte
+/// sr25519 secret for SrSh -- in freed heap verbatim. The post-quantum half
 /// survived only by accident, because the component's own key halves are
 /// `ZeroizeOnDrop` upstream.
 ///

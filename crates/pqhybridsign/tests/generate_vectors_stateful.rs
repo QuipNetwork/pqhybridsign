@@ -33,12 +33,15 @@
 //! Leaves 1, 2 and 4 are recorded; leaf 3 is spent (state must advance
 //! through it to reach leaf 4) but its signature is not checked, so it is
 //! not persisted.
-use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5, H6};
+use pqhybridsign::shrincs::{keygen, EdSh, ShrincsScheme, SrSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+#[path = "profile_id/mod.rs"]
+mod profile_id;
 
 #[derive(Default, Clone)]
 struct MemoryJournal {
@@ -148,6 +151,10 @@ where
         "  \"profile_name\": \"{}\",",
         <S::Pq as PqStatefulScheme>::NAME
     );
+    println!(
+        "  \"profile_id_hex\": \"{}\",",
+        hex::encode(profile_id::PROFILE_ID)
+    );
     println!("  \"max_signatures\": {MAX_SIGNATURES},");
     println!("  \"master_seed_hex\": \"{}\",", hex::encode(master));
     println!(
@@ -194,12 +201,12 @@ where
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
-fn generate_h5() {
-    emit::<H5>("H5", [0x50u8; 32]);
+fn generate_ed_sh() {
+    emit::<EdSh>("ED-SH", [0x50u8; 32]);
 }
 
 #[test]
 #[ignore = "generator, run explicitly with --ignored --nocapture"]
-fn generate_h6() {
-    emit::<H6>("H6", [0x60u8; 32]);
+fn generate_sr_sh() {
+    emit::<SrSh>("SR-SH", [0x60u8; 32]);
 }

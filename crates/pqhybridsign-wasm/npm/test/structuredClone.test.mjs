@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Checks the claim in crates/pqhybridsign-wasm/src/lib.rs's "Why signing H5
-// and H6 from JavaScript is safe" section: structuredClone does not reject a
+// Checks the claim in crates/pqhybridsign-wasm/src/lib.rs's "Why signing ED-SH
+// and SR-SH from JavaScript is safe" section: structuredClone does not reject a
 // wasm-bindgen class, it clones the own enumerable properties into a plain
 // object with no class prototype and therefore no methods. Uses the raw
 // module through __loadForTest, because the claim is about the
@@ -20,8 +20,8 @@ const dist = require(join(here, "..", "dist", "index.node.cjs"));
 
 test("structuredClone of a raw StatefulKey handle produces an inert plain object, and the original handle still answers", async () => {
   const raw = await dist.__loadForTest();
-  const keyPair = raw.keygenStatefulFromSeed("H5", new Uint8Array(32).fill(0x2c), 4);
-  const key = raw.StatefulKey.open("H5", keyPair.secretKey);
+  const keyPair = raw.keygenStatefulFromSeed("ED-SH", new Uint8Array(32).fill(0x2c), 4);
+  const key = raw.StatefulKey.open("ED-SH", keyPair.secretKey);
   keyPair.free();
 
   try {

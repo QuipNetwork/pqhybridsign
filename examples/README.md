@@ -1,11 +1,11 @@
 # Sample sign/verify roundtrips
 
 One roundtrip program per language, exercising every stateless suite
-(H1 through H4) this release ships. Each one runs against a published
+(ED-ML-44 through SR-FN-512) this release ships. Each one runs against a published
 artifact, never against this source tree, so a file missing from a
 package fails a smoke job before that package reaches a registry.
 
-Every program runs the same check for H1, then H2, then H3, then H4. It
+Every program runs the same check for ED-ML-44, then ED-FN-512, then SR-ML-44, then SR-FN-512. It
 derives a keypair from a fixed 32-byte seed and signs a fixed message
 with it. That signature must verify. A copy of the message with one
 byte flipped must not verify under the same signature. No program uses
@@ -16,10 +16,10 @@ message to stderr and exits nonzero.
 
 | Language | File | What it proves | How the smoke job runs it |
 | -- | -- | -- | -- |
-| Rust | `rust/src/main.rs` | The `pqhybridsign` and `pqhybridsign-core` crates round-trip H1-H4 as published to crates.io. | Builds `examples/rust` against the unpacked `.crate` tarballs via a temporary `[patch.crates-io]` block, then runs the release binary. |
+| Rust | `rust/src/main.rs` | The `pqhybridsign` and `pqhybridsign-core` crates round-trip ED-ML-44 through SR-FN-512 as published to crates.io. | Builds `examples/rust` against the unpacked `.crate` tarballs via a temporary `[patch.crates-io]` block, then runs the release binary. |
 | C++ | `cpp/roundtrip.cpp` | The C ABI header (`pqhybridsign.h`) matches the shipped `libpqhybridsign_cffi` library byte for byte. | Compiles against the released clib tarball's header and library, then runs the binary. |
-| Python | `python/roundtrip.py` | The `pqhybridsign` wheel imports and round-trips H1-H4 from a clean virtual environment. | Installs the built wheel into a fresh venv, then runs the script under that interpreter. |
-| TypeScript | `typescript/src/roundtrip.ts` | The `@quip.network/pqhybridsign` npm package's async wasm API round-trips H1-H4. | Installs the packed npm tarball into a clean project, compiles with `tsc`, then runs the emitted JavaScript under Node. |
+| Python | `python/roundtrip.py` | The `pqhybridsign` wheel imports and round-trips ED-ML-44 through SR-FN-512 from a clean virtual environment. | Installs the built wheel into a fresh venv, then runs the script under that interpreter. |
+| TypeScript | `typescript/src/roundtrip.ts` | The `@quip.network/pqhybridsign` npm package's async wasm API round-trips ED-ML-44 through SR-FN-512. | Installs the packed npm tarball into a clean project, compiles with `tsc`, then runs the emitted JavaScript under Node. |
 
 ## Two ways to build a signer
 
@@ -77,12 +77,12 @@ npm run start
 
 ## Suite coverage
 
-Only H1 through H4 appear here. H5 and H6 (the stateful SHRINCS suites)
+Only ED-ML-44 through SR-FN-512 appear here. ED-SH and SR-SH (the stateful SHRINCS suites)
 spend a one-time leaf per signature. Every binding signs them through a
 separate, journal-bound path instead. A roundtrip that reused a fixed
 seed across repeated runs would double-spend a leaf. A stateful example
 also needs a durable journal, which sits outside the scope of a
 stateless sign/verify smoke check. The TypeScript wasm API reflects
 this directly: `keygenFromSeed`, `sign`, and `signDeterministic` all
-reject for H5 and H6, while `verify` and the length accessors work for
+reject for ED-SH and SR-SH, while `verify` and the length accessors work for
 every suite.

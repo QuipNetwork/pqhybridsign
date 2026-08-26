@@ -4,8 +4,8 @@ use crate::pq::{Falcon512, MlDsa44};
 use crate::{hybrid_delta_suite, hybrid_suite};
 
 hybrid_suite! {
-    /// H1: ed25519 + ML-DSA-44. Composite sizes 1344 / 2624 / 2484.
-    H1,
+    /// ED-ML-44: ed25519 + ML-DSA-44. Composite sizes 1344 / 2624 / 2484.
+    EdMl44,
     classical = Ed25519 as "ed25519",
     pq = MlDsa44 as "mldsa44",
     label = "hybrid-ed25519-mldsa44-v1",
@@ -13,8 +13,8 @@ hybrid_suite! {
 }
 
 hybrid_suite! {
-    /// H3: sr25519 + ML-DSA-44. Composite sizes 1344 / 2624 / 2484.
-    H3,
+    /// SR-ML-44: sr25519 + ML-DSA-44. Composite sizes 1344 / 2624 / 2484.
+    SrMl44,
     classical = Sr25519 as "sr25519",
     pq = MlDsa44 as "mldsa44",
     label = "hybrid-sr25519-mldsa44-v1",
@@ -34,10 +34,10 @@ hybrid_suite! {
 pub const MIN_FALCON512_SIG_LEN: usize = 411;
 
 hybrid_delta_suite! {
-    /// H2: ed25519 + FN-DSA-512. Composite sizes 1409 / 3969 / up to 731
-    /// (variable: `65 + FalconSigLen`, and `fn-dsa` 0.4.0's `FalconSigLen`
-    /// is always 666).
-    H2,
+    /// ED-FN-512: ed25519 + FN-DSA-512. Composite sizes 1409 / 3969 / up to
+    /// 731 (variable: `65 + FalconSigLen`, and `fn-dsa` 0.4.0's
+    /// `FalconSigLen` is always 666).
+    EdFn512,
     classical = Ed25519 as "ed25519",
     pq = Falcon512 as "falcon512",
     label = "hybrid-ed25519-falcon512-v1",
@@ -46,10 +46,10 @@ hybrid_delta_suite! {
 }
 
 hybrid_delta_suite! {
-    /// H4: sr25519 + FN-DSA-512. Composite sizes 1409 / 3969 / up to 731
-    /// (variable: `65 + FalconSigLen`, and `fn-dsa` 0.4.0's `FalconSigLen`
-    /// is always 666).
-    H4,
+    /// SR-FN-512: sr25519 + FN-DSA-512. Composite sizes 1409 / 3969 / up to
+    /// 731 (variable: `65 + FalconSigLen`, and `fn-dsa` 0.4.0's
+    /// `FalconSigLen` is always 666).
+    SrFn512,
     classical = Sr25519 as "sr25519",
     pq = Falcon512 as "falcon512",
     label = "hybrid-sr25519-falcon512-v1",

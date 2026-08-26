@@ -160,6 +160,7 @@ mod tests {
     #[cfg(feature = "profile-256s")]
     mod with_keygen {
         use super::*;
+        use hashsigs_rs::profiles::selected::{SelectedProfile, NUM_CHAINS, NUM_LAYERS};
         use hashsigs_rs::shrincs::ShrincsSigner;
 
         /// Build a raw 164-byte bundle from a generated `PublicKey`'s fields, in
@@ -176,7 +177,11 @@ mod tests {
         }
 
         fn generate(seed: &[u8], max_signatures: u32) -> ([u8; 32], PublicKey) {
-            let (keys, public_key) = ShrincsSigner::keygen(seed, max_signatures)
+            let (keys, public_key) =
+                ShrincsSigner::keygen::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(
+                    seed,
+                    max_signatures,
+                )
                 .expect("keygen with valid seed/max must succeed");
             let stored_commitment = *keys.public_key_commitment().as_bytes();
             (stored_commitment, public_key)

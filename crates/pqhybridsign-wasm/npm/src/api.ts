@@ -14,12 +14,19 @@
  */
 
 /** One of the six SHRINCS suites this package's build links against. */
-export type Suite = "H1" | "H2" | "H3" | "H4" | "H5" | "H6";
+export type Suite =
+  | "ED-ML-44"
+  | "ED-FN-512"
+  | "SR-ML-44"
+  | "SR-FN-512"
+  | "ED-SH"
+  | "SR-SH";
 
 /**
  * A keypair: a secret key and its matching public key. `keygenFromSeed`
- * returns it for H1 through H4; `keygenStatefulFromSeed` returns it for H5
- * and H6, where `secretKey` is the exported stateful blob.
+ * returns it for ED-ML-44 through SR-FN-512; `keygenStatefulFromSeed`
+ * returns it for ED-SH and SR-SH, where `secretKey` is the exported
+ * stateful blob.
  */
 export interface KeyPair {
   publicKey: Uint8Array;
@@ -138,8 +145,8 @@ export interface RawKeyPair {
 }
 
 /**
- * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"` or
- * `"H6"`), held across calls. Returned by `deriveVrfStatelessKey`.
+ * A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"ED-SH"`
+ * or `"SR-SH"`), held across calls. Returned by `deriveVrfStatelessKey`.
  *
  * This key is disjoint from the identity key that carries an account's
  * rotation and recovery authority: it is derived under a label separate from
@@ -292,15 +299,16 @@ export interface RawModule {
  * above, promisified so a caller never has to load the wasm module
  * itself.
  *
- * H1 through H4 are stateless: `keygenFromSeed`, `sign` and
- * `signDeterministic` handle them, and reject H5 and H6, because a
- * stateless-looking call must never silently spend a one-time leaf. H5 and
- * H6 are stateful: `keygenStatefulFromSeed`, `openStatefulKey`,
+ * ED-ML-44 through SR-FN-512 are stateless: `keygenFromSeed`, `sign` and
+ * `signDeterministic` handle them, and reject ED-SH and SR-SH, because a
+ * stateless-looking call must never silently spend a one-time leaf. ED-SH
+ * and SR-SH are stateful: `keygenStatefulFromSeed`, `openStatefulKey`,
  * `signStateful`, `signStateless`, `adoptKey`, `keyIdentity` and
  * `keyIdentityFromSecretKey` handle them, and
- * reject H1 through H4. `verify`, `verifyWithStoredPublicKey` and the four
- * length accessors span all six suites. Each method resolves or rejects
- * exactly as the underlying wasm-bindgen export would return or throw,
+ * reject ED-ML-44 through SR-FN-512. `verify`, `verifyWithStoredPublicKey`
+ * and the four length accessors span all six suites. Each method resolves
+ * or rejects exactly as the underlying wasm-bindgen export would return or
+ * throw,
  * except that a WebAssembly trap is rethrown as {@link PqHybridSignPanic}
  * and the cached instance is discarded.
  *
@@ -321,9 +329,10 @@ export interface RawModule {
  * itself.
  *
  * `vrfProofLen`, `vrfProve`, `vrfProveDeterministic`, `vrfVerify` and
- * `vrfMakeBytes` cover the hybrid VRF for H1 through H4; `vrfProve` and
- * `vrfProveDeterministic` reject H5 and H6 for the same reason `sign` and
- * `signDeterministic` do, and `deriveVrfStatelessKey` covers those two suites
+ * `vrfMakeBytes` cover the hybrid VRF for ED-ML-44 through SR-FN-512;
+ * `vrfProve` and `vrfProveDeterministic` reject ED-SH and SR-SH for the
+ * same reason `sign` and `signDeterministic` do, and
+ * `deriveVrfStatelessKey` covers those two suites
  * instead, through a dedicated key disjoint from the identity key and a
  * caller-supplied {@link StatelessBudgetStore}. **Call `vrfVerify` before
  * `vrfMakeBytes`.** `vrfVerify` is what establishes that a proof's
@@ -344,8 +353,9 @@ export interface PqHybridSignApi {
   /**
    * Length in bytes of a hybrid VRF proof for `suite`.
    *
-   * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-   * delta-length binding can occupy. For H5 and H6 this is exact. A caller
+   * For ED-ML-44 and SR-ML-44 this is exact. For ED-FN-512 and SR-FN-512
+   * this is the maximum a delta-length binding can occupy. For ED-SH and
+   * SR-SH this is exact. A caller
    * sizing storage from this value must treat it as an upper bound.
    */
   vrfProofLen(suite: Suite): Promise<number>;

@@ -11,8 +11,8 @@ use pqhybridsign::stateful::StatefulSignError;
 /// vocabulary a binding has to translate failures into its own language's
 /// idiom (an exception type, an error class, ...). It flattens two Rust
 /// sources: [`pqhybridsign::error::Error`], from the stateless composite
-/// layer H1-H4 share, and [`StatefulSignError`], from the stateful signing
-/// path H5 and H6 use. Every current variant of both maps to a distinct
+/// layer EdMl44-SrFn512 share, and [`StatefulSignError`], from the stateful signing
+/// path EdSh and SrSh use. Every current variant of both maps to a distinct
 /// code here. Both sources are `#[non_exhaustive]`, and each conversion
 /// ends in a catch-all arm, so a variant added upstream reaches a C caller
 /// as a generic code rather than as a compile error here. Adding a variant
@@ -43,7 +43,7 @@ pub enum AbiError {
     // caller compiled against an older header that still branches on `4`
     // keeps reading it as "unknown" instead of colliding with whatever code
     // 4 might mean in a future release.
-    /// A path-selected signature (H5/H6) carried an unknown selector.
+    /// A path-selected signature (EdSh/SrSh) carried an unknown selector.
     /// Mirrors [`CoreError::BadPathSelector`].
     BadPathSelector = 5,
     /// A stateful signature's declared leaf count was out of range.
@@ -60,23 +60,23 @@ pub enum AbiError {
     /// this crate; this variant exists because the error type it maps is
     /// shared with encodings this crate does touch.
     BadRotationKind = 9,
-    /// A delta-length-encoded (H2/H4) signature's length did not fit the
+    /// A delta-length-encoded (EdFn512/SrFn512) signature's length did not fit the
     /// 1-byte delta field. Mirrors [`CoreError::DeltaLengthOutOfRange`].
     DeltaLengthOutOfRange = 10,
-    /// H5/H6 only: the key's one-time leaf budget is spent. Permanent;
+    /// EdSh/SrSh only: the key's one-time leaf budget is spent. Permanent;
     /// rotate the key. Mirrors [`StatefulSignError::LeavesExhausted`].
     LeavesExhausted = 11,
-    /// H5/H6 only: the signature-randomizer grind reached its bound.
+    /// EdSh/SrSh only: the signature-randomizer grind reached its bound.
     /// Permanent for this (key, message) pair. The leaf this attempt
     /// consumed is already spent -- see [`crate::sign_stateful`]'s
     /// documentation on why `sk_out` is still written on this error.
     /// Mirrors [`StatefulSignError::GrindAbort`].
     GrindAbort = 12,
-    /// H5/H6 only: the caller's [`crate::LeafJournal`] could not durably
+    /// EdSh/SrSh only: the caller's [`crate::LeafJournal`] could not durably
     /// record the advancing leaf. No leaf was consumed. Mirrors
     /// [`StatefulSignError::JournalFailed`].
     JournalFailed = 13,
-    /// H5/H6 only: a transient or internal failure inside the signing
+    /// EdSh/SrSh only: a transient or internal failure inside the signing
     /// primitive. Mirrors [`StatefulSignError::SigningFailed`].
     SigningFailed = 14,
     /// The suite code or name did not name one of the six suites this
@@ -84,11 +84,11 @@ pub enum AbiError {
     InvalidSuite = 15,
     /// The wrong entry point was called for this suite: a stateless
     /// function ([`crate::sign`], [`crate::sign_deterministic`],
-    /// [`crate::keygen_from_seed`]) was called with H5 or H6, or a stateful
+    /// [`crate::keygen_from_seed`]) was called with EdSh or SrSh, or a stateful
     /// function ([`crate::sign_stateful`], [`crate::sign_stateless`],
-    /// [`crate::keygen_stateful_from_seed`]) was called with H1-H4.
+    /// [`crate::keygen_stateful_from_seed`]) was called with EdMl44-SrFn512.
     WrongEntryPointForSuite = 16,
-    /// H5/H6 only: the secret key's leaf counter and the leaf journal no
+    /// EdSh/SrSh only: the secret key's leaf counter and the leaf journal no
     /// longer agree, so this key can sign no more. Mirrors
     /// [`StatefulSignError::CountersDiverged`].
     ///
@@ -97,7 +97,7 @@ pub enum AbiError {
     /// a signing failure may be worth retrying. Repairing the counters by
     /// hand reissues a spent leaf, which destroys the key's security.
     CountersDiverged = 17,
-    /// H5/H6 only: the leaf journal does not belong to this key. It has never
+    /// EdSh/SrSh only: the leaf journal does not belong to this key. It has never
     /// been bound to any key, or it is bound to a different one. Mirrors
     /// [`StatefulSignError::JournalKeyMismatch`].
     ///
@@ -109,7 +109,7 @@ pub enum AbiError {
     /// if there genuinely is none, by adopting one explicitly with
     /// [`crate::adopt_key`].
     JournalKeyMismatch = 18,
-    /// H5/H6 only: the few-time stateless budget for this key's stateless
+    /// EdSh/SrSh only: the few-time stateless budget for this key's stateless
     /// material is spent (specification section 21). Mirrors
     /// [`StatefulSignError::StatelessBudgetExhausted`] and
     /// [`CoreError::StatelessBudgetExhausted`].
@@ -124,7 +124,7 @@ pub enum AbiError {
     /// assumption of the underlying few-time scheme. It clears only when a
     /// rotation actually changes `pkSeed || hypertreeRoot`.
     StatelessBudgetExhausted = 19,
-    /// H5/H6 only: the caller's stateless budget store could not durably
+    /// EdSh/SrSh only: the caller's stateless budget store could not durably
     /// record the spend, so no stateless signature was released. Mirrors
     /// [`StatefulSignError::BudgetStoreFailed`] and
     /// [`CoreError::BudgetStoreFailed`].
@@ -167,7 +167,7 @@ impl fmt::Display for AbiError {
             Self::GrindAbort => "the randomizer grind bound was reached for this key and message",
             Self::JournalFailed => "the leaf journal could not durably commit",
             Self::SigningFailed => "signing failed",
-            Self::InvalidSuite => "the suite code or name is not one of H1-H6",
+            Self::InvalidSuite => "the suite code or name is not one of ED-ML-44 through SR-SH",
             Self::WrongEntryPointForSuite => "this entry point does not accept this suite",
             Self::CountersDiverged => {
                 "the key counter and leaf journal diverged; this key can sign no more, rotate it"

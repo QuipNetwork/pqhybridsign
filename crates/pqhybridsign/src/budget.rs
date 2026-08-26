@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Stateless few-time budget accounting, specification section 21.
 //!
-//! H5 and H6 pair a stateful fast path with a stateless path reserved for
+//! EdSh and SrSh pair a stateful fast path with a stateless path reserved for
 //! rotation and recovery (section 20.2). That stateless path has its own
 //! hard security bound -- `2^20` signatures, `2^18` under the low-budget
 //! profile -- shared across every rotation and recovery a key ever performs.

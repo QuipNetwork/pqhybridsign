@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Module-level functions for the four stateless suites, H1 through H4.
+//! Module-level functions for the four stateless suites.
 //!
-//! H5 and H6 are rejected here with `WrongEntryPointForSuiteError`, exactly
+//! ED_SH and SR_SH are rejected here with `WrongEntryPointForSuiteError`, exactly
 //! as `pqhybridsign_abi::stateless_suites` rejects them: see
 //! [`crate::stateful`] for their entry points.
 
@@ -27,7 +27,7 @@ use crate::suite::PySuite;
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H5 or H6: use
+/// `WrongEntryPointForSuiteError` for ED_SH or SR_SH: use
 /// `keygen_stateful_from_seed` instead. `BadLengthError` if `seed` is not
 /// 32 bytes.
 #[pyfunction]
@@ -57,7 +57,7 @@ pub(crate) fn keygen_from_seed(
 ///
 /// # Errors
 ///
-/// `WrongEntryPointForSuiteError` for H5 or H6: use the
+/// `WrongEntryPointForSuiteError` for ED_SH or SR_SH: use the
 /// [`StatefulSecretKey`](crate::stateful::StatefulSecretKey) methods
 /// instead. `BadLengthError` if `sk` is not exactly `secret_key_len(suite)`
 /// bytes.
@@ -111,7 +111,7 @@ pub(crate) fn sign_deterministic(
 
 /// Verify `sig` over `msg` under `ctx` for `suite`, against `pk`.
 ///
-/// Covers all six suites. For H5 and H6 this accepts only a signature
+/// Covers all six suites. For ED_SH and SR_SH this accepts only a signature
 /// produced by `sign_stateful`, the same behaviour `verify_stateful` gives
 /// directly: specification section 20.2 reserves the primary stateless
 /// path for rotation and recovery, and an ordinary application message must

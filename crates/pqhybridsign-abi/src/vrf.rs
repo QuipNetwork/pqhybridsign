@@ -6,29 +6,29 @@
 //! binding:
 //!
 //! - `vrf::sign`, `sign_deterministic`, `verify`, `make_bytes`,
-//!   `proof_len` for a fixed-length binding. H1 and H3.
+//!   `proof_len` for a fixed-length binding. EdMl44 and SrMl44.
 //! - `vrf::sign_delta`, `sign_delta_deterministic`, `verify_delta`,
 //!   `make_bytes_delta`, `max_proof_len_delta` for a delta-length
-//!   binding. H2 and H4.
+//!   binding. EdFn512 and SrFn512.
 //! - `vrf::sign_stateless`, `verify_stateless`, `make_bytes_stateless`,
 //!   `proof_len_stateless`, `derive_stateless_key` for the stateful
-//!   suites. H5 and H6.
+//!   suites. EdSh and SrSh.
 //!
 //! [`vrf_proof_len`], [`vrf_verify`] and [`vrf_make_bytes`] span all six
 //! suites and dispatch internally. Every suite supports the mechanism.
 //!
 //! Proving splits, and the split follows the house pattern rather than
-//! inventing a new one. [`crate::sign`] covers H1 through H4 and rejects
-//! H5 and H6 with [`AbiError::WrongEntryPointForSuite`], because a
+//! inventing a new one. [`crate::sign`] covers EdMl44 through SrFn512 and rejects
+//! EdSh and SrSh with [`AbiError::WrongEntryPointForSuite`], because a
 //! stateless-looking call that silently spent state is the worst failure
-//! this crate could offer. VRF proving has exactly that shape: H1 through
-//! H4 spend nothing, while H5 and H6 spend one unit of the few-time
+//! this crate could offer. VRF proving has exactly that shape: EdMl44 through
+//! SrFn512 spend nothing, while EdSh and SrSh spend one unit of the few-time
 //! stateless budget and need a durable store to record it. So
-//! [`vrf_prove`] and [`vrf_prove_deterministic`] cover H1 through H4 and
-//! reject H5 and H6, and [`vrf_prove_stateless`] covers H5 and H6 through
+//! [`vrf_prove`] and [`vrf_prove_deterministic`] cover EdMl44 through SrFn512 and
+//! reject EdSh and SrSh, and [`vrf_prove_stateless`] covers EdSh and SrSh through
 //! a key handle and a budget store.
 //!
-//! H5 and H6 also need a key that is not the identity key. `pqhs-1l6`
+//! EdSh and SrSh also need a key that is not the identity key. `pqhs-1l6`
 //! settled that: `vrf::derive_stateless_key` derives a SHRINCS key
 //! disjoint from the rotation and recovery identity key, under a separate
 //! label. The core type is `DedicatedVrfKey<S>`, which cannot be exported
@@ -36,11 +36,11 @@
 //! holder, built the same way [`crate::StatefulKeyHandle`] is.
 
 use pqhybridsign::budget::StatelessBudgetStore;
-use pqhybridsign::shrincs::{H5, H6};
+use pqhybridsign::shrincs::{EdSh, SrSh};
 use pqhybridsign::stateful_composite::SecretKey;
 use pqhybridsign::suite::{DeltaSuite, StatefulSuite, Suite as CoreSuite};
 use pqhybridsign::vrf::{self, ClassicalVrf, DedicatedVrfKey};
-use pqhybridsign::{H1, H2, H3, H4};
+use pqhybridsign::{EdFn512, EdMl44, SrFn512, SrMl44};
 
 use crate::error::AbiError;
 use crate::seed::MASTER_SEED_LEN;
@@ -55,17 +55,17 @@ pub const VRF_OUTPUT_LEN: usize = 32;
 
 /// Length in bytes of a hybrid VRF proof for `suite`.
 ///
-/// For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-/// delta-length binding can occupy. For H5 and H6 this is exact: the
+/// For EdMl44 and SrMl44 this is exact. For EdFn512 and SrFn512 this is the maximum a
+/// delta-length binding can occupy. For EdSh and SrSh this is exact: the
 /// stateless SHRINCS binding has a fixed length.
 pub fn vrf_proof_len(suite: Suite) -> Result<usize, AbiError> {
     match suite {
-        Suite::H1 => Ok(proof_len_fixed::<H1>()),
-        Suite::H3 => Ok(proof_len_fixed::<H3>()),
-        Suite::H2 => Ok(proof_len_delta::<H2>()),
-        Suite::H4 => Ok(proof_len_delta::<H4>()),
-        Suite::H5 => Ok(proof_len_stateless_suite::<H5>()),
-        Suite::H6 => Ok(proof_len_stateless_suite::<H6>()),
+        Suite::EdMl44 => Ok(proof_len_fixed::<EdMl44>()),
+        Suite::SrMl44 => Ok(proof_len_fixed::<SrMl44>()),
+        Suite::EdFn512 => Ok(proof_len_delta::<EdFn512>()),
+        Suite::SrFn512 => Ok(proof_len_delta::<SrFn512>()),
+        Suite::EdSh => Ok(proof_len_stateless_suite::<EdSh>()),
+        Suite::SrSh => Ok(proof_len_stateless_suite::<SrSh>()),
     }
 }
 
@@ -98,14 +98,14 @@ where
 /// construction rests on and it holds for every suite.
 ///
 /// Whether `rng` is used at all depends on the classical half. The sr25519
-/// suites (H3, H4) hedge the classical proof's nonce with it, so two
-/// evaluations produce different proof bytes. The ed25519 suites (H1, H2)
+/// suites (SrMl44, SrFn512) hedge the classical proof's nonce with it, so two
+/// evaluations produce different proof bytes. The ed25519 suites (EdMl44, EdFn512)
 /// ignore it: RFC 9381 section 5.4.2.2 derives the ECVRF nonce from the
 /// secret key and the input, so their proofs are deterministic and
 /// [`vrf_prove_deterministic`] returns the identical bytes. Pass an `rng`
 /// regardless -- which suites use it is not part of this API's contract.
 ///
-/// H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
+/// EdMl44 through SrFn512 only. EdSh and SrSh spend one unit of a few-time stateless
 /// budget on every evaluation and need a durable store to record it, so
 /// they have their own entry point, [`vrf_prove_stateless`], for the same
 /// reason [`crate::sign`] refuses them: a call that looks free and is not
@@ -117,7 +117,7 @@ where
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H5 and H6.
+/// [`AbiError::WrongEntryPointForSuite`] for EdSh and SrSh.
 /// [`AbiError::OutputBufferTooSmall`] if `proof_out` is shorter than
 /// [`vrf_proof_len`]. [`AbiError::BadLength`] if `sk` is not the suite's
 /// secret-key length. [`AbiError::ComponentFailure`] if either component
@@ -130,11 +130,11 @@ pub fn vrf_prove(
     proof_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match suite {
-        Suite::H1 => prove_fixed::<H1>(sk, input, rng, proof_out),
-        Suite::H3 => prove_fixed::<H3>(sk, input, rng, proof_out),
-        Suite::H2 => prove_delta::<H2>(sk, input, rng, proof_out),
-        Suite::H4 => prove_delta::<H4>(sk, input, rng, proof_out),
-        Suite::H5 | Suite::H6 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 => prove_fixed::<EdMl44>(sk, input, rng, proof_out),
+        Suite::SrMl44 => prove_fixed::<SrMl44>(sk, input, rng, proof_out),
+        Suite::EdFn512 => prove_delta::<EdFn512>(sk, input, rng, proof_out),
+        Suite::SrFn512 => prove_delta::<SrFn512>(sk, input, rng, proof_out),
+        Suite::EdSh | Suite::SrSh => Err(AbiError::WrongEntryPointForSuite),
     }
 }
 
@@ -164,7 +164,7 @@ where
 
 /// Evaluate the hybrid VRF with a reproducible classical proof.
 ///
-/// H1 through H4 only, on the same terms as [`vrf_prove`]: H5 and H6
+/// EdMl44 through SrFn512 only, on the same terms as [`vrf_prove`]: EdSh and SrSh
 /// spend a few-time budget unit and prove through
 /// [`vrf_prove_stateless`].
 ///
@@ -180,11 +180,11 @@ pub fn vrf_prove_deterministic(
     proof_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match suite {
-        Suite::H1 => prove_fixed_deterministic::<H1>(sk, input, proof_out),
-        Suite::H3 => prove_fixed_deterministic::<H3>(sk, input, proof_out),
-        Suite::H2 => prove_delta_deterministic::<H2>(sk, input, proof_out),
-        Suite::H4 => prove_delta_deterministic::<H4>(sk, input, proof_out),
-        Suite::H5 | Suite::H6 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 => prove_fixed_deterministic::<EdMl44>(sk, input, proof_out),
+        Suite::SrMl44 => prove_fixed_deterministic::<SrMl44>(sk, input, proof_out),
+        Suite::EdFn512 => prove_delta_deterministic::<EdFn512>(sk, input, proof_out),
+        Suite::SrFn512 => prove_delta_deterministic::<SrFn512>(sk, input, proof_out),
+        Suite::EdSh | Suite::SrSh => Err(AbiError::WrongEntryPointForSuite),
     }
 }
 
@@ -219,12 +219,12 @@ where
 #[must_use]
 pub fn vrf_verify(suite: Suite, pk: &[u8], input: &[u8], proof: &[u8]) -> bool {
     match suite {
-        Suite::H1 => vrf::verify::<H1>(pk, input, proof),
-        Suite::H3 => vrf::verify::<H3>(pk, input, proof),
-        Suite::H2 => vrf::verify_delta::<H2>(pk, input, proof),
-        Suite::H4 => vrf::verify_delta::<H4>(pk, input, proof),
-        Suite::H5 => vrf::verify_stateless::<H5>(pk, input, proof),
-        Suite::H6 => vrf::verify_stateless::<H6>(pk, input, proof),
+        Suite::EdMl44 => vrf::verify::<EdMl44>(pk, input, proof),
+        Suite::SrMl44 => vrf::verify::<SrMl44>(pk, input, proof),
+        Suite::EdFn512 => vrf::verify_delta::<EdFn512>(pk, input, proof),
+        Suite::SrFn512 => vrf::verify_delta::<SrFn512>(pk, input, proof),
+        Suite::EdSh => vrf::verify_stateless::<EdSh>(pk, input, proof),
+        Suite::SrSh => vrf::verify_stateless::<SrSh>(pk, input, proof),
     }
 }
 
@@ -259,12 +259,12 @@ pub fn vrf_make_bytes(
     out: &mut [u8; VRF_OUTPUT_LEN],
 ) -> Result<(), AbiError> {
     *out = match suite {
-        Suite::H1 => make_bytes_fixed::<H1>(pk, input, proof, context)?,
-        Suite::H3 => make_bytes_fixed::<H3>(pk, input, proof, context)?,
-        Suite::H2 => make_bytes_delta::<H2>(pk, input, proof, context)?,
-        Suite::H4 => make_bytes_delta::<H4>(pk, input, proof, context)?,
-        Suite::H5 => make_bytes_stateless_suite::<H5>(pk, input, proof, context)?,
-        Suite::H6 => make_bytes_stateless_suite::<H6>(pk, input, proof, context)?,
+        Suite::EdMl44 => make_bytes_fixed::<EdMl44>(pk, input, proof, context)?,
+        Suite::SrMl44 => make_bytes_fixed::<SrMl44>(pk, input, proof, context)?,
+        Suite::EdFn512 => make_bytes_delta::<EdFn512>(pk, input, proof, context)?,
+        Suite::SrFn512 => make_bytes_delta::<SrFn512>(pk, input, proof, context)?,
+        Suite::EdSh => make_bytes_stateless_suite::<EdSh>(pk, input, proof, context)?,
+        Suite::SrSh => make_bytes_stateless_suite::<SrSh>(pk, input, proof, context)?,
     };
     Ok(())
 }
@@ -313,7 +313,7 @@ where
 
 /// A SHRINCS key dedicated to VRF evaluation, held across calls.
 ///
-/// H5 and H6 evaluate the VRF through their post-quantum half's few-time
+/// EdSh and SrSh evaluate the VRF through their post-quantum half's few-time
 /// stateless path, which draws on a budget shared with rotation and
 /// recovery. The key that carries an identity's rotation and recovery
 /// authority must not also spend that budget on VRF evaluations, so this
@@ -333,8 +333,8 @@ pub struct VrfStatelessKey {
 }
 
 enum Inner {
-    H5(DedicatedVrfKey<H5>),
-    H6(DedicatedVrfKey<H6>),
+    EdSh(DedicatedVrfKey<EdSh>),
+    SrSh(DedicatedVrfKey<SrSh>),
 }
 
 impl VrfStatelessKey {
@@ -347,7 +347,7 @@ impl VrfStatelessKey {
     ///
     /// # Errors
     ///
-    /// [`AbiError::WrongEntryPointForSuite`] for H1-H4.
+    /// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512.
     /// [`AbiError::BadLength`] if `pk_out` is not
     /// [`crate::public_key_len`] bytes for `suite`.
     /// [`AbiError::ComponentFailure`] if derivation fails.
@@ -357,13 +357,15 @@ impl VrfStatelessKey {
         pk_out: &mut [u8],
     ) -> Result<Self, AbiError> {
         match suite {
-            Suite::H5 => Ok(Self {
-                inner: Inner::H5(derive_suite::<H5>(master, pk_out)?),
+            Suite::EdSh => Ok(Self {
+                inner: Inner::EdSh(derive_suite::<EdSh>(master, pk_out)?),
             }),
-            Suite::H6 => Ok(Self {
-                inner: Inner::H6(derive_suite::<H6>(master, pk_out)?),
+            Suite::SrSh => Ok(Self {
+                inner: Inner::SrSh(derive_suite::<SrSh>(master, pk_out)?),
             }),
-            Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+                Err(AbiError::WrongEntryPointForSuite)
+            }
         }
     }
 
@@ -379,19 +381,25 @@ impl VrfStatelessKey {
     ///
     /// # Errors
     ///
-    /// [`AbiError::WrongEntryPointForSuite`] for H1-H4.
+    /// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512.
     /// [`AbiError::BadLength`] if `sk` is not [`crate::secret_key_len`]
     /// bytes for `suite`. [`AbiError::ComponentFailure`] if the blob does
     /// not import.
     pub fn adopt_unchecked(suite: Suite, sk: &[u8]) -> Result<Self, AbiError> {
         match suite {
-            Suite::H5 => Ok(Self {
-                inner: Inner::H5(DedicatedVrfKey::adopt_unchecked(import_checked::<H5>(sk)?)),
+            Suite::EdSh => Ok(Self {
+                inner: Inner::EdSh(DedicatedVrfKey::adopt_unchecked(import_checked::<EdSh>(
+                    sk,
+                )?)),
             }),
-            Suite::H6 => Ok(Self {
-                inner: Inner::H6(DedicatedVrfKey::adopt_unchecked(import_checked::<H6>(sk)?)),
+            Suite::SrSh => Ok(Self {
+                inner: Inner::SrSh(DedicatedVrfKey::adopt_unchecked(import_checked::<SrSh>(
+                    sk,
+                )?)),
             }),
-            Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+            Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+                Err(AbiError::WrongEntryPointForSuite)
+            }
         }
     }
 
@@ -399,8 +407,8 @@ impl VrfStatelessKey {
     #[must_use]
     pub fn suite(&self) -> Suite {
         match self.inner {
-            Inner::H5(_) => Suite::H5,
-            Inner::H6(_) => Suite::H6,
+            Inner::EdSh(_) => Suite::EdSh,
+            Inner::SrSh(_) => Suite::SrSh,
         }
     }
 }
@@ -432,7 +440,7 @@ fn write_exact(out: &mut [u8], src: &[u8]) -> Result<(), AbiError> {
     Ok(())
 }
 
-/// Evaluate the hybrid VRF under H5 or H6, spending one unit of the
+/// Evaluate the hybrid VRF under EdSh or SrSh, spending one unit of the
 /// few-time stateless budget.
 ///
 /// [`vrf_prove`] refuses these suites because a call that looks free and
@@ -456,8 +464,8 @@ pub fn vrf_prove_stateless(
     proof_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match &key.inner {
-        Inner::H5(sk) => prove_stateless_suite(sk, budget, input, rng, proof_out),
-        Inner::H6(sk) => prove_stateless_suite(sk, budget, input, rng, proof_out),
+        Inner::EdSh(sk) => prove_stateless_suite(sk, budget, input, rng, proof_out),
+        Inner::SrSh(sk) => prove_stateless_suite(sk, budget, input, rng, proof_out),
     }
 }
 
@@ -486,7 +494,7 @@ mod tests {
     const OTHER: &[u8] = b"epoch-7/slot-43/randomness";
     const OUT_CTX: &[u8] = b"leadership-score";
 
-    const STATELESS: [Suite; 4] = [Suite::H1, Suite::H2, Suite::H3, Suite::H4];
+    const STATELESS: [Suite; 4] = [Suite::EdMl44, Suite::EdFn512, Suite::SrMl44, Suite::SrFn512];
 
     fn keypair(suite: Suite) -> (Vec<u8>, Vec<u8>) {
         let mut sk = vec![0u8; secret_key_len(suite)];
@@ -543,11 +551,11 @@ mod tests {
         // that the proof bytes DID differ -- that is what makes the stable
         // output meaningful rather than trivial.
         //
-        // H1/H2 are ed25519: RFC 9381 derives the ECVRF nonce from the key and
+        // EdMl44/EdFn512 are ed25519: RFC 9381 derives the ECVRF nonce from the key and
         // input, so their proofs are deterministic and must NOT be asserted to
         // differ.
-        const HEDGED: [Suite; 2] = [Suite::H3, Suite::H4];
-        const DETERMINISTIC: [Suite; 2] = [Suite::H1, Suite::H2];
+        const HEDGED: [Suite; 2] = [Suite::SrMl44, Suite::SrFn512];
+        const DETERMINISTIC: [Suite; 2] = [Suite::EdMl44, Suite::EdFn512];
 
         for suite in STATELESS {
             let (sk, pk) = keypair(suite);
@@ -593,7 +601,7 @@ mod tests {
 
     #[test]
     fn a_different_output_context_gives_different_bytes() {
-        let suite = Suite::H3;
+        let suite = Suite::SrMl44;
         let (sk, pk) = keypair(suite);
         let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
         let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
@@ -615,7 +623,7 @@ mod tests {
 
     #[test]
     fn proving_rejects_the_stateful_suites() {
-        for suite in [Suite::H5, Suite::H6] {
+        for suite in [Suite::EdSh, Suite::SrSh] {
             let mut proof = vec![0u8; 4096];
             assert_eq!(
                 vrf_prove(suite, &[0u8; 328], INPUT, &mut OsRng, &mut proof).unwrap_err(),
@@ -632,9 +640,9 @@ mod tests {
 
     #[test]
     fn the_stateless_vrf_key_rejects_the_lattice_suites() {
-        // The reverse refusal. H1-H4 have no stateful half, so there is no
+        // The reverse refusal. EdMl44-SrFn512 have no stateful half, so there is no
         // dedicated stateless VRF key to derive or adopt for them.
-        for suite in [Suite::H1, Suite::H2, Suite::H3, Suite::H4] {
+        for suite in [Suite::EdMl44, Suite::EdFn512, Suite::SrMl44, Suite::SrFn512] {
             let mut pk = vec![0u8; public_key_len(suite)];
             assert_eq!(
                 VrfStatelessKey::derive(suite, &[13u8; 32], &mut pk).err(),
@@ -651,7 +659,7 @@ mod tests {
 
     #[test]
     fn a_short_proof_buffer_is_refused() {
-        let suite = Suite::H1;
+        let suite = Suite::EdMl44;
         let (sk, _pk) = keypair(suite);
         let short = vrf_proof_len(suite).unwrap() - 1;
         assert_eq!(
@@ -667,7 +675,7 @@ mod tests {
     #[test]
     #[ignore = "derive_stateless_key runs keygen; 47s at 128s"]
     fn a_derived_stateless_key_proves_and_verifies() {
-        for suite in [Suite::H5, Suite::H6] {
+        for suite in [Suite::EdSh, Suite::SrSh] {
             let mut pk = vec![0u8; public_key_len(suite)];
             let key = VrfStatelessKey::derive(suite, &[13u8; 32], &mut pk).unwrap();
             assert_eq!(key.suite(), suite);
@@ -703,7 +711,7 @@ mod tests {
         // confirmed by running this test, with `derive_stateless_vrf_seed`
         // changed to return `*master` unchanged, to fail under the change,
         // and to pass once the change was reverted.
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let master = [13u8; 32];
 
         let mut vrf_pk = vec![0u8; public_key_len(suite)];
@@ -713,10 +721,10 @@ mod tests {
         let mut id_pk = vec![0u8; public_key_len(suite)];
         crate::keygen_stateful_from_seed(suite, &master, 4, &mut id_sk, &mut id_pk).unwrap();
 
-        // `<H5 as StatefulSuite>::Classical::PUBLIC_KEY_LEN`, not a bare
+        // `<EdSh as StatefulSuite>::Classical::PUBLIC_KEY_LEN`, not a bare
         // number: this is the classical public key's length, which
         // `max_stateful_signatures` does not enter into.
-        let classical_len = <<H5 as StatefulSuite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        let classical_len = <<EdSh as StatefulSuite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
         assert_ne!(
             &vrf_pk[..classical_len],
             &id_pk[..classical_len],
@@ -727,7 +735,7 @@ mod tests {
     #[test]
     #[ignore = "derive_stateless_key runs keygen; 47s at 128s"]
     fn a_spent_budget_refuses_a_stateless_proof() {
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let mut pk = vec![0u8; public_key_len(suite)];
         let key = VrfStatelessKey::derive(suite, &[13u8; 32], &mut pk).unwrap();
         let mut budget = MemoryBudget::exhausted();

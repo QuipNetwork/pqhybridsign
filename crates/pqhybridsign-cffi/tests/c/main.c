@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Links against the built pqhybridsign-cffi archive, exercises the happy
- * path under H1 (stateless) and H5 (stateful), and then walks the error
+ * path under ED-ML-44 (stateless) and ED-SH (stateful), and then walks the error
  * cases a C integrator is most likely to hit by accident: a short or
  * oversized output buffer, the wrong entry point for a suite, a null
  * out-parameter, an exhausted leaf budget, a journal that refuses to
@@ -43,21 +43,21 @@ static int expect_true(const char *what, int condition) {
 }
 
 /* ------------------------------------------------------------------ */
-/* H1: stateless sign and verify                                       */
+/* ED-ML-44: stateless sign and verify                                       */
 /* ------------------------------------------------------------------ */
 
-static int check_h1(void) {
+static int check_ed_ml44(void) {
     size_t sk_len, pk_len, sig_max_len;
-    if (pqhs_secret_key_len(1, &sk_len) != PQHS_OK) return fail("h1 secret_key_len", 1);
-    if (pqhs_public_key_len(1, &pk_len) != PQHS_OK) return fail("h1 public_key_len", 1);
-    if (pqhs_signature_len(1, &sig_max_len) != PQHS_OK) return fail("h1 signature_len", 1);
+    if (pqhs_secret_key_len(1, &sk_len) != PQHS_OK) return fail("ed_ml44 secret_key_len", 1);
+    if (pqhs_public_key_len(1, &pk_len) != PQHS_OK) return fail("ed_ml44 public_key_len", 1);
+    if (pqhs_signature_len(1, &sig_max_len) != PQHS_OK) return fail("ed_ml44 signature_len", 1);
 
     int failures = 0;
     uint8_t *sk = calloc(1, sk_len);
     uint8_t *pk = calloc(1, pk_len);
     uint8_t *sig = calloc(1, sig_max_len);
     if (!sk || !pk || !sig) {
-        fprintf(stderr, "FAIL: h1 allocation\n");
+        fprintf(stderr, "FAIL: ed_ml44 allocation\n");
         failures = 1;
         goto done;
     }
@@ -67,7 +67,7 @@ static int check_h1(void) {
 
     int rc = pqhs_keygen_from_seed(1, seed, sizeof(seed), sk, sk_len, pk, pk_len);
     if (rc != PQHS_OK) {
-        failures = fail("h1 keygen_from_seed", rc);
+        failures = fail("ed_ml44 keygen_from_seed", rc);
         goto done;
     }
 
@@ -77,22 +77,22 @@ static int check_h1(void) {
     rc = pqhs_sign_deterministic(1, sk, sk_len, msg, sizeof(msg), ctx, sizeof(ctx),
                                   (const uint8_t *)"nonce", 5, sig, sig_max_len, &sig_len);
     if (rc != PQHS_OK) {
-        failures = fail("h1 sign_deterministic", rc);
+        failures = fail("ed_ml44 sign_deterministic", rc);
         goto done;
     }
 
     bool valid = false;
     rc = pqhs_verify(1, pk, pk_len, msg, sizeof(msg), ctx, sizeof(ctx), sig, sig_len, &valid);
-    failures += expect_rc("h1 verify call", rc, PQHS_OK);
-    failures += expect_true("h1 signature verified", valid);
+    failures += expect_rc("ed_ml44 verify call", rc, PQHS_OK);
+    failures += expect_true("ed_ml44 signature verified", valid);
 
     /* A tampered message must fail to verify, not error. */
     const uint8_t other[] = "a different message";
     bool still_valid = true;
     rc = pqhs_verify(1, pk, pk_len, other, sizeof(other), ctx, sizeof(ctx), sig, sig_len,
                       &still_valid);
-    failures += expect_rc("h1 verify (tampered) call", rc, PQHS_OK);
-    failures += expect_true("h1 tampered message rejected", !still_valid);
+    failures += expect_rc("ed_ml44 verify (tampered) call", rc, PQHS_OK);
+    failures += expect_true("ed_ml44 tampered message rejected", !still_valid);
 
 done:
     free(sk);
@@ -240,14 +240,14 @@ static int journal_refuse_commit(void *ctx, uint32_t leaf) {
 }
 
 /* ------------------------------------------------------------------ */
-/* H5: stateful sign and verify                                        */
+/* ED-SH: stateful sign and verify                                        */
 /* ------------------------------------------------------------------ */
 
-static int check_h5(void) {
+static int check_ed_sh(void) {
     size_t sk_len, pk_len, sig_max_len;
-    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("h5 secret_key_len", 1);
-    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("h5 public_key_len", 1);
-    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("h5 signature_len", 1);
+    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("ed_sh secret_key_len", 1);
+    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("ed_sh public_key_len", 1);
+    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("ed_sh signature_len", 1);
 
     int failures = 0;
     uint8_t *sk = calloc(1, sk_len);
@@ -255,7 +255,7 @@ static int check_h5(void) {
     uint8_t *sk_out = calloc(1, sk_len);
     uint8_t *sig = calloc(1, sig_max_len);
     if (!sk || !pk || !sk_out || !sig) {
-        fprintf(stderr, "FAIL: h5 allocation\n");
+        fprintf(stderr, "FAIL: ed_sh allocation\n");
         failures = 1;
         goto done;
     }
@@ -265,7 +265,7 @@ static int check_h5(void) {
 
     int rc = pqhs_keygen_stateful_from_seed(5, seed, sizeof(seed), 4, sk, sk_len, pk, pk_len);
     if (rc != PQHS_OK) {
-        failures = fail("h5 keygen_stateful_from_seed", rc);
+        failures = fail("ed_sh keygen_stateful_from_seed", rc);
         goto done;
     }
     failures += journal_provision(5, pk, pk_len);
@@ -283,19 +283,19 @@ static int check_h5(void) {
     rc = pqhs_sign_stateful(5, sk, sk_len, &journal, msg, sizeof(msg), NULL, 0, sk_out, sk_len,
                              sig, sig_max_len, &sig_len);
     if (rc != PQHS_OK) {
-        failures = fail("h5 sign_stateful", rc);
+        failures = fail("ed_sh sign_stateful", rc);
         goto done;
     }
-    failures += expect_true("h5 exported key advanced past the spent leaf",
+    failures += expect_true("ed_sh exported key advanced past the spent leaf",
                             memcmp(sk, sk_out, sk_len) != 0);
 
     bool valid = false;
     rc = pqhs_verify(5, pk, pk_len, msg, sizeof(msg), NULL, 0, sig, sig_len, &valid);
-    failures += expect_rc("h5 verify call", rc, PQHS_OK);
-    failures += expect_true("h5 stateful signature verified", valid);
+    failures += expect_rc("ed_sh verify call", rc, PQHS_OK);
+    failures += expect_true("ed_sh stateful signature verified", valid);
 
     /* pqhs_stored_public_key_len and pqhs_verify_with_stored_public_key_stateful,
-     * against the same key and signature check_h5 already built: `pk` is
+     * against the same key and signature check_ed_sh already built: `pk` is
      * `ClassicalPK || PqVerifyKey` (see pqhs_public_key_len); the stored
      * form is `ClassicalPK || commitment`, where the 32-byte commitment
      * sits at a fixed offset (68) inside the bundle that follows the
@@ -305,14 +305,14 @@ static int check_h5(void) {
     size_t stored_len = 0;
     rc = pqhs_stored_public_key_len(5, &stored_len);
     if (rc != PQHS_OK) {
-        failures += fail("h5 stored_public_key_len", rc);
+        failures += fail("ed_sh stored_public_key_len", rc);
         goto done;
     }
     size_t classical_len = stored_len - 32;
     size_t bundle_len = pk_len - classical_len;
     uint8_t *stored = calloc(1, stored_len);
     if (!stored) {
-        fprintf(stderr, "FAIL: h5 stored allocation\n");
+        fprintf(stderr, "FAIL: ed_sh stored allocation\n");
         failures = 1;
         goto done;
     }
@@ -324,15 +324,15 @@ static int check_h5(void) {
     rc = pqhs_verify_with_stored_public_key_stateful(5, stored, stored_len, bundle, bundle_len, msg,
                                                       sizeof(msg), NULL, 0, sig, sig_len,
                                                       &stored_valid);
-    failures += expect_rc("h5 verify_with_stored_public_key_stateful call", rc, PQHS_OK);
-    failures += expect_true("h5 stateful signature verified against its stored form",
+    failures += expect_rc("ed_sh verify_with_stored_public_key_stateful call", rc, PQHS_OK);
+    failures += expect_true("ed_sh stateful signature verified against its stored form",
                             stored_valid);
 
     bool stored_valid_wrong_path = true;
     rc = pqhs_verify_with_stored_public_key_stateless(5, stored, stored_len, bundle, bundle_len,
                                                        msg, sizeof(msg), NULL, 0, sig, sig_len,
                                                        &stored_valid_wrong_path);
-    failures += expect_rc("h5 verify_with_stored_public_key_stateless call", rc, PQHS_OK);
+    failures += expect_rc("ed_sh verify_with_stored_public_key_stateless call", rc, PQHS_OK);
     failures += expect_true("the stateless entry point refuses a stateful-path signature",
                             !stored_valid_wrong_path);
     free(stored);
@@ -346,14 +346,14 @@ done:
 }
 
 /* ------------------------------------------------------------------ */
-/* H5: opaque handle -- open once, sign twice, export, reopen          */
+/* ED-SH: opaque handle -- open once, sign twice, export, reopen          */
 /* ------------------------------------------------------------------ */
 
-static int check_h5_handle(void) {
+static int check_ed_sh_handle(void) {
     size_t sk_len, pk_len, sig_max_len;
-    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("h5 handle secret_key_len", 1);
-    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("h5 handle public_key_len", 1);
-    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("h5 handle signature_len", 1);
+    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("ed_sh handle secret_key_len", 1);
+    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("ed_sh handle public_key_len", 1);
+    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("ed_sh handle signature_len", 1);
 
     int failures = 0;
     uint8_t *sk = calloc(1, sk_len);
@@ -361,7 +361,7 @@ static int check_h5_handle(void) {
     uint8_t *exported = calloc(1, sk_len);
     uint8_t *sig = calloc(1, sig_max_len);
     if (!sk || !pk || !exported || !sig) {
-        fprintf(stderr, "FAIL: h5 handle allocation\n");
+        fprintf(stderr, "FAIL: ed_sh handle allocation\n");
         failures = 1;
         goto done;
     }
@@ -371,7 +371,7 @@ static int check_h5_handle(void) {
 
     int rc = pqhs_keygen_stateful_from_seed(5, seed, sizeof(seed), 4, sk, sk_len, pk, pk_len);
     if (rc != PQHS_OK) {
-        failures = fail("h5 handle keygen_stateful_from_seed", rc);
+        failures = fail("ed_sh handle keygen_stateful_from_seed", rc);
         goto done;
     }
     failures += journal_provision(5, pk, pk_len);
@@ -387,14 +387,14 @@ static int check_h5_handle(void) {
     PqhsStatefulKey *key = NULL;
     rc = pqhs_stateful_key_open(5, sk, sk_len, &key);
     if (rc != PQHS_OK) {
-        failures = fail("h5 handle open", rc);
+        failures = fail("ed_sh handle open", rc);
         goto done;
     }
-    failures += expect_true("h5 handle open returned a pointer", key != NULL);
+    failures += expect_true("ed_sh handle open returned a pointer", key != NULL);
 
     uint8_t identity[PQHS_KEY_IDENTITY_LEN];
     rc = pqhs_stateful_key_identity(key, identity, sizeof(identity));
-    failures += expect_rc("h5 handle identity", rc, PQHS_OK);
+    failures += expect_rc("ed_sh handle identity", rc, PQHS_OK);
 
     const uint8_t ctx[] = "ctx";
     const uint8_t first[] = "first";
@@ -402,42 +402,42 @@ static int check_h5_handle(void) {
     rc = pqhs_stateful_key_sign(key, &journal, first, sizeof(first), ctx, sizeof(ctx), sig,
                                  sig_max_len, &sig_len);
     if (rc != PQHS_OK) {
-        failures = fail("h5 handle sign first", rc);
+        failures = fail("ed_sh handle sign first", rc);
         pqhs_stateful_key_free(key);
         goto done;
     }
     bool valid = false;
     rc = pqhs_verify(5, pk, pk_len, first, sizeof(first), ctx, sizeof(ctx), sig, sig_len, &valid);
-    failures += expect_rc("h5 handle verify first call", rc, PQHS_OK);
-    failures += expect_true("h5 handle first signature verified", valid);
+    failures += expect_rc("ed_sh handle verify first call", rc, PQHS_OK);
+    failures += expect_true("ed_sh handle first signature verified", valid);
 
     const uint8_t second[] = "second";
     sig_len = 0;
     rc = pqhs_stateful_key_sign(key, &journal, second, sizeof(second), ctx, sizeof(ctx), sig,
                                  sig_max_len, &sig_len);
     if (rc != PQHS_OK) {
-        failures = fail("h5 handle sign second", rc);
+        failures = fail("ed_sh handle sign second", rc);
         pqhs_stateful_key_free(key);
         goto done;
     }
     valid = false;
     rc = pqhs_verify(5, pk, pk_len, second, sizeof(second), ctx, sizeof(ctx), sig, sig_len, &valid);
-    failures += expect_rc("h5 handle verify second call", rc, PQHS_OK);
-    failures += expect_true("h5 handle second signature verified", valid);
+    failures += expect_rc("ed_sh handle verify second call", rc, PQHS_OK);
+    failures += expect_true("ed_sh handle second signature verified", valid);
 
     size_t export_written = 0;
     rc = pqhs_stateful_key_export(key, exported, sk_len, &export_written);
-    failures += expect_rc("h5 handle export", rc, PQHS_OK);
-    failures += expect_true("h5 handle export wrote the secret-key length",
+    failures += expect_rc("ed_sh handle export", rc, PQHS_OK);
+    failures += expect_true("ed_sh handle export wrote the secret-key length",
                             export_written == sk_len);
-    failures += expect_true("h5 handle export advanced past the spent leaves",
+    failures += expect_true("ed_sh handle export advanced past the spent leaves",
                             memcmp(sk, exported, sk_len) != 0);
     pqhs_stateful_key_free(key);
 
     PqhsStatefulKey *reopened = NULL;
     rc = pqhs_stateful_key_open(5, exported, export_written, &reopened);
     if (rc != PQHS_OK) {
-        failures = fail("h5 handle reopen", rc);
+        failures = fail("ed_sh handle reopen", rc);
         goto done;
     }
 
@@ -446,14 +446,14 @@ static int check_h5_handle(void) {
     rc = pqhs_stateful_key_sign(reopened, &journal, third, sizeof(third), ctx, sizeof(ctx), sig,
                                  sig_max_len, &sig_len);
     if (rc != PQHS_OK) {
-        failures = fail("h5 handle sign after reopen", rc);
+        failures = fail("ed_sh handle sign after reopen", rc);
         pqhs_stateful_key_free(reopened);
         goto done;
     }
     valid = false;
     rc = pqhs_verify(5, pk, pk_len, third, sizeof(third), ctx, sizeof(ctx), sig, sig_len, &valid);
-    failures += expect_rc("h5 handle verify third call", rc, PQHS_OK);
-    failures += expect_true("h5 handle signature after reopen verified", valid);
+    failures += expect_rc("ed_sh handle verify third call", rc, PQHS_OK);
+    failures += expect_true("ed_sh handle signature after reopen verified", valid);
     pqhs_stateful_key_free(reopened);
 
     /* A null handle is a documented no-op. */
@@ -473,9 +473,9 @@ done:
 
 static int check_stateless_error_cases(void) {
     size_t sk_len, pk_len, sig_max_len;
-    if (pqhs_secret_key_len(1, &sk_len) != PQHS_OK) return fail("h1 secret_key_len", 1);
-    if (pqhs_public_key_len(1, &pk_len) != PQHS_OK) return fail("h1 public_key_len", 1);
-    if (pqhs_signature_len(1, &sig_max_len) != PQHS_OK) return fail("h1 signature_len", 1);
+    if (pqhs_secret_key_len(1, &sk_len) != PQHS_OK) return fail("ed_ml44 secret_key_len", 1);
+    if (pqhs_public_key_len(1, &pk_len) != PQHS_OK) return fail("ed_ml44 public_key_len", 1);
+    if (pqhs_signature_len(1, &sig_max_len) != PQHS_OK) return fail("ed_ml44 signature_len", 1);
 
     int failures = 0;
     uint8_t *sk = calloc(1, sk_len);
@@ -543,12 +543,12 @@ static int check_stateless_error_cases(void) {
 
     /* The wrong entry point for the suite, in both directions. */
     rc = pqhs_sign(5, sk, sk_len, msg, sizeof(msg), NULL, 0, sig, sig_max_len, &sig_len);
-    failures += expect_rc("pqhs_sign rejects H5", rc, PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
+    failures += expect_rc("pqhs_sign rejects ED-SH", rc, PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
     rc = pqhs_keygen_from_seed(5, seed, sizeof(seed), sk, sk_len, pk, pk_len);
-    failures += expect_rc("pqhs_keygen_from_seed rejects H5", rc,
+    failures += expect_rc("pqhs_keygen_from_seed rejects ED-SH", rc,
                           PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
     rc = pqhs_keygen_stateful_from_seed(1, seed, sizeof(seed), 4, sk, sk_len, pk, pk_len);
-    failures += expect_rc("pqhs_keygen_stateful_from_seed rejects H1", rc,
+    failures += expect_rc("pqhs_keygen_stateful_from_seed rejects ED-ML-44", rc,
                           PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
 
     /* An unknown suite code. */
@@ -568,9 +568,9 @@ done:
 
 static int check_stateful_error_cases(void) {
     size_t sk_len, pk_len, sig_max_len;
-    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("h5 secret_key_len", 1);
-    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("h5 public_key_len", 1);
-    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("h5 signature_len", 1);
+    if (pqhs_secret_key_len(5, &sk_len) != PQHS_OK) return fail("ed_sh secret_key_len", 1);
+    if (pqhs_public_key_len(5, &pk_len) != PQHS_OK) return fail("ed_sh public_key_len", 1);
+    if (pqhs_signature_len(5, &sig_max_len) != PQHS_OK) return fail("ed_sh signature_len", 1);
 
     int failures = 0;
     uint8_t *sk = calloc(1, sk_len);
@@ -660,11 +660,11 @@ static int check_stateful_error_cases(void) {
     /* --- The wrong entry point for the suite. --- */
     rc = pqhs_sign_stateful(1, sk, sk_len, &journal, msg, sizeof(msg), NULL, 0, sk_out, sk_len,
                              sig, sig_max_len, &sig_len);
-    failures += expect_rc("pqhs_sign_stateful rejects H1", rc,
+    failures += expect_rc("pqhs_sign_stateful rejects ED-ML-44", rc,
                           PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
     rc = pqhs_sign_stateless(1, sk, sk_len, &budget, msg, sizeof(msg), NULL, 0, sig, sig_max_len,
                               &sig_len);
-    failures += expect_rc("pqhs_sign_stateless rejects H1", rc,
+    failures += expect_rc("pqhs_sign_stateless rejects ED-ML-44", rc,
                           PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
 
     /* --- A null journal, and a journal with a null callback. --- */
@@ -932,8 +932,8 @@ done:
  * which is exactly the shape attacker-supplied bytes arrive in. */
 static int check_malformed_verify_input(void) {
     size_t pk_len, sig_max_len;
-    if (pqhs_public_key_len(1, &pk_len) != PQHS_OK) return fail("h1 public_key_len", 1);
-    if (pqhs_signature_len(1, &sig_max_len) != PQHS_OK) return fail("h1 signature_len", 1);
+    if (pqhs_public_key_len(1, &pk_len) != PQHS_OK) return fail("ed_ml44 public_key_len", 1);
+    if (pqhs_signature_len(1, &sig_max_len) != PQHS_OK) return fail("ed_ml44 signature_len", 1);
 
     int failures = 0;
 
@@ -996,7 +996,7 @@ static int check_malformed_verify_input(void) {
     {
         size_t sk_len;
         if (pqhs_secret_key_len(1, &sk_len) != PQHS_OK) {
-            failures += fail("h1 secret_key_len", 1);
+            failures += fail("ed_ml44 secret_key_len", 1);
             goto done;
         }
         uint8_t *sk = calloc(1, sk_len);
@@ -1087,9 +1087,9 @@ static int check_null_pointer_and_profile(void) {
 /* ------------------------------------------------------------------ */
 
 /* A fixed recovery phrase becomes a master seed, a hard junction derives a
- * child seed from it, an H3 keypair is generated from that child, and the
- * VRF is evaluated, verified, and turned into output bytes. H3 rather than
- * H5/H6: this path needs no stateless budget store, so it exercises the
+ * child seed from it, an SR-ML-44 keypair is generated from that child, and the
+ * VRF is evaluated, verified, and turned into output bytes. SR-ML-44 rather than
+ * ED-SH/SR-SH: this path needs no stateless budget store, so it exercises the
  * seed and VRF entry points without dragging in the budget vtable checked
  * elsewhere in this file. */
 static int check_seed_and_vrf(void) {
@@ -1118,9 +1118,9 @@ static int check_seed_and_vrf(void) {
                             memcmp(master, child, sizeof(master)) != 0);
 
     size_t sk_len, pk_len, proof_len;
-    if (pqhs_secret_key_len(3, &sk_len) != PQHS_OK) return fail("h3 secret_key_len", 1);
-    if (pqhs_public_key_len(3, &pk_len) != PQHS_OK) return fail("h3 public_key_len", 1);
-    if (pqhs_vrf_proof_len(3, &proof_len) != PQHS_OK) return fail("h3 vrf_proof_len", 1);
+    if (pqhs_secret_key_len(3, &sk_len) != PQHS_OK) return fail("sr_ml44 secret_key_len", 1);
+    if (pqhs_public_key_len(3, &pk_len) != PQHS_OK) return fail("sr_ml44 public_key_len", 1);
+    if (pqhs_vrf_proof_len(3, &proof_len) != PQHS_OK) return fail("sr_ml44 vrf_proof_len", 1);
 
     sk = calloc(1, sk_len);
     pk = calloc(1, pk_len);
@@ -1133,7 +1133,7 @@ static int check_seed_and_vrf(void) {
 
     rc = pqhs_keygen_from_seed(3, child, sizeof(child), sk, sk_len, pk, pk_len);
     if (rc != PQHS_OK) {
-        failures = fail("h3 keygen_from_seed", rc);
+        failures = fail("sr_ml44 keygen_from_seed", rc);
         goto done;
     }
 
@@ -1163,9 +1163,9 @@ done:
 
 int main(void) {
     int failures = 0;
-    failures += check_h1();
-    failures += check_h5();
-    failures += check_h5_handle();
+    failures += check_ed_ml44();
+    failures += check_ed_sh();
+    failures += check_ed_sh_handle();
     failures += check_stateless_error_cases();
     failures += check_stateful_error_cases();
     failures += check_journal_key_binding();

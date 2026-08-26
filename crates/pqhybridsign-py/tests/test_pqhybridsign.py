@@ -8,19 +8,24 @@ import pytest
 
 import pqhybridsign as phs
 
-STATELESS_SUITES = [phs.Suite.H1, phs.Suite.H2, phs.Suite.H3, phs.Suite.H4]
-STATEFUL_SUITES = [phs.Suite.H5, phs.Suite.H6]
+STATELESS_SUITES = [
+    phs.Suite.ED_ML_44,
+    phs.Suite.ED_FN_512,
+    phs.Suite.SR_ML_44,
+    phs.Suite.SR_FN_512,
+]
+STATEFUL_SUITES = [phs.Suite.ED_SH, phs.Suite.SR_SH]
 ALL_SUITES = STATELESS_SUITES + STATEFUL_SUITES
 
 # Integer codes pinned by pqhybridsign_abi::Suite. Changing any of these
 # silently renumbers the Python-visible suite codes and the C ABI.
 SUITE_CODES = (
-    (phs.Suite.H1, 1),
-    (phs.Suite.H2, 2),
-    (phs.Suite.H3, 3),
-    (phs.Suite.H4, 4),
-    (phs.Suite.H5, 5),
-    (phs.Suite.H6, 6),
+    (phs.Suite.ED_ML_44, 1),
+    (phs.Suite.ED_FN_512, 2),
+    (phs.Suite.SR_ML_44, 3),
+    (phs.Suite.SR_FN_512, 4),
+    (phs.Suite.ED_SH, 5),
+    (phs.Suite.SR_SH, 6),
 )
 
 MALFORMED_BLOBS = [
@@ -134,7 +139,7 @@ def test_stateless_path_on_a_stateful_suite_spends_no_leaf(suite):
 
     sig_a = sk.sign_stateless(b"message", b"context")
     sig_b = sk.sign_stateless(b"message", b"context")
-    # Plain `verify` accepts only the stateful path for H5/H6
+    # Plain `verify` accepts only the stateful path for ED_SH/SR_SH
     # (specification section 20.2): a stateless-path signature verifies
     # only through `verify_stateless`.
     assert phs.verify(suite, pk, b"message", b"context", sig_a) is False
@@ -168,7 +173,7 @@ def test_stateful_signing_does_not_charge_the_stateless_budget():
     leaves and must leave the stateless budget exactly where it was."""
     budget = MemoryBudget()
     sk, _pk = phs.keygen_stateful_from_seed(
-        phs.Suite.H5, bytes(range(32)), 4, MemoryJournal(), budget
+        phs.Suite.ED_SH, bytes(range(32)), 4, MemoryJournal(), budget
     )
 
     sk.sign_stateful(b"message", b"context")
@@ -192,7 +197,7 @@ def test_an_exhausted_stateless_budget_is_refused_and_spends_nothing():
 
     budget = ExhaustedBudget()
     sk, _pk = phs.keygen_stateful_from_seed(
-        phs.Suite.H5, bytes(range(32)), 4, MemoryJournal(), budget
+        phs.Suite.ED_SH, bytes(range(32)), 4, MemoryJournal(), budget
     )
 
     with pytest.raises(phs.StatelessBudgetExhaustedError):
@@ -209,7 +214,7 @@ def test_a_budget_store_that_cannot_record_refuses_the_signature():
             raise RuntimeError("disk full")
 
     sk, _pk = phs.keygen_stateful_from_seed(
-        phs.Suite.H5, bytes(range(32)), 4, MemoryJournal(), FailingBudget()
+        phs.Suite.ED_SH, bytes(range(32)), 4, MemoryJournal(), FailingBudget()
     )
 
     # The store's own exception is re-raised in preference to the flat ABI
@@ -250,7 +255,7 @@ def test_verify_with_stored_public_key_rejects_a_foreign_bundle(suite):
 
     # Whole-key verification accepts the honest signature: the key and the
     # signature agree with each other, and nothing else is consulted. Plain
-    # `phs.verify` accepts only the stateful path for H5/H6 (specification
+    # `phs.verify` accepts only the stateful path for ED_SH/SR_SH (specification
     # section 20.2), so a stateless-path signature verifies only through
     # `verify_stateless`.
     assert phs.verify(suite, pk, b"message", b"ctx", sig) is False
@@ -310,10 +315,10 @@ def test_sign_stateless_cannot_be_reached_without_a_budget_store():
     is no way to reach the stateless path with the bound unenforced."""
     with pytest.raises(TypeError):
         phs.keygen_stateful_from_seed(
-            phs.Suite.H5, bytes(range(32)), 4, MemoryJournal()
+            phs.Suite.ED_SH, bytes(range(32)), 4, MemoryJournal()
         )
     with pytest.raises(TypeError):
-        phs.load_stateful_secret_key(phs.Suite.H5, b"\x00" * 8, MemoryJournal())
+        phs.load_stateful_secret_key(phs.Suite.ED_SH, b"\x00" * 8, MemoryJournal())
 
 
 @pytest.mark.parametrize("suite", STATEFUL_SUITES)
@@ -347,7 +352,7 @@ def test_stateful_key_signs_repeatedly_without_reimporting():
     object both verify, the exported blob advances between them, and a fresh
     object built from that blob continues rather than restarting.
     """
-    suite = phs.Suite.H5
+    suite = phs.Suite.ED_SH
     seed = bytes(range(32))
     journal = MemoryJournal()
     budget = MemoryBudget()
@@ -373,7 +378,7 @@ def test_stateful_key_signs_repeatedly_without_reimporting():
 def test_stateful_key_rejects_a_stateless_suite():
     with pytest.raises(phs.WrongEntryPointForSuiteError):
         phs.load_stateful_secret_key(
-            phs.Suite.H1, bytes(32), MemoryJournal(), MemoryBudget()
+            phs.Suite.ED_ML_44, bytes(32), MemoryJournal(), MemoryBudget()
         )
 
 
@@ -489,17 +494,21 @@ def test_a_journal_belongs_to_one_key(suite):
 
 def test_keygen_refuses_a_journal_that_already_belongs_to_another_key():
     journal = MemoryJournal()
-    phs.keygen_stateful_from_seed(phs.Suite.H5, bytes(range(32)), 4, journal, MemoryBudget())
+    phs.keygen_stateful_from_seed(
+        phs.Suite.ED_SH, bytes(range(32)), 4, journal, MemoryBudget()
+    )
     with pytest.raises(phs.JournalKeyMismatchError):
-        phs.keygen_stateful_from_seed(phs.Suite.H5, bytes(range(32, 64)), 4, journal, MemoryBudget())
+        phs.keygen_stateful_from_seed(
+            phs.Suite.ED_SH, bytes(range(32, 64)), 4, journal, MemoryBudget()
+        )
 
 
 def test_adopt_key_rejects_an_identity_of_the_wrong_length():
     journal = MemoryJournal()
     _sk, pk = phs.keygen_stateful_from_seed(
-        phs.Suite.H5, bytes(range(32)), 4, MemoryJournal(), MemoryBudget()
+        phs.Suite.ED_SH, bytes(range(32)), 4, MemoryJournal(), MemoryBudget()
     )
-    identity = phs.key_identity(phs.Suite.H5, pk)
+    identity = phs.key_identity(phs.Suite.ED_SH, pk)
     with pytest.raises(phs.BadLengthError):
         phs.adopt_key(journal, identity[:-1])
     assert journal.bound_key() is None
@@ -644,12 +653,14 @@ def test_exhausting_the_leaf_budget_raises(suite):
 
 def test_keygen_stateful_rejects_a_stateless_suite():
     with pytest.raises(phs.WrongEntryPointForSuiteError):
-        phs.keygen_stateful_from_seed(phs.Suite.H1, b"\x00" * 32, 4, MemoryJournal(), MemoryBudget())
+        phs.keygen_stateful_from_seed(
+            phs.Suite.ED_ML_44, b"\x00" * 32, 4, MemoryJournal(), MemoryBudget()
+        )
 
 
 def test_keygen_rejects_a_stateful_suite():
     with pytest.raises(phs.WrongEntryPointForSuiteError):
-        phs.keygen_from_seed(phs.Suite.H5, b"\x00" * 32)
+        phs.keygen_from_seed(phs.Suite.ED_SH, b"\x00" * 32)
 
 
 @pytest.mark.parametrize("suite", STATEFUL_SUITES)
@@ -687,30 +698,37 @@ def test_suite_round_trips_every_value():
         assert phs.Suite.from_code(code).value == code
 
 
+def test_suite_members_are_named_for_their_algorithms():
+    # The integer value is an ABI value and must survive the rename.
+    assert int(phs.Suite.ED_ML_44) == 1
+    assert int(phs.Suite.SR_SH) == 6
+    assert not hasattr(phs.Suite, "H1")
+
+
 def test_suite_runtime_matches_the_stub():
     """Behaviour table for Suite. Fail this if the stub and the class drift."""
-    h1 = phs.Suite.H1
+    ed_ml_44 = phs.Suite.ED_ML_44
 
-    assert isinstance(h1, phs.Suite)
-    assert not isinstance(h1, int)
-    assert h1 == 1
-    assert h1 == phs.Suite.H1
-    assert h1 != phs.Suite.H2
-    assert int(h1) == 1
-    assert h1.value == 1
-    assert phs.Suite.from_code(1) == h1
-    assert hash(h1) == hash(1)
-    assert {h1: "ok"}[h1] == "ok"
-    assert {h1: "ok"}[1] == "ok"
+    assert isinstance(ed_ml_44, phs.Suite)
+    assert not isinstance(ed_ml_44, int)
+    assert ed_ml_44 == 1
+    assert ed_ml_44 == phs.Suite.ED_ML_44
+    assert ed_ml_44 != phs.Suite.ED_FN_512
+    assert int(ed_ml_44) == 1
+    assert ed_ml_44.value == 1
+    assert phs.Suite.from_code(1) == ed_ml_44
+    assert hash(ed_ml_44) == hash(1)
+    assert {ed_ml_44: "ok"}[ed_ml_44] == "ok"
+    assert {ed_ml_44: "ok"}[1] == "ok"
 
     with pytest.raises(TypeError):
         phs.Suite(1)
     with pytest.raises(TypeError):
-        h1 + 1
+        ed_ml_44 + 1
     with pytest.raises(TypeError):
         list(phs.Suite)
     with pytest.raises(TypeError):
-        phs.Suite["H1"]
+        phs.Suite["ED_ML_44"]
     with pytest.raises(phs.InvalidSuiteError):
         phs.Suite.from_code(0)
     with pytest.raises(phs.InvalidSuiteError):
@@ -731,7 +749,7 @@ def test_a_journal_that_raises_on_commit_propagates_its_exception():
             raise RuntimeError("disk full")
 
     sk, _pk = phs.keygen_stateful_from_seed(
-        phs.Suite.H5, bytes(range(32)), 4, RaisingJournal(), MemoryBudget()
+        phs.Suite.ED_SH, bytes(range(32)), 4, RaisingJournal(), MemoryBudget()
     )
     with pytest.raises(RuntimeError, match="disk full"):
         sk.sign_stateful(b"message", b"context")
@@ -937,7 +955,7 @@ def test_vrf_prove_deterministic_repeats_byte_for_byte(suite):
 
 @pytest.mark.parametrize("suite", STATEFUL_SUITES)
 def test_vrf_prove_rejects_the_stateful_suites(suite):
-    """H5 and H6 spend a few-time budget unit per evaluation and prove
+    """ED_SH and SR_SH spend a few-time budget unit per evaluation and prove
     through `VrfStatelessKey.prove` instead: a call that looked free and
     was not would be the worst failure mode this module could offer."""
     # The suite refusal happens before any length check, so this secret
@@ -969,7 +987,7 @@ def test_vrf_stateless_key_derive_rejects_a_wrong_length_master():
     for the same reason -- this is the only coverage `derive` has, and it
     is deliberately kept even though it looks like boilerplate."""
     with pytest.raises(phs.BadLengthError):
-        phs.VrfStatelessKey.derive(phs.Suite.H5, bytes(31))
+        phs.VrfStatelessKey.derive(phs.Suite.ED_SH, bytes(31))
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)

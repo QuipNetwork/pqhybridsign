@@ -10,7 +10,7 @@ use crate::suite::suite_from_code;
 
 /// Write the public key length for `suite`, in bytes, into `*out`.
 ///
-/// For H5 and H6 this is the verify-key form: the form every function in
+/// For ED-SH and SR-SH this is the verify-key form: the form every function in
 /// this crate that reads or writes a public key uses.
 ///
 /// # Errors
@@ -37,7 +37,7 @@ pub unsafe extern "C" fn pqhs_public_key_len(suite: u8, out: *mut usize) -> c_in
 
 /// Write the secret key length for `suite`, in bytes, into `*out`.
 ///
-/// For H5 and H6 this is the exported stateful key blob length -- the
+/// For ED-SH and SR-SH this is the exported stateful key blob length -- the
 /// composite secret key plus the leaf counter and cached verify key -- not
 /// the raw component secret key length. See
 /// [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed).
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn pqhs_secret_key_len(suite: u8, out: *mut usize) -> c_in
 
 /// Write the maximum signature length for `suite`, in bytes, into `*out`.
 ///
-/// H2, H4, H5 and H6 produce variable-length signatures; this is the
+/// ED-FN-512, SR-FN-512, ED-SH and SR-SH produce variable-length signatures; this is the
 /// maximum any signature under `suite` can reach, not the length any one
 /// signature actually writes. Every signing function in this crate reports
 /// the actual length written separately.
@@ -98,11 +98,11 @@ pub unsafe extern "C" fn pqhs_signature_len(suite: u8, out: *mut usize) -> c_int
 /// [`pqhs_verify_with_stored_public_key_stateless`](crate::pqhs_verify_with_stored_public_key_stateless)
 /// take as `stored_public_key`.
 ///
-/// Total over `1..=6`. For H5 and H6 this is the classical public key and a
+/// Total over `1..=6`. For ED-SH and SR-SH this is the classical public key and a
 /// 32-byte commitment to the post-quantum verify key, smaller than
 /// [`pqhs_public_key_len`] reports for the same suite because the verify
-/// key itself is supplied per signature rather than stored. For H1 through
-/// H4 the stored and verify forms are the same bytes, so this equals
+/// key itself is supplied per signature rather than stored. For ED-ML-44 through
+/// SR-FN-512 the stored and verify forms are the same bytes, so this equals
 /// [`pqhs_public_key_len`].
 ///
 /// # Errors

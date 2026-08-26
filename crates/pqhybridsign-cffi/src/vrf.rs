@@ -22,8 +22,8 @@ const _: () = assert!(PQHS_VRF_OUTPUT_LEN == VRF_OUTPUT_LEN);
 
 /// Write the hybrid VRF proof length for `suite`, in bytes, into `*out`.
 ///
-/// For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-/// delta-length binding can occupy. For H5 and H6 this is exact.
+/// For ED-ML-44 and SR-ML-44 this is exact. For ED-FN-512 and SR-FN-512 this is the maximum a
+/// delta-length binding can occupy. For ED-SH and SR-SH this is exact.
 ///
 /// # Errors
 ///
@@ -54,7 +54,7 @@ pub unsafe extern "C" fn pqhs_vrf_proof_len(suite: u8, out: *mut usize) -> c_int
 /// random source. Writes the proof into `proof_out` and the number of bytes
 /// written into `*proof_written`.
 ///
-/// H1 through H4 only. H5 and H6 spend one unit of a few-time stateless
+/// ED-ML-44 through SR-FN-512 only. ED-SH and SR-SH spend one unit of a few-time stateless
 /// budget on every evaluation and need a durable store to record it, so
 /// they prove through [`pqhs_vrf_prove_stateless`] instead, on the same terms
 /// [`crate::pqhs_sign`] refuses them: a call that looks free and is not is
@@ -62,7 +62,7 @@ pub unsafe extern "C" fn pqhs_vrf_proof_len(suite: u8, out: *mut usize) -> c_int
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH or SR-SH: use
 /// [`pqhs_vrf_prove_stateless`] instead. `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if
 /// `proof_out` is smaller than [`pqhs_vrf_proof_len`] needs for this input.
 /// `PQHS_ERR_BAD_LENGTH` if `sk` is not the suite's secret-key length.
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn pqhs_vrf_prove(
 /// Writes the proof into `proof_out` and the number of bytes written into
 /// `*proof_written`.
 ///
-/// H1 through H4 only, on the same terms as [`pqhs_vrf_prove`]: H5 and H6
+/// ED-ML-44 through SR-FN-512 only, on the same terms as [`pqhs_vrf_prove`]: ED-SH and SR-SH
 /// spend a few-time budget unit and prove through [`pqhs_vrf_prove_stateless`].
 ///
 /// # Errors
@@ -192,9 +192,9 @@ pub unsafe extern "C" fn pqhs_vrf_prove_deterministic(
 ///
 /// `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
 /// [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
-/// the capacity of the buffer that held it. For H1, H3, H5 and H6 those are
+/// the capacity of the buffer that held it. For ED-ML-44, SR-ML-44, ED-SH and SR-SH those are
 /// the same number, because [`crate::pqhs_vrf_proof_len`] is exact for
-/// those suites. For H2 and H4, [`crate::pqhs_vrf_proof_len`] reports only a
+/// those suites. For ED-FN-512 and SR-FN-512, [`crate::pqhs_vrf_proof_len`] reports only a
 /// maximum, and passing that maximum here instead of `*proof_written`
 /// verifies a proof that is not the one produced: this function fails
 /// closed on it, the same as any other malformed `proof`, with no error
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn pqhs_vrf_verify(
 /// [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
 /// the capacity of the buffer that held it, on the same terms as
 /// [`pqhs_vrf_verify`]'s `proof_len`. Passing
-/// [`crate::pqhs_vrf_proof_len`]'s maximum for H2 or H4 instead derives
+/// [`crate::pqhs_vrf_proof_len`]'s maximum for ED-FN-512 or SR-FN-512 instead derives
 /// bytes from the wrong proof.
 ///
 /// # Errors
@@ -342,10 +342,10 @@ pub unsafe extern "C" fn pqhs_vrf_make_bytes(
     })
 }
 
-/// A SHRINCS key dedicated to VRF evaluation under H5 or H6, held across
+/// A SHRINCS key dedicated to VRF evaluation under ED-SH or SR-SH, held across
 /// calls.
 ///
-/// H5 and H6 evaluate the VRF through their post-quantum half's few-time
+/// ED-SH and SR-SH evaluate the VRF through their post-quantum half's few-time
 /// stateless path, which draws on a budget shared with rotation and
 /// recovery. The key that carries an identity's rotation and recovery
 /// authority must not also spend that budget on VRF evaluations, so this
@@ -373,7 +373,7 @@ pub struct PqhsVrfKey {
 /// [`crate::pqhs_public_key_len`] bytes for `suite`.
 ///
 /// **This key is not the identity key.** Deriving it under the same master
-/// seed as an H5/H6 identity key produces a different key, disjoint from
+/// seed as an ED-SH/SR-SH identity key produces a different key, disjoint from
 /// the identity's rotation and recovery authority, by construction of the
 /// derivation label. Do not adopt an identity key here: doing so would
 /// spend the identity's rotation and recovery budget on VRF evaluations.
@@ -383,7 +383,7 @@ pub struct PqhsVrfKey {
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: they have no stateful
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: they have no stateful
 /// half and therefore no dedicated stateless VRF key.
 /// `PQHS_ERR_BAD_LENGTH` if `master_len` is not `PQHS_MASTER_SEED_LEN`, or
 /// `pk_out_len` is not [`crate::pqhs_public_key_len`] for `suite`.
@@ -426,7 +426,7 @@ pub unsafe extern "C" fn pqhs_vrf_key_derive(
         // refused by default rather than admitted by default.
         if !matches!(
             suite,
-            pqhybridsign_abi::Suite::H5 | pqhybridsign_abi::Suite::H6
+            pqhybridsign_abi::Suite::EdSh | pqhybridsign_abi::Suite::SrSh
         ) {
             return crate::error::PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE;
         }
@@ -496,7 +496,7 @@ pub unsafe extern "C" fn pqhs_vrf_key_free(key: *mut PqhsVrfKey) {
     });
 }
 
-/// Evaluate the hybrid VRF under H5 or H6 through `key`, spending one unit
+/// Evaluate the hybrid VRF under ED-SH or SR-SH through `key`, spending one unit
 /// of the few-time stateless budget. Writes the proof into `proof_out` and
 /// the number of bytes written into `*proof_written`.
 ///
@@ -604,9 +604,9 @@ mod tests {
     const OTHER_INPUT: &[u8] = b"epoch-7/slot-43/randomness";
     const OUT_CTX: &[u8] = b"leadership-score";
 
-    fn h1_keypair() -> (Vec<u8>, Vec<u8>) {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H1)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H1)];
+    fn ed_ml44_keypair() -> (Vec<u8>, Vec<u8>) {
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdMl44)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdMl44)];
         let seed = [5u8; 32];
         // SAFETY: every pointer below is a live local buffer of the length
         // passed.
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn a_vrf_proof_verifies() {
-        let (sk, pk) = h1_keypair();
+        let (sk, pk) = ed_ml44_keypair();
         let mut proof_len = 0usize;
         // SAFETY: `proof_len` is a live local `usize`.
         assert_eq!(unsafe { pqhs_vrf_proof_len(1, &mut proof_len) }, PQHS_OK);
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn a_tampered_vrf_proof_does_not_verify() {
-        let (sk, pk) = h1_keypair();
+        let (sk, pk) = ed_ml44_keypair();
         let mut proof_len = 0usize;
         // SAFETY: `proof_len` is a live local `usize`.
         assert_eq!(unsafe { pqhs_vrf_proof_len(1, &mut proof_len) }, PQHS_OK);
@@ -715,7 +715,7 @@ mod tests {
     /// `a_tampered_vrf_proof_does_not_verify` covers.
     #[test]
     fn a_proof_does_not_verify_against_another_input() {
-        let (sk, pk) = h1_keypair();
+        let (sk, pk) = ed_ml44_keypair();
         let mut proof_len = 0usize;
         // SAFETY: `proof_len` is a live local `usize`.
         assert_eq!(unsafe { pqhs_vrf_proof_len(1, &mut proof_len) }, PQHS_OK);
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn make_bytes_is_stable_across_two_proofs_of_one_input() {
-        let (sk, pk) = h1_keypair();
+        let (sk, pk) = ed_ml44_keypair();
         let mut proof_len = 0usize;
         // SAFETY: `proof_len` is a live local `usize`.
         assert_eq!(unsafe { pqhs_vrf_proof_len(1, &mut proof_len) }, PQHS_OK);
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn a_deterministic_proof_repeats_byte_for_byte() {
-        let (sk, _pk) = h1_keypair();
+        let (sk, _pk) = ed_ml44_keypair();
         let mut proof_len = 0usize;
         // SAFETY: `proof_len` is a live local `usize`.
         assert_eq!(unsafe { pqhs_vrf_proof_len(1, &mut proof_len) }, PQHS_OK);
@@ -915,7 +915,7 @@ mod tests {
 
     #[test]
     fn a_null_pointer_in_every_position_is_refused() {
-        let (sk, pk) = h1_keypair();
+        let (sk, pk) = ed_ml44_keypair();
         let mut proof = vec![0u8; 4096];
         let mut written = 0usize;
         // SAFETY: every pointer is either the null pointer under test or a
@@ -1028,7 +1028,7 @@ mod tests {
                 "null out in make_bytes"
             );
             let mut vrf_pk =
-                vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H5)];
+                vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdSh)];
             let mut key_out: *mut PqhsVrfKey = std::ptr::null_mut();
             assert_eq!(
                 pqhs_vrf_key_derive(
@@ -1062,7 +1062,7 @@ mod tests {
             // ever be dereferenced, but these run after.
             BUDGET.with(|b| b.borrow_mut().clear());
             let mut real_pk =
-                vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H5)];
+                vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdSh)];
             let mut real_key: *mut PqhsVrfKey = std::ptr::null_mut();
             let master = [9u8; 32];
             assert_eq!(
@@ -1223,7 +1223,7 @@ mod tests {
     #[test]
     fn a_derived_vrf_key_proves_and_verifies_through_the_handle() {
         BUDGET.with(|b| b.borrow_mut().clear());
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H5)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdSh)];
         let mut key_out: *mut PqhsVrfKey = std::ptr::null_mut();
         let master = [13u8; 32];
         // SAFETY: every pointer below is a live local buffer of the length
@@ -1351,7 +1351,7 @@ mod tests {
             // `the_vrf_key_handle_rejects_the_lattice_suites` above uses
             // `public_key_len(suite)` and passes whether the suite gate
             // runs before or after the length check, because the gate
-            // rejects H1-H4 either way. Only a buffer wrong for every
+            // rejects ED-ML-44 through SR-FN-512 either way. Only a buffer wrong for every
             // suite proves the gate itself runs first -- if the gate
             // moved below the length check, this buffer's length would
             // trip `PQHS_ERR_BAD_LENGTH` instead, and the assertion below

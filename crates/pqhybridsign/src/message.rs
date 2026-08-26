@@ -61,27 +61,31 @@ pub fn m_prime(label: &[u8], ctx: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-    const H1: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
+    const ED_ML44: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
 
     // Uses the allocating `m_prime` wrapper.
     #[cfg(feature = "alloc")]
     #[test]
     fn layout_matches_the_specification() {
-        let out = m_prime(H1, b"chain", b"hello").expect("build");
+        let out = m_prime(ED_ML44, b"chain", b"hello").expect("build");
         assert_eq!(out[0], 0x01, "prefix");
-        assert_eq!(&out[1..1 + H1.len()], H1, "label including the null byte");
-        assert_eq!(out[1 + H1.len()], 5, "len(ctx)");
-        assert_eq!(&out[2 + H1.len()..7 + H1.len()], b"chain");
-        assert_eq!(&out[7 + H1.len()..], b"hello");
+        assert_eq!(
+            &out[1..1 + ED_ML44.len()],
+            ED_ML44,
+            "label including the null byte"
+        );
+        assert_eq!(out[1 + ED_ML44.len()], 5, "len(ctx)");
+        assert_eq!(&out[2 + ED_ML44.len()..7 + ED_ML44.len()], b"chain");
+        assert_eq!(&out[7 + ED_ML44.len()..], b"hello");
     }
 
     // Uses the allocating `m_prime` wrapper.
     #[cfg(feature = "alloc")]
     #[test]
     fn empty_context_encodes_a_zero_length() {
-        let out = m_prime(H1, b"", b"m").expect("build");
-        assert_eq!(out[1 + H1.len()], 0);
-        assert_eq!(&out[2 + H1.len()..], b"m");
+        let out = m_prime(ED_ML44, b"", b"m").expect("build");
+        assert_eq!(out[1 + ED_ML44.len()], 0);
+        assert_eq!(&out[2 + ED_ML44.len()..], b"m");
     }
 
     // Uses the allocating `m_prime` wrapper.
@@ -89,9 +93,12 @@ mod tests {
     #[test]
     fn context_over_255_bytes_is_rejected() {
         let ctx = [0u8; 256];
-        assert_eq!(m_prime(H1, &ctx, b"m").unwrap_err(), Error::ContextTooLong);
         assert_eq!(
-            m_prime_len(H1, &ctx, b"m").unwrap_err(),
+            m_prime(ED_ML44, &ctx, b"m").unwrap_err(),
+            Error::ContextTooLong
+        );
+        assert_eq!(
+            m_prime_len(ED_ML44, &ctx, b"m").unwrap_err(),
             Error::ContextTooLong
         );
     }
@@ -101,25 +108,25 @@ mod tests {
     #[test]
     fn context_of_exactly_255_bytes_is_accepted() {
         let ctx = [7u8; 255];
-        let out = m_prime(H1, &ctx, b"m").expect("255 is the maximum");
-        assert_eq!(out[1 + H1.len()], 255);
+        let out = m_prime(ED_ML44, &ctx, b"m").expect("255 is the maximum");
+        assert_eq!(out[1 + ED_ML44.len()], 255);
     }
 
     #[test]
     fn declared_length_matches_written_length() {
-        let need = m_prime_len(H1, b"ab", b"cde").expect("len");
+        let need = m_prime_len(ED_ML44, b"ab", b"cde").expect("len");
         let mut buf = [0u8; 64];
-        let wrote = write_m_prime(&mut buf[..need], H1, b"ab", b"cde").expect("write");
+        let wrote = write_m_prime(&mut buf[..need], ED_ML44, b"ab", b"cde").expect("write");
         assert_eq!(need, wrote);
-        assert_eq!(need, 1 + H1.len() + 1 + 2 + 3);
+        assert_eq!(need, 1 + ED_ML44.len() + 1 + 2 + 3);
     }
 
     #[test]
     fn a_short_buffer_is_rejected_and_not_partially_written() {
-        let need = m_prime_len(H1, b"", b"m").expect("len");
+        let need = m_prime_len(ED_ML44, b"", b"m").expect("len");
         let mut storage = [0u8; 64];
         let buf = &mut storage[..need - 1];
-        let err = write_m_prime(buf, H1, b"", b"m").unwrap_err();
+        let err = write_m_prime(buf, ED_ML44, b"", b"m").unwrap_err();
         assert_eq!(
             err,
             Error::OutputBufferTooSmall {
@@ -134,10 +141,10 @@ mod tests {
     #[cfg(feature = "alloc")]
     #[test]
     fn different_labels_give_different_bindings() {
-        const H3: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";
+        const SR_ML44: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";
         assert_ne!(
-            m_prime(H1, b"", b"m").unwrap(),
-            m_prime(H3, b"", b"m").unwrap()
+            m_prime(ED_ML44, b"", b"m").unwrap(),
+            m_prime(SR_ML44, b"", b"m").unwrap()
         );
     }
 }

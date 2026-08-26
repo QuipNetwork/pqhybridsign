@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Entry points for the two stateful suites, H5 and H6.
+//! Entry points for the two stateful suites, EdSh and SrSh.
 //!
-//! Every function here rejects H1 through H4 with
+//! Every function here rejects EdMl44 through SrFn512 with
 //! [`AbiError::WrongEntryPointForSuite`]. This module is the other half of
 //! the split described on [`crate::stateless_suites`]: nothing here can be
 //! reached by a call shaped for a stateless suite, and nothing in
-//! `stateless_suites` can be reached by a call naming H5 or H6.
+//! `stateless_suites` can be reached by a call naming EdSh or SrSh.
 //!
 //! A stateful secret key is not `Clone` in the generic layer (a cloned copy
 //! would be a second holder of the same one-time leaf budget), and this
@@ -17,7 +17,7 @@
 //! the call fails.
 
 use pqhybridsign::budget::StatelessBudgetStore;
-use pqhybridsign::shrincs::{H5, H6};
+use pqhybridsign::shrincs::{EdSh, SrSh};
 use pqhybridsign::stateful::{KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::stateful_composite::{keygen, CommittedVerifyKey, PublicKey, SecretKey};
 use pqhybridsign::suite::StatefulSuite;
@@ -37,7 +37,7 @@ use crate::suite::Suite;
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4: use
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512: use
 /// [`crate::keygen_from_seed`] instead. [`AbiError::BadLength`] if `seed`
 /// is not 32 bytes, or `sk_out`/`pk_out` are not exactly the suite's key
 /// lengths. [`AbiError::ComponentFailure`] if `max_stateful_signatures` is
@@ -50,9 +50,11 @@ pub fn keygen_stateful_from_seed(
     pk_out: &mut [u8],
 ) -> Result<(), AbiError> {
     match suite {
-        Suite::H5 => keygen_stateful::<H5>(seed, max_stateful_signatures, sk_out, pk_out),
-        Suite::H6 => keygen_stateful::<H6>(seed, max_stateful_signatures, sk_out, pk_out),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => keygen_stateful::<EdSh>(seed, max_stateful_signatures, sk_out, pk_out),
+        Suite::SrSh => keygen_stateful::<SrSh>(seed, max_stateful_signatures, sk_out, pk_out),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -89,14 +91,16 @@ fn keygen_stateful<S: StatefulSuite>(
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4, which have no journal and
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512, which have no journal and
 /// so no identity to bind one to. [`AbiError::BadLength`] if `public_key` is
 /// not [`crate::public_key_len`] bytes for `suite`.
 pub fn key_identity(suite: Suite, public_key: &[u8]) -> Result<KeyIdentity, AbiError> {
     match suite {
-        Suite::H5 => key_identity_of::<H5>(public_key),
-        Suite::H6 => key_identity_of::<H6>(public_key),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => key_identity_of::<EdSh>(public_key),
+        Suite::SrSh => key_identity_of::<SrSh>(public_key),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -113,14 +117,16 @@ fn key_identity_of<S: StatefulSuite>(public_key: &[u8]) -> Result<KeyIdentity, A
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4. [`AbiError::BadLength`]
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512. [`AbiError::BadLength`]
 /// if `sk` is not [`crate::secret_key_len`] bytes for `suite`.
 /// [`AbiError::ComponentFailure`] if the blob does not import.
 pub fn key_identity_from_secret_key(suite: Suite, sk: &[u8]) -> Result<KeyIdentity, AbiError> {
     match suite {
-        Suite::H5 => secret_key_identity_of::<H5>(sk),
-        Suite::H6 => secret_key_identity_of::<H6>(sk),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => secret_key_identity_of::<EdSh>(sk),
+        Suite::SrSh => secret_key_identity_of::<SrSh>(sk),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -216,7 +222,7 @@ pub fn require_bound_key(journal: &impl LeafJournal, key: KeyIdentity) -> Result
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4: use [`crate::sign`] or
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512: use [`crate::sign`] or
 /// [`crate::sign_deterministic`] instead. [`AbiError::BadLength`] if `sk`
 /// or `sk_out` is not exactly [`crate::secret_key_len`] bytes for `suite`,
 /// checked before the journal is touched.
@@ -236,9 +242,11 @@ pub fn sign_stateful(
     sig_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match suite {
-        Suite::H5 => sign_stateful_suite::<H5>(sk, journal, msg, ctx, sk_out, sig_out),
-        Suite::H6 => sign_stateful_suite::<H6>(sk, journal, msg, ctx, sk_out, sig_out),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => sign_stateful_suite::<EdSh>(sk, journal, msg, ctx, sk_out, sig_out),
+        Suite::SrSh => sign_stateful_suite::<SrSh>(sk, journal, msg, ctx, sk_out, sig_out),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -288,7 +296,7 @@ fn sign_stateful_suite<S: StatefulSuite>(
 /// Sign `msg` under `ctx` for `suite` without spending any leaf state,
 /// spending one unit of the few-time stateless budget instead.
 ///
-/// Available on H5 and H6 because SHRINCS pairs its stateful fast path
+/// Available on EdSh and SrSh because SHRINCS pairs its stateful fast path
 /// with a stateless few-time path (specification section 21); no leaf is
 /// consumed and no `sk_out` or journal is needed.
 ///
@@ -309,7 +317,7 @@ fn sign_stateful_suite<S: StatefulSuite>(
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4. [`AbiError::BadLength`]
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512. [`AbiError::BadLength`]
 /// if `sk` is not exactly [`crate::secret_key_len`] bytes for `suite`.
 /// [`AbiError::StatelessBudgetExhausted`] if this key's stateless budget is
 /// spent; nothing was recorded and no signature was built.
@@ -325,9 +333,11 @@ pub fn sign_stateless(
     sig_out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match suite {
-        Suite::H5 => sign_stateless_suite::<H5>(sk, budget, msg, ctx, sig_out),
-        Suite::H6 => sign_stateless_suite::<H6>(sk, budget, msg, ctx, sig_out),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => sign_stateless_suite::<EdSh>(sk, budget, msg, ctx, sig_out),
+        Suite::SrSh => sign_stateless_suite::<SrSh>(sk, budget, msg, ctx, sig_out),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -359,7 +369,7 @@ fn sign_stateless_suite<S: StatefulSuite>(
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4: they have no stored form.
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512: they have no stored form.
 /// [`AbiError::BadLength`] if `out` is not [`crate::stored_public_key_len`]
 /// bytes for `suite`. [`AbiError::ComponentFailure`] if `verify_public_key`
 /// does not decode as this suite's public key.
@@ -369,9 +379,11 @@ pub fn stored_public_key(
     out: &mut [u8],
 ) -> Result<usize, AbiError> {
     match suite {
-        Suite::H5 => stored_form_of::<H5>(verify_public_key, out),
-        Suite::H6 => stored_form_of::<H6>(verify_public_key, out),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => stored_form_of::<EdSh>(verify_public_key, out),
+        Suite::SrSh => stored_form_of::<SrSh>(verify_public_key, out),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -394,7 +406,7 @@ where
 /// only a signature produced by [`sign_stateful`], against a signer-supplied
 /// verify key that must be the one `stored_public_key` commits to.
 ///
-/// This is the entry point for the deployment H5 and H6 are built for: the
+/// This is the entry point for the deployment EdSh and SrSh are built for: the
 /// verifier stores the small form (`ClassicalPK || commitment`,
 /// [`StatefulSuite::STORED_PUBLIC_KEY_LEN`] bytes -- 64 for both suites) and
 /// the signer supplies the full 164-byte commitment bundle alongside every
@@ -422,7 +434,7 @@ where
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4. Their public key is a
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512. Their public key is a
 /// single form with no commitment in it, so there is nothing for this
 /// function to bind; use [`crate::verify`].
 pub fn verify_with_stored_public_key_stateful(
@@ -434,23 +446,25 @@ pub fn verify_with_stored_public_key_stateful(
     sig: &[u8],
 ) -> Result<bool, AbiError> {
     match suite {
-        Suite::H5 => Ok(verify_stored::<H5>(
+        Suite::EdSh => Ok(verify_stored::<EdSh>(
             stored_public_key,
             pq_verify_key,
             msg,
             ctx,
             sig,
-            <H5 as StatefulHybridSignatureScheme>::verify_stateful,
+            <EdSh as StatefulHybridSignatureScheme>::verify_stateful,
         )),
-        Suite::H6 => Ok(verify_stored::<H6>(
+        Suite::SrSh => Ok(verify_stored::<SrSh>(
             stored_public_key,
             pq_verify_key,
             msg,
             ctx,
             sig,
-            <H6 as StatefulHybridSignatureScheme>::verify_stateful,
+            <SrSh as StatefulHybridSignatureScheme>::verify_stateful,
         )),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -476,23 +490,25 @@ pub fn verify_with_stored_public_key_stateless(
     sig: &[u8],
 ) -> Result<bool, AbiError> {
     match suite {
-        Suite::H5 => Ok(verify_stored::<H5>(
+        Suite::EdSh => Ok(verify_stored::<EdSh>(
             stored_public_key,
             pq_verify_key,
             msg,
             ctx,
             sig,
-            <H5 as StatefulHybridSignatureScheme>::verify_stateless,
+            <EdSh as StatefulHybridSignatureScheme>::verify_stateless,
         )),
-        Suite::H6 => Ok(verify_stored::<H6>(
+        Suite::SrSh => Ok(verify_stored::<SrSh>(
             stored_public_key,
             pq_verify_key,
             msg,
             ctx,
             sig,
-            <H6 as StatefulHybridSignatureScheme>::verify_stateless,
+            <SrSh as StatefulHybridSignatureScheme>::verify_stateless,
         )),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -528,12 +544,12 @@ where
 /// refused before either component signature is checked -- see
 /// [`pqhybridsign::stateful::StatefulHybridSignatureScheme::verify_stateful`].
 /// [`crate::verify`] is the total dispatcher across all six suites and, for
-/// H5 and H6, behaves exactly as this function does; call this one directly
-/// only where the suite is already known to be H5 or H6.
+/// EdSh and SrSh, behaves exactly as this function does; call this one directly
+/// only where the suite is already known to be EdSh or SrSh.
 ///
 /// # Errors
 ///
-/// [`AbiError::WrongEntryPointForSuite`] for H1-H4; use [`crate::verify`]
+/// [`AbiError::WrongEntryPointForSuite`] for EdMl44-SrFn512; use [`crate::verify`]
 /// instead.
 pub fn verify_stateful(
     suite: Suite,
@@ -543,9 +559,11 @@ pub fn verify_stateful(
     sig: &[u8],
 ) -> Result<bool, AbiError> {
     match suite {
-        Suite::H5 => Ok(verify_stateful_pk::<H5>(pk, msg, ctx, sig)),
-        Suite::H6 => Ok(verify_stateful_pk::<H6>(pk, msg, ctx, sig)),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => Ok(verify_stateful_pk::<EdSh>(pk, msg, ctx, sig)),
+        Suite::SrSh => Ok(verify_stateful_pk::<SrSh>(pk, msg, ctx, sig)),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
@@ -568,13 +586,15 @@ pub fn verify_stateless(
     sig: &[u8],
 ) -> Result<bool, AbiError> {
     match suite {
-        Suite::H5 => Ok(verify_stateless_pk::<H5>(pk, msg, ctx, sig)),
-        Suite::H6 => Ok(verify_stateless_pk::<H6>(pk, msg, ctx, sig)),
-        Suite::H1 | Suite::H2 | Suite::H3 | Suite::H4 => Err(AbiError::WrongEntryPointForSuite),
+        Suite::EdSh => Ok(verify_stateless_pk::<EdSh>(pk, msg, ctx, sig)),
+        Suite::SrSh => Ok(verify_stateless_pk::<SrSh>(pk, msg, ctx, sig)),
+        Suite::EdMl44 | Suite::EdFn512 | Suite::SrMl44 | Suite::SrFn512 => {
+            Err(AbiError::WrongEntryPointForSuite)
+        }
     }
 }
 
-/// Shared tail of [`verify_stateful`] and, through [`crate::verify`]'s H5/H6
+/// Shared tail of [`verify_stateful`] and, through [`crate::verify`]'s EdSh/SrSh
 /// arms, the total dispatcher: parse `pk` as a whole verify-form key and
 /// accept only a signature on the stateful path.
 pub(crate) fn verify_stateful_pk<S: StatefulSuite>(
@@ -658,7 +678,7 @@ mod tests {
     /// an integrator writes when a key's durable journal is created.
     fn adopted_journal(state: &Rc<RefCell<JournalState>>, pk: &[u8]) -> MemoryJournal {
         let mut journal = MemoryJournal(Rc::clone(state));
-        let identity = key_identity(Suite::H5, pk).expect("identity");
+        let identity = key_identity(Suite::EdSh, pk).expect("identity");
         adopt_key(&mut journal, identity).expect("adopt");
         journal
     }
@@ -667,15 +687,15 @@ mod tests {
     /// commitment, computed from a verify-form public key its own keygen
     /// produced.
     fn stored_form(verify_public_key: &[u8]) -> Vec<u8> {
-        PublicKey::<H5>::from_bytes(verify_public_key)
+        PublicKey::<EdSh>::from_bytes(verify_public_key)
             .expect("keygen produces a well-formed verify-form public key")
             .stored_form()
-            .expect("H5's SHRINCS half computes a commitment")
+            .expect("EdSh's SHRINCS half computes a commitment")
     }
 
     /// The signer-supplied half: everything after the classical public key.
     fn bundle_of(verify_public_key: &[u8]) -> &[u8] {
-        &verify_public_key[crate::stored_public_key_len(Suite::H5) - 32..]
+        &verify_public_key[crate::stored_public_key_len(Suite::EdSh) - 32..]
     }
 
     /// A bundle an attacker generated verifies their own signature perfectly
@@ -686,15 +706,15 @@ mod tests {
     fn verify_with_stored_public_key_refuses_a_bundle_the_stored_key_does_not_name() {
         const MSG: &[u8] = b"transfer everything";
 
-        let mut victim_sk = vec![0u8; crate::secret_key_len(Suite::H5)];
-        let mut victim_pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[0xA1; 32], 4, &mut victim_sk, &mut victim_pk)
+        let mut victim_sk = vec![0u8; crate::secret_key_len(Suite::EdSh)];
+        let mut victim_pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[0xA1; 32], 4, &mut victim_sk, &mut victim_pk)
             .expect("victim keygen");
 
-        let mut attacker_sk = vec![0u8; crate::secret_key_len(Suite::H5)];
-        let mut attacker_pk = vec![0u8; crate::public_key_len(Suite::H5)];
+        let mut attacker_sk = vec![0u8; crate::secret_key_len(Suite::EdSh)];
+        let mut attacker_pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
         keygen_stateful_from_seed(
-            Suite::H5,
+            Suite::EdSh,
             &[0xB2; 32],
             4,
             &mut attacker_sk,
@@ -704,9 +724,9 @@ mod tests {
 
         let victim_stored = stored_form(&victim_pk);
 
-        let mut sig = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut sig = vec![0u8; crate::signature_len(Suite::EdSh)];
         let n = sign_stateless(
-            Suite::H5,
+            Suite::EdSh,
             &attacker_sk,
             &mut MemoryBudget::default(),
             MSG,
@@ -719,15 +739,16 @@ mod tests {
         // Whole-key verification accepts it: the key and the signature agree
         // with each other, and nothing else is consulted. `forged` is
         // stateless-signed, and plain `crate::verify` accepts only the
-        // stateful path for H5/H6, so this goes through `verify_stateless`.
+        // stateful path for EdSh/SrSh, so this goes through `verify_stateless`.
         assert!(
-            verify_stateless(Suite::H5, &attacker_pk, MSG, b"", forged).expect("h5 is stateful")
+            verify_stateless(Suite::EdSh, &attacker_pk, MSG, b"", forged)
+                .expect("ed_sh is stateful")
         );
 
         // Against the victim's installed commitment it is refused.
         assert_eq!(
             verify_with_stored_public_key_stateless(
-                Suite::H5,
+                Suite::EdSh,
                 &victim_stored,
                 bundle_of(&attacker_pk),
                 MSG,
@@ -740,9 +761,9 @@ mod tests {
         // The victim's own signature and bundle pass, so the refusal above
         // is the commitment check and not this entry point failing to
         // verify anything at all.
-        let mut honest = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut honest = vec![0u8; crate::signature_len(Suite::EdSh)];
         let n = sign_stateless(
-            Suite::H5,
+            Suite::EdSh,
             &victim_sk,
             &mut MemoryBudget::default(),
             MSG,
@@ -752,7 +773,7 @@ mod tests {
         .expect("victim signs");
         assert_eq!(
             verify_with_stored_public_key_stateless(
-                Suite::H5,
+                Suite::EdSh,
                 &victim_stored,
                 bundle_of(&victim_pk),
                 MSG,
@@ -766,7 +787,7 @@ mod tests {
         // an error: same rule as `crate::verify`.
         assert_eq!(
             verify_with_stored_public_key_stateless(
-                Suite::H5,
+                Suite::EdSh,
                 &victim_stored[..1],
                 bundle_of(&victim_pk),
                 MSG,
@@ -777,7 +798,7 @@ mod tests {
         );
         assert_eq!(
             verify_with_stored_public_key_stateless(
-                Suite::H5,
+                Suite::EdSh,
                 &victim_stored,
                 &[],
                 MSG,
@@ -799,10 +820,10 @@ mod tests {
     /// (`LeafJournal::next_leaf`), not the one-based wire `LeafCount`.
     #[test]
     fn a_second_fresh_journal_cannot_fork_one_keys_leaf_budget() {
-        let sk_len = crate::secret_key_len(Suite::H5);
+        let sk_len = crate::secret_key_len(Suite::EdSh);
         let mut sk = vec![0u8; sk_len];
-        let mut pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[0x5A; 32], 4, &mut sk, &mut pk).expect("keygen");
+        let mut pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[0x5A; 32], 4, &mut sk, &mut pk).expect("keygen");
 
         // The key's own journal, adopted once when it was provisioned, and a
         // second independent store that has never seen this key.
@@ -818,9 +839,9 @@ mod tests {
         );
 
         let mut sk_out = vec![0u8; sk_len];
-        let mut sig_out = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut sig_out = vec![0u8; crate::signature_len(Suite::EdSh)];
         let one = sign_stateful(
-            Suite::H5,
+            Suite::EdSh,
             &sk,
             &mut first,
             b"message one",
@@ -831,7 +852,7 @@ mod tests {
         .expect("the key's own journal signs");
         assert_eq!(first_state.borrow().committed, vec![0]);
         assert!(crate::verify(
-            Suite::H5,
+            Suite::EdSh,
             &pk,
             b"message one",
             b"",
@@ -842,9 +863,9 @@ mod tests {
         // not this key's journal, and nothing else in the system can tell
         // that a second holder just claimed leaf 0.
         let mut forked_sk_out = vec![0u8; sk_len];
-        let mut forked_sig_out = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut forked_sig_out = vec![0u8; crate::signature_len(Suite::EdSh)];
         let forked = sign_stateful(
-            Suite::H5,
+            Suite::EdSh,
             &sk,
             &mut second,
             b"message two",
@@ -865,10 +886,10 @@ mod tests {
         // Adoption is available, and it is a line the integrator has to
         // write: what changes is that forking the budget is now a decision
         // somebody made, not the default outcome of restarting a process.
-        let identity = key_identity(Suite::H5, &pk).expect("identity");
+        let identity = key_identity(Suite::EdSh, &pk).expect("identity");
         adopt_key(&mut second, identity).expect("explicit adoption is allowed");
         assert!(sign_stateful(
-            Suite::H5,
+            Suite::EdSh,
             &sk,
             &mut second,
             b"message two",
@@ -883,27 +904,27 @@ mod tests {
     /// journal adopted by one key must refuse the other.
     #[test]
     fn an_identity_names_one_key_and_a_journal_holds_one_identity() {
-        let sk_len = crate::secret_key_len(Suite::H5);
+        let sk_len = crate::secret_key_len(Suite::EdSh);
         let mut victim_sk = vec![0u8; sk_len];
-        let mut victim_pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[0xC3; 32], 4, &mut victim_sk, &mut victim_pk)
+        let mut victim_pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[0xC3; 32], 4, &mut victim_sk, &mut victim_pk)
             .expect("victim keygen");
 
         let mut other_sk = vec![0u8; sk_len];
-        let mut other_pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[0xD4; 32], 4, &mut other_sk, &mut other_pk)
+        let mut other_pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[0xD4; 32], 4, &mut other_sk, &mut other_pk)
             .expect("other keygen");
 
         // The public key and the secret key blob name the same identity, and
         // two different keys name two different ones.
-        let victim = key_identity(Suite::H5, &victim_pk).expect("identity");
+        let victim = key_identity(Suite::EdSh, &victim_pk).expect("identity");
         assert_eq!(
             victim,
-            key_identity_from_secret_key(Suite::H5, &victim_sk).expect("identity")
+            key_identity_from_secret_key(Suite::EdSh, &victim_sk).expect("identity")
         );
         assert_ne!(
             victim,
-            key_identity(Suite::H5, &other_pk).expect("identity")
+            key_identity(Suite::EdSh, &other_pk).expect("identity")
         );
 
         // A journal belongs to one key for its whole life.
@@ -912,17 +933,17 @@ mod tests {
         assert_eq!(
             adopt_key(
                 &mut journal,
-                key_identity(Suite::H5, &other_pk).expect("identity")
+                key_identity(Suite::EdSh, &other_pk).expect("identity")
             ),
             Err(AbiError::JournalKeyMismatch)
         );
 
         // And the other key cannot sign through it.
         let mut sk_out = vec![0u8; sk_len];
-        let mut sig_out = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut sig_out = vec![0u8; crate::signature_len(Suite::EdSh)];
         assert_eq!(
             sign_stateful(
-                Suite::H5,
+                Suite::EdSh,
                 &other_sk,
                 &mut journal,
                 b"msg",
@@ -937,7 +958,7 @@ mod tests {
         // The key that owns the journal still signs, so the refusal above is
         // the binding and not this journal refusing everything.
         assert!(sign_stateful(
-            Suite::H5,
+            Suite::EdSh,
             &victim_sk,
             &mut journal,
             b"msg",
@@ -950,11 +971,11 @@ mod tests {
 
     #[test]
     fn identity_entry_points_reject_stateless_suites_and_bad_lengths() {
-        let mut sk = vec![0u8; crate::secret_key_len(Suite::H5)];
-        let mut pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[0xE5; 32], 4, &mut sk, &mut pk).expect("keygen");
+        let mut sk = vec![0u8; crate::secret_key_len(Suite::EdSh)];
+        let mut pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[0xE5; 32], 4, &mut sk, &mut pk).expect("keygen");
 
-        for suite in [Suite::H1, Suite::H2, Suite::H3, Suite::H4] {
+        for suite in [Suite::EdMl44, Suite::EdFn512, Suite::SrMl44, Suite::SrFn512] {
             assert_eq!(
                 key_identity(suite, &pk),
                 Err(AbiError::WrongEntryPointForSuite)
@@ -965,19 +986,19 @@ mod tests {
             );
         }
         assert_eq!(
-            key_identity(Suite::H5, &pk[..pk.len() - 1]),
+            key_identity(Suite::EdSh, &pk[..pk.len() - 1]),
             Err(AbiError::BadLength)
         );
         assert_eq!(
-            key_identity_from_secret_key(Suite::H5, &sk[..sk.len() - 1]),
+            key_identity_from_secret_key(Suite::EdSh, &sk[..sk.len() - 1]),
             Err(AbiError::BadLength)
         );
     }
 
     #[test]
-    fn stateful_entry_points_reject_h1_through_h4() {
+    fn stateful_entry_points_reject_ed_ml44_through_sr_fn512() {
         let mut journal = MemoryJournal(Rc::new(RefCell::new(JournalState::default())));
-        for suite in [Suite::H1, Suite::H2, Suite::H3, Suite::H4] {
+        for suite in [Suite::EdMl44, Suite::EdFn512, Suite::SrMl44, Suite::SrFn512] {
             assert_eq!(
                 keygen_stateful_from_seed(suite, &[0u8; 32], 4, &mut [0u8; 4096], &mut [0u8; 4096]),
                 Err(AbiError::WrongEntryPointForSuite)
@@ -1021,17 +1042,17 @@ mod tests {
 
     #[test]
     fn a_short_output_buffer_returns_the_length_error_rather_than_panicking() {
-        let mut sk = vec![0u8; crate::secret_key_len(Suite::H5)];
-        let mut pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[3u8; 32], 4, &mut sk, &mut pk).expect("keygen");
+        let mut sk = vec![0u8; crate::secret_key_len(Suite::EdSh)];
+        let mut pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[3u8; 32], 4, &mut sk, &mut pk).expect("keygen");
 
         let state = Rc::new(RefCell::new(JournalState::default()));
         let mut journal = adopted_journal(&state, &pk);
         let mut short_sk_out = [0u8; 1];
-        let mut ok_sig_out = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut ok_sig_out = vec![0u8; crate::signature_len(Suite::EdSh)];
         assert_eq!(
             sign_stateful(
-                Suite::H5,
+                Suite::EdSh,
                 &sk,
                 &mut journal,
                 b"msg",
@@ -1052,7 +1073,7 @@ mod tests {
         let mut short_sig_out = [0u8; 1];
         assert_eq!(
             sign_stateless(
-                Suite::H5,
+                Suite::EdSh,
                 &sk,
                 &mut MemoryBudget::default(),
                 b"msg",
@@ -1063,7 +1084,7 @@ mod tests {
         );
         // sanity: the well-sized buffer succeeds.
         assert!(sign_stateless(
-            Suite::H5,
+            Suite::EdSh,
             &sk,
             &mut MemoryBudget::default(),
             b"msg",
@@ -1080,20 +1101,20 @@ mod tests {
     /// for the whole of its remaining budget.
     #[test]
     fn a_wrong_length_sk_out_leaves_the_key_and_the_journal_untouched() {
-        let sk_len = crate::secret_key_len(Suite::H5);
+        let sk_len = crate::secret_key_len(Suite::EdSh);
         let mut sk = vec![0u8; sk_len];
-        let mut pk = vec![0u8; crate::public_key_len(Suite::H5)];
-        keygen_stateful_from_seed(Suite::H5, &[7u8; 32], 4, &mut sk, &mut pk).expect("keygen");
+        let mut pk = vec![0u8; crate::public_key_len(Suite::EdSh)];
+        keygen_stateful_from_seed(Suite::EdSh, &[7u8; 32], 4, &mut sk, &mut pk).expect("keygen");
 
         let state = Rc::new(RefCell::new(JournalState::default()));
         let mut journal = adopted_journal(&state, &pk);
-        let mut sig_out = vec![0u8; crate::signature_len(Suite::H5)];
+        let mut sig_out = vec![0u8; crate::signature_len(Suite::EdSh)];
 
         for wrong_len in [sk_len - 1, sk_len + 1] {
             let mut wrong_sk_out = vec![0u8; wrong_len];
             assert_eq!(
                 sign_stateful(
-                    Suite::H5,
+                    Suite::EdSh,
                     &sk,
                     &mut journal,
                     b"msg",
@@ -1110,7 +1131,7 @@ mod tests {
         let mut good_sk_out = vec![0u8; sk_len];
         assert_eq!(
             sign_stateful(
-                Suite::H5,
+                Suite::EdSh,
                 &sk[..sk_len - 1],
                 &mut journal,
                 b"msg",
@@ -1126,7 +1147,7 @@ mod tests {
         // spends is the first one, not a later one the journal had already
         // recorded on the caller's behalf.
         let n = sign_stateful(
-            Suite::H5,
+            Suite::EdSh,
             &sk,
             &mut journal,
             b"msg",
@@ -1136,7 +1157,7 @@ mod tests {
         )
         .expect("the key must still sign after a rejected wrong-length call");
         assert_eq!(state.borrow().committed, vec![0]);
-        assert!(crate::verify(Suite::H5, &pk, b"msg", b"", &sig_out[..n]));
+        assert!(crate::verify(Suite::EdSh, &pk, b"msg", b"", &sig_out[..n]));
     }
 
     #[test]
@@ -1153,7 +1174,7 @@ mod tests {
         // only at the tampered byte -- the same regression
         // `task-12-report.md:317-333` and `task-9b-report.md:218-236`
         // record failing for the equivalent C-crate test.
-        for suite in [Suite::H5, Suite::H6] {
+        for suite in [Suite::EdSh, Suite::SrSh] {
             let mut sk = vec![0u8; crate::secret_key_len(suite)];
             let mut pk = vec![0u8; crate::public_key_len(suite)];
             keygen_stateful_from_seed(suite, &[9u8; 32], 4, &mut sk, &mut pk).unwrap();
@@ -1188,7 +1209,7 @@ mod tests {
 
     #[test]
     fn the_stored_form_matches_the_public_key_it_came_from() {
-        for suite in [Suite::H5, Suite::H6] {
+        for suite in [Suite::EdSh, Suite::SrSh] {
             let mut sk = vec![0u8; crate::secret_key_len(suite)];
             let mut pk = vec![0u8; crate::public_key_len(suite)];
             keygen_stateful_from_seed(suite, &[9u8; 32], 4, &mut sk, &mut pk).unwrap();
@@ -1209,14 +1230,14 @@ mod tests {
     fn the_stored_form_rejects_the_stateless_suites() {
         let mut out = [0u8; 64];
         assert_eq!(
-            stored_public_key(Suite::H1, &[0u8; 32], &mut out).unwrap_err(),
+            stored_public_key(Suite::EdMl44, &[0u8; 32], &mut out).unwrap_err(),
             AbiError::WrongEntryPointForSuite
         );
     }
 
     #[test]
     fn the_stored_form_rejects_a_wrong_length_output_buffer() {
-        let suite = Suite::H5;
+        let suite = Suite::EdSh;
         let mut sk = vec![0u8; crate::secret_key_len(suite)];
         let mut pk = vec![0u8; crate::public_key_len(suite)];
         keygen_stateful_from_seed(suite, &[9u8; 32], 4, &mut sk, &mut pk).unwrap();

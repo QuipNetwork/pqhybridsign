@@ -7,7 +7,7 @@ use ed25519_zebra::{SigningKey, VerificationKey};
 use subtle::Choice;
 use zeroize::Zeroize;
 
-/// ed25519 classical component of suites H1, H2, H5.
+/// ed25519 classical component of suites EdMl44, EdFn512, EdSh.
 ///
 /// Signing follows RFC 8032. Verification follows [ZIP-215], which
 /// `ed25519-zebra` implements, and the two sides are deliberately
@@ -67,9 +67,9 @@ use zeroize::Zeroize;
 ///   reject genuinely malformed input identically. It is "a well-formed,
 ///   attacker-supplied input is accepted by one honest verifier and
 ///   rejected by another," which is the shape of a chain split.
-///   `tests/ed25519_strict.rs`'s `a_low_order_ed25519_half_splits_h1_verification`
-///   shows this survives into the H1 composite signature, not only the bare
-///   ed25519 component: an H1 signature with this classical forgery spliced
+///   `tests/ed25519_strict.rs`'s `a_low_order_ed25519_half_splits_ed_ml44_verification`
+///   shows this survives into the EdMl44 composite signature, not only the bare
+///   ed25519 component: an EdMl44 signature with this classical forgery spliced
 ///   in and an honest ML-DSA-44 half still verifies under this crate,
 ///   because composite verification is `classical_ok & pq_ok`.
 ///
@@ -235,7 +235,7 @@ fn raw_sign(sk: &[u8], msg: &[u8], sig_out: &mut [u8]) -> Result<()> {
 /// two different outputs on one input -- and this crate's whole reason to have
 /// a VRF is that exactly one output exists per key and input. The same
 /// low-order structure is what
-/// `tests/ed25519_strict.rs::a_low_order_ed25519_half_splits_h1_verification`
+/// `tests/ed25519_strict.rs::a_low_order_ed25519_half_splits_ed_ml44_verification`
 /// exercises against the signature path, where ZIP-215 acceptance leaves it
 /// open; here it is closed.
 ///

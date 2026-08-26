@@ -43,7 +43,7 @@
 
 use pqhybridsign::encoding_path;
 use pqhybridsign::rotation::{self, NextStoredPublicKey, RotationKind, RotationPayload};
-use pqhybridsign::shrincs::{keygen, PublicKey, SecretKey, H5};
+use pqhybridsign::shrincs::{keygen, EdSh, PublicKey, SecretKey};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_test_support::MemoryBudget;
 use std::sync::OnceLock;
@@ -64,7 +64,7 @@ const MAX_SIGNATURES: u32 = 1;
 /// test fail loudly rather than let a bad one pass. The gate never trusts
 /// this field; only this fixture reads it, standing in for what an owner
 /// installed.
-fn stored_commitment(pk: &PublicKey<H5>) -> [u8; 32] {
+fn stored_commitment(pk: &PublicKey<EdSh>) -> [u8; 32] {
     pk.pq_verify_key()[68..100]
         .try_into()
         .expect("a 32-byte window is 32 bytes")
@@ -74,7 +74,7 @@ fn stored_commitment(pk: &PublicKey<H5>) -> [u8; 32] {
 /// so it is derived from `pk` rather than written as a literal:
 /// `verify_rotation` refuses any other value, and every negative test below
 /// would otherwise pass on that refusal instead of on its own property.
-fn base_payload(pk: &PublicKey<H5>) -> RotationPayload {
+fn base_payload(pk: &PublicKey<EdSh>) -> RotationPayload {
     RotationPayload {
         kind: RotationKind::FullSwap,
         current_commitment: stored_commitment(pk),
@@ -125,7 +125,7 @@ impl LeafJournal for MemoryJournal {
 }
 
 struct Fixture {
-    pk: PublicKey<H5>,
+    pk: PublicKey<EdSh>,
     payload_a: RotationPayload,
     /// The one expensive (stateless SHRINCS) rotation signature this file
     /// produces, authorizing `payload_a`.
@@ -144,17 +144,17 @@ struct Fixture {
     wrong_key_sig: Vec<u8>,
     /// Retained so the attack/tamper cases can build fresh, cheap classical
     /// co-signatures with `rotation::sign_rotation_classical_half`.
-    sk: SecretKey<H5>,
+    sk: SecretKey<EdSh>,
 }
 
 fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
-        let (mut sk, pk) = keygen::<H5>(&[0x42u8; 32], MAX_SIGNATURES).expect("keygen");
+        let (mut sk, pk) = keygen::<EdSh>(&[0x42u8; 32], MAX_SIGNATURES).expect("keygen");
         let payload_a = base_payload(&pk);
 
-        let mut honest_sig = vec![0u8; rotation::rotation_signature_len::<H5>()];
-        rotation::sign_rotation::<H5>(
+        let mut honest_sig = vec![0u8; rotation::rotation_signature_len::<EdSh>()];
+        rotation::sign_rotation::<EdSh>(
             &sk,
             &mut MemoryBudget::default(),
             CTX,
@@ -169,8 +169,8 @@ fn fixture() -> &'static Fixture {
             current_commitment: [0x11u8; 32],
             ..payload_a
         };
-        let mut wrong_key_sig = vec![0u8; rotation::rotation_signature_len::<H5>()];
-        rotation::sign_rotation::<H5>(
+        let mut wrong_key_sig = vec![0u8; rotation::rotation_signature_len::<EdSh>()];
+        rotation::sign_rotation::<EdSh>(
             &sk,
             &mut MemoryBudget::default(),
             CTX,
@@ -180,7 +180,7 @@ fn fixture() -> &'static Fixture {
         .expect("sign_rotation");
 
         let mut journal = MemoryJournal::adopted(sk.key_identity());
-        let ordinary_sig = H5::sign_stateful(&mut sk, &mut journal, b"ordinary message", CTX)
+        let ordinary_sig = EdSh::sign_stateful(&mut sk, &mut journal, b"ordinary message", CTX)
             .expect("sign_stateful");
 
         Fixture {
@@ -202,7 +202,7 @@ fn fixture() -> &'static Fixture {
 #[test]
 fn a_valid_rotation_verifies_and_installs_atomically() {
     let f = fixture();
-    let installed = rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_a, &f.honest_sig)
+    let installed = rotation::verify_rotation::<EdSh>(&f.pk, CTX, &f.payload_a, &f.honest_sig)
         .expect("a valid rotation must verify");
     assert_eq!(
         installed,
@@ -230,7 +230,7 @@ fn the_front_running_attack_fails() {
     payload_b.next_classical_pk = [0x44u8; 32];
 
     let mut forged = f.honest_sig.clone();
-    rotation::sign_rotation_classical_half::<H5>(
+    rotation::sign_rotation_classical_half::<EdSh>(
         &f.sk,
         CTX,
         &payload_b,
@@ -239,7 +239,7 @@ fn the_front_running_attack_fails() {
     .expect("classical co-signature");
 
     assert!(
-        rotation::verify_rotation::<H5>(&f.pk, CTX, &payload_b, &forged).is_none(),
+        rotation::verify_rotation::<EdSh>(&f.pk, CTX, &payload_b, &forged).is_none(),
         "front-running: a stateless rotation signature bound to one \
          NextClassicalPK must not verify once paired with a classical \
          co-signature naming a different NextClassicalPK"
@@ -256,7 +256,7 @@ fn an_invalid_stateless_half_is_rejected_even_with_a_valid_classical_half() {
     let mut sig = f.honest_sig.clone();
     let last = sig.len() - 1;
     sig[last] ^= 0x01;
-    assert!(rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_a, &sig).is_none());
+    assert!(rotation::verify_rotation::<EdSh>(&f.pk, CTX, &f.payload_a, &sig).is_none());
 }
 
 #[test]
@@ -264,7 +264,7 @@ fn an_invalid_classical_half_is_rejected_even_with_a_valid_stateless_half() {
     let f = fixture();
     let mut sig = f.honest_sig.clone();
     sig[0] ^= 0x01;
-    assert!(rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_a, &sig).is_none());
+    assert!(rotation::verify_rotation::<EdSh>(&f.pk, CTX, &f.payload_a, &sig).is_none());
 }
 
 // ---------------------------------------------------------------------
@@ -281,7 +281,7 @@ fn an_ordinary_classical_signature_cannot_be_spliced_in_as_the_rotation_co_signa
     spliced[..classical_len].copy_from_slice(&f.ordinary_sig[..classical_len]);
 
     assert!(
-        rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_a, &spliced).is_none(),
+        rotation::verify_rotation::<EdSh>(&f.pk, CTX, &f.payload_a, &spliced).is_none(),
         "an ordinary classical signature must not verify as a rotation \
          co-signature, because LABEL and ROTATE_LABEL differ"
     );
@@ -305,7 +305,7 @@ fn changing_rotation_kind_alone_invalidates_the_stateless_half() {
     // A fresh, valid classical co-signature over the flipped-kind payload,
     // paired with the original (unmodified) stateless half.
     let mut forged = f.honest_sig.clone();
-    rotation::sign_rotation_classical_half::<H5>(
+    rotation::sign_rotation_classical_half::<EdSh>(
         &f.sk,
         CTX,
         &flipped,
@@ -314,7 +314,7 @@ fn changing_rotation_kind_alone_invalidates_the_stateless_half() {
     .expect("classical co-signature");
 
     assert!(
-        rotation::verify_rotation::<H5>(&f.pk, CTX, &flipped, &forged).is_none(),
+        rotation::verify_rotation::<EdSh>(&f.pk, CTX, &flipped, &forged).is_none(),
         "the stateless half was bound to the original RotationKind and must \
          not verify once the kind changes"
     );
@@ -328,7 +328,7 @@ fn changing_rotation_kind_alone_invalidates_the_stateless_half() {
 #[test]
 fn install_returns_the_next_stored_key_differing_from_current_in_both_halves() {
     let f = fixture();
-    let installed = rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_a, &f.honest_sig)
+    let installed = rotation::verify_rotation::<EdSh>(&f.pk, CTX, &f.payload_a, &f.honest_sig)
         .expect("a valid rotation must verify");
 
     assert_ne!(
@@ -371,7 +371,7 @@ fn a_payload_naming_a_different_current_key_is_refused() {
     );
 
     assert!(
-        rotation::verify_rotation::<H5>(&f.pk, CTX, &f.payload_wrong_key, &f.wrong_key_sig)
+        rotation::verify_rotation::<EdSh>(&f.pk, CTX, &f.payload_wrong_key, &f.wrong_key_sig)
             .is_none(),
         "a payload whose current_commitment is not this key's must be refused, \
          even though both signatures over it are valid"

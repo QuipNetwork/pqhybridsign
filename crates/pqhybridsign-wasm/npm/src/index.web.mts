@@ -65,8 +65,9 @@ export const {
   /**
    * Length in bytes of a hybrid VRF proof for `suite`.
    *
-   * For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-   * delta-length binding can occupy. For H5 and H6 this is exact. A caller
+   * For ED-ML-44 and SR-ML-44 this is exact. For ED-FN-512 and SR-FN-512
+   * this is the maximum a delta-length binding can occupy. For ED-SH and
+   * SR-SH this is exact. A caller
    * sizing storage from this value must treat it as an upper bound.
    *
    * Kept in sync with the doc on {@link PqHybridSignApi.vrfProofLen} in

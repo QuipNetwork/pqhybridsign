@@ -553,9 +553,9 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hashsigs-rs"
-version = "0.2.1-rc2"
+version = "0.2.1-rc6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e0e91b8f111701ac815e825406ead873b494af182cbc23afcb4326743854380"
+checksum = "158cc46dd7f5a4c12e603bb3e3254ea0e321e0b767fc4a921fbbdadd727fcfb2"
 dependencies = [
  "serde",
  "sha2",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign"
-version = "0.0.0-rc8"
+version = "0.0.0-rc9"
 dependencies = [
  "bip39",
  "curve25519-dalek",
@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-abi"
-version = "0.0.0-rc8"
+version = "0.0.0-rc9"
 dependencies = [
  "pqhybridsign",
  "pqhybridsign-test-support",
@@ -822,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-cffi"
-version = "0.0.0-rc8"
+version = "0.0.0-rc9"
 dependencies = [
  "cbindgen",
  "pqhybridsign-abi",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-py"
-version = "0.0.0-rc8"
+version = "0.0.0-rc9"
 dependencies = [
  "pqhybridsign-abi",
  "pyo3",
@@ -841,14 +841,14 @@ dependencies = [
 
 [[package]]
 name = "pqhybridsign-test-support"
-version = "0.0.0-rc8"
+version = "0.0.0-rc9"
 dependencies = [
  "pqhybridsign",
 ]
 
 [[package]]
 name = "pqhybridsign-wasm"
-version = "0.0.0-rc8"
+version = "0.0.0-rc9"
 dependencies = [
  "getrandom 0.2.17",
  "js-sys",

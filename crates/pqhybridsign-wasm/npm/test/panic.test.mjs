@@ -127,7 +127,7 @@ test("a poisoned stateful key handle rejects every later call, including export(
     bindKey() {},
   };
 
-  const key = await api.openStatefulKey("H5", new Uint8Array(4));
+  const key = await api.openStatefulKey("ED-SH", new Uint8Array(4));
 
   await assert.rejects(
     () => key.signStateful(journal, new Uint8Array(1), new Uint8Array(1)),
@@ -167,7 +167,7 @@ test("a poisoned VRF key handle rejects every later call, including free()", asy
     },
   }));
 
-  const { key } = await api.deriveVrfStatelessKey("H5", new Uint8Array(4));
+  const { key } = await api.deriveVrfStatelessKey("ED-SH", new Uint8Array(4));
 
   const budget = {
     consumed() {

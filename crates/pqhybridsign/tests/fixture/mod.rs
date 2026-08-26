@@ -4,7 +4,7 @@
 //! A directory under `tests/` is not a test binary on its own. Consuming
 //! integration tests pull this module in with `mod fixture;`.
 //!
-//! Each fixture file holds both H5 and H6 for one profile. The active
+//! Each fixture file holds both EdSh and SrSh for one profile. The active
 //! `profile-*` feature selects the file at compile time via `include_str!`,
 //! so a missing file is a compile error. A file whose recorded
 //! `profile_name` disagrees with the active profile panics and names the
@@ -33,11 +33,14 @@ use pqhybridsign::component::PqStatefulScheme;
 use pqhybridsign::shrincs::ShrincsScheme;
 use std::sync::OnceLock;
 
+#[path = "../profile_id/mod.rs"]
+mod profile_id;
+
 /// One suite entry from a per-profile fixture file.
 #[derive(Debug, Clone)]
 pub struct Fixture {
     pub profile_name: String,
-    /// `"H5"` or `"H6"`.
+    /// `"ED-SH"` or `"SR-SH"`.
     pub suite: String,
     pub max_signatures: u32,
     pub master_seed: Vec<u8>,
@@ -60,6 +63,7 @@ pub struct Fixture {
 #[derive(serde::Deserialize)]
 struct File {
     profile_name: String,
+    profile_id_hex: String,
     suites: Vec<SuiteEntry>,
 }
 
@@ -159,6 +163,20 @@ fn load_suite(want: &str) -> Fixture {
             active_profile_feature(),
         );
     }
+    let active_profile_id = hex::encode(profile_id::PROFILE_ID);
+    if file.profile_id_hex != active_profile_id {
+        panic!(
+            "fixture {} is keyed on profile_id_hex {:?}, but the active profile's pinned \
+             PROFILE_ID is {:?}. The FORS digest binds this value, so the stateless \
+             signatures below cannot verify. Regenerate with:\n  cargo test -p \
+             pqhybridsign-shrincs --release --no-default-features --features {} \
+             --test generate_fixtures -- --ignored --nocapture",
+            fixture_basename(),
+            file.profile_id_hex,
+            active_profile_id,
+            active_profile_feature(),
+        );
+    }
 
     let entry = file
         .suites
@@ -252,14 +270,14 @@ pub fn foreign_profiles(want: &str) -> Vec<ForeignFixture> {
     out
 }
 
-/// H5 fixture for the active profile.
-pub fn h5() -> &'static Fixture {
+/// EdSh fixture for the active profile.
+pub fn ed_sh() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| load_suite("H5"))
+    FIXTURE.get_or_init(|| load_suite("ED-SH"))
 }
 
-/// H6 fixture for the active profile.
-pub fn h6() -> &'static Fixture {
+/// SrSh fixture for the active profile.
+pub fn sr_sh() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| load_suite("H6"))
+    FIXTURE.get_or_init(|| load_suite("SR-SH"))
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Signing and verification for the four stateless suites, H1 through H4,
+//! Signing and verification for the four stateless suites, ED-ML-44 through SR-FN-512,
 //! plus [`pqhs_verify`] which covers all six.
 
 use std::os::raw::c_int;
@@ -15,7 +15,7 @@ use crate::suite::suite_from_code;
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH or SR-SH: use
 /// [`pqhs_sign_stateful`](crate::pqhs_sign_stateful) or
 /// [`pqhs_sign_stateless`](crate::pqhs_sign_stateless) instead.
 /// `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL` if `sig_out` is smaller than
@@ -245,13 +245,15 @@ mod tests {
     use crate::keygen::pqhs_keygen_from_seed;
 
     #[test]
-    fn h1_sign_and_verify_round_trip() {
+    fn ed_ml44_sign_and_verify_round_trip() {
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
         // of the call.
         unsafe {
-            let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H1)];
-            let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H1)];
+            let mut sk =
+                vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdMl44)];
+            let mut pk =
+                vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdMl44)];
             let seed = [9u8; 32];
             assert_eq!(
                 pqhs_keygen_from_seed(
@@ -268,7 +270,8 @@ mod tests {
 
             let msg = b"the message";
             let ctx = b"ctx";
-            let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H1)];
+            let mut sig =
+                vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdMl44)];
             let mut sig_written = 0usize;
             assert_eq!(
                 pqhs_sign(
@@ -327,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_rejects_h5_and_h6() {
+    fn sign_rejects_ed_sh_and_sr_sh() {
         let mut sig = [0u8; 4096];
         let mut n = 0usize;
         for code in [5u8, 6u8] {
@@ -352,8 +355,8 @@ mod tests {
 
     #[test]
     fn a_short_sig_out_returns_an_output_buffer_too_small_error_rather_than_panicking() {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H1)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H1)];
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdMl44)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdMl44)];
         let seed = [9u8; 32];
         // SAFETY: every pointer below is either null with a zero length or
         // points at a live, correctly sized local buffer for the duration
@@ -393,10 +396,10 @@ mod tests {
     /// valid signature.
     #[test]
     fn a_null_sig_written_is_refused_before_the_signature_is_produced() {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H1)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H1)];
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdMl44)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdMl44)];
         let seed = [21u8; 32];
-        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::H1)];
+        let mut sig = vec![0u8; pqhybridsign_abi::signature_len(pqhybridsign_abi::Suite::EdMl44)];
         // SAFETY: every pointer below is either null with a zero length, the
         // null `sig_written` under test, or a live, correctly sized local
         // buffer for the duration of the call.
@@ -454,7 +457,7 @@ mod tests {
 
     /// `sig_out` only needs to be *at least*
     /// [`pqhybridsign_abi::signature_len`]: a caller that allocates one
-    /// scratch buffer sized for the largest of H1-H4 and reuses it for
+    /// scratch buffer sized for the largest of ED-ML-44 through SR-FN-512 and reuses it for
     /// every suite must not be turned away. Pins the contract for
     /// `pqhs_sign` and `pqhs_sign_deterministic` across all four suites this
     /// entry point serves: short is `PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL`,

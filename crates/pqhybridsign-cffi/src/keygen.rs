@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Keypair derivation for both the stateless (H1-H4) and stateful (H5, H6)
+//! Keypair derivation for both the stateless (ED-ML-44 through SR-FN-512) and stateful (ED-SH, SR-SH)
 //! suites.
 
 use std::os::raw::c_int;
@@ -8,7 +8,7 @@ use crate::error::PQHS_OK;
 use crate::ffi::{borrow_slice, borrow_slice_mut, guard};
 use crate::suite::suite_from_code;
 
-/// Derive a stateless (H1-H4) keypair for `suite` from a 32-byte master
+/// Derive a stateless (ED-ML-44 through SR-FN-512) keypair for `suite` from a 32-byte master
 /// `seed`.
 ///
 /// `sk_out` and `pk_out` must be exactly
@@ -17,7 +17,7 @@ use crate::suite::suite_from_code;
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H5 or H6: use
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH or SR-SH: use
 /// [`pqhs_keygen_stateful_from_seed`](crate::pqhs_keygen_stateful_from_seed)
 /// instead. `PQHS_ERR_BAD_LENGTH` if `seed` is not 32 bytes, or `sk_out`/
 /// `pk_out` are not exactly the suite's key lengths.
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn pqhs_keygen_from_seed(
     })
 }
 
-/// Derive a stateful (H5, H6) keypair for `suite` from a 32-byte master
+/// Derive a stateful (ED-SH, SR-SH) keypair for `suite` from a 32-byte master
 /// `seed`, giving it a budget of `max_stateful_signatures` one-time leaves.
 ///
 /// `sk_out` and `pk_out` must be exactly
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn pqhs_keygen_from_seed(
 ///
 /// # Errors
 ///
-/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for H1-H4: use
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-ML-44 through SR-FN-512: use
 /// [`pqhs_keygen_from_seed`](crate::pqhs_keygen_from_seed) instead.
 /// `PQHS_ERR_BAD_LENGTH` if `seed` is not 32 bytes, or `sk_out`/`pk_out` are
 /// not exactly the suite's key lengths. `PQHS_ERR_COMPONENT_FAILURE` if
@@ -140,9 +140,9 @@ mod tests {
     use crate::error::{PQHS_ERR_BAD_LENGTH, PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE};
 
     #[test]
-    fn h1_keygen_round_trips() {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H1)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H1)];
+    fn ed_ml44_keygen_round_trips() {
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdMl44)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdMl44)];
         let seed = [7u8; 32];
         let rc = unsafe {
             pqhs_keygen_from_seed(
@@ -160,9 +160,9 @@ mod tests {
     }
 
     #[test]
-    fn h1_rejects_a_seed_of_the_wrong_length() {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H1)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H1)];
+    fn ed_ml44_rejects_a_seed_of_the_wrong_length() {
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdMl44)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdMl44)];
         let seed = [7u8; 31];
         let rc = unsafe {
             pqhs_keygen_from_seed(
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn h5_rejects_the_stateless_entry_point() {
+    fn ed_sh_rejects_the_stateless_entry_point() {
         let seed = [1u8; 32];
         let mut sk = [0u8; 4096];
         let mut pk = [0u8; 4096];
@@ -198,9 +198,9 @@ mod tests {
     }
 
     #[test]
-    fn h5_stateful_keygen_round_trips() {
-        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::H5)];
-        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::H5)];
+    fn ed_sh_stateful_keygen_round_trips() {
+        let mut sk = vec![0u8; pqhybridsign_abi::secret_key_len(pqhybridsign_abi::Suite::EdSh)];
+        let mut pk = vec![0u8; pqhybridsign_abi::public_key_len(pqhybridsign_abi::Suite::EdSh)];
         let seed = [3u8; 32];
         let rc = unsafe {
             pqhs_keygen_stateful_from_seed(

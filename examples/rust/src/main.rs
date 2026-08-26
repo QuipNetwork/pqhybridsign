@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Sign/verify roundtrip example for H1 through H4, built against the
+//! Sign/verify roundtrip example for EdMl44 through SrFn512, built against the
 //! published `pqhybridsign` crate from crates.io.
 //!
 //! For each suite: derive a keypair from a fixed seed, sign a message
@@ -8,11 +8,11 @@
 //! constant, so the run needs no random number generator and is
 //! byte-for-byte repeatable.
 //!
-//! H1 and H3 are fixed-offset suites (`pqhybridsign::composite`); H2
-//! and H4 are delta-length suites (`pqhybridsign::composite_delta`),
+//! EdMl44 and SrMl44 are fixed-offset suites (`pqhybridsign::composite`); EdFn512
+//! and SrFn512 are delta-length suites (`pqhybridsign::composite_delta`),
 //! since their FN-DSA-512 half has a variable-length signature.
 
-use pqhybridsign::{H1, H2, H3, H4};
+use pqhybridsign::{EdMl44, EdFn512, SrMl44, SrFn512};
 use pqhybridsign::composite;
 use pqhybridsign::composite_delta;
 use pqhybridsign::suite::{DeltaSuite, Suite};
@@ -41,7 +41,7 @@ fn tamper(msg: &[u8]) -> Vec<u8> {
     tampered
 }
 
-/// Roundtrip a fixed-offset suite (H1, H3): keygen, sign, verify true,
+/// Roundtrip a fixed-offset suite (EdMl44, SrMl44): keygen, sign, verify true,
 /// tamper, verify false.
 fn check_fixed<S: Suite>(name: &str, seed_byte: u8) -> Result<(), String> {
     let mut sk = vec![0u8; S::SECRET_KEY_LEN];
@@ -70,7 +70,7 @@ fn check_fixed<S: Suite>(name: &str, seed_byte: u8) -> Result<(), String> {
     Ok(())
 }
 
-/// Roundtrip a delta-length suite (H2, H4): keygen, sign, verify true,
+/// Roundtrip a delta-length suite (EdFn512, SrFn512): keygen, sign, verify true,
 /// tamper, verify false.
 fn check_delta<S: DeltaSuite>(name: &str, seed_byte: u8) -> Result<(), String> {
     let mut sk = vec![0u8; S::SECRET_KEY_LEN];
@@ -102,10 +102,10 @@ fn check_delta<S: DeltaSuite>(name: &str, seed_byte: u8) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let checks: [fn() -> Result<(), String>; 4] = [
-        || check_fixed::<H1>("H1", 1),
-        || check_delta::<H2>("H2", 2),
-        || check_fixed::<H3>("H3", 3),
-        || check_delta::<H4>("H4", 4),
+        || check_fixed::<EdMl44>("EdMl44", 1),
+        || check_delta::<EdFn512>("EdFn512", 2),
+        || check_fixed::<SrMl44>("SrMl44", 3),
+        || check_delta::<SrFn512>("SrFn512", 4),
     ];
 
     for check in checks {

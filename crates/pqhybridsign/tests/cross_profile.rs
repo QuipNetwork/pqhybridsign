@@ -58,7 +58,7 @@
 // the secret key or the master seed; the loader allows the unused rest.
 mod fixture;
 
-use pqhybridsign::shrincs::{PublicKey, H5};
+use pqhybridsign::shrincs::{EdSh, PublicKey};
 use pqhybridsign::stateful::StatefulHybridSignatureScheme;
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 
@@ -78,15 +78,15 @@ const COMMITMENT_LEN: usize = 32;
 /// (`ClassicalPK || bundle`). Derived from the suite's own constants so a
 /// change to either component's key size moves this with it.
 fn commitment_offset() -> usize {
-    let classical_len = <H5 as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN
-        - <<H5 as StatefulSuite>::Pq as PqStatefulScheme>::VERIFY_KEY_LEN;
+    let classical_len = <EdSh as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN
+        - <<EdSh as StatefulSuite>::Pq as PqStatefulScheme>::VERIFY_KEY_LEN;
     classical_len + BUNDLE_COMMITMENT_OFFSET
 }
 
 #[test]
 fn print_the_cross_profile_fingerprint() {
-    let f = fixture::h5();
-    let pk = PublicKey::<H5>::from_bytes(&f.public_key).expect("public key from fixture");
+    let f = fixture::ed_sh();
+    let pk = PublicKey::<EdSh>::from_bytes(&f.public_key).expect("public key from fixture");
 
     // Same stored form the golden vectors pin: classical public key followed
     // by the 32-byte SHRINCS commitment out of the bundle.
@@ -95,8 +95,8 @@ fn print_the_cross_profile_fingerprint() {
     stored.extend_from_slice(pk.classical());
     stored.extend_from_slice(commitment);
 
-    let profile = <<H5 as StatefulSuite>::Pq as PqStatefulScheme>::NAME;
-    let label = hex::encode(<H5 as StatefulSuite>::LABEL);
+    let profile = <<EdSh as StatefulSuite>::Pq as PqStatefulScheme>::NAME;
+    let label = hex::encode(<EdSh as StatefulSuite>::LABEL);
 
     // The classical half is profile-independent by construction: it comes
     // from the classical component, which knows nothing about SHRINCS. Only
@@ -109,7 +109,7 @@ fn print_the_cross_profile_fingerprint() {
 
     assert_eq!(stored.len(), 64, "stored public key is 64 bytes");
     assert!(
-        <H5 as StatefulSuite>::LABEL.ends_with(&[0u8]),
+        <EdSh as StatefulSuite>::LABEL.ends_with(&[0u8]),
         "label carries its trailing null byte"
     );
     assert!(
@@ -132,20 +132,20 @@ fn print_the_cross_profile_fingerprint() {
 /// different code: `verify_stateful` and `verify_stateless` each
 /// re-derive the commitment for themselves.
 ///
-/// H5 only. H6 differs from H5 in the classical component alone, and the
+/// EdSh only. SrSh differs from EdSh in the classical component alone, and the
 /// property under test is the SHRINCS half's dependence on the commitment,
 /// so running both would double the cost for the same evidence.
 #[test]
 fn a_signature_does_not_verify_under_another_profiles_commitment() {
-    let f = fixture::h5();
+    let f = fixture::ed_sh();
     let at = commitment_offset();
 
     // The honest key verifies both of its own signatures. Without this the
     // rejections below would also be satisfied by a verifier that refuses
     // everything.
-    let honest = PublicKey::<H5>::from_bytes(&f.public_key).expect("public key from fixture");
+    let honest = PublicKey::<EdSh>::from_bytes(&f.public_key).expect("public key from fixture");
     assert!(
-        H5::verify_stateful(
+        EdSh::verify_stateful(
             &honest,
             &f.stateful_msg,
             &f.stateful_ctx,
@@ -154,7 +154,7 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
         "the fixture's own stateful signature must verify under its own key"
     );
     assert!(
-        H5::verify_stateless(
+        EdSh::verify_stateless(
             &honest,
             &f.stateless_msg,
             &f.stateless_ctx,
@@ -163,7 +163,7 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
         "the fixture's own stateless signature must verify under its own key"
     );
 
-    let foreign = fixture::foreign_profiles("H5");
+    let foreign = fixture::foreign_profiles("ED-SH");
     assert_eq!(
         foreign.len(),
         3,
@@ -180,15 +180,15 @@ fn a_signature_does_not_verify_under_another_profiles_commitment() {
             other.profile_name
         );
 
-        let pk = PublicKey::<H5>::from_bytes(&spliced).expect("spliced public key");
+        let pk = PublicKey::<EdSh>::from_bytes(&spliced).expect("spliced public key");
         assert!(
-            !H5::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &f.stateful_signature),
+            !EdSh::verify_stateful(&pk, &f.stateful_msg, &f.stateful_ctx, &f.stateful_signature),
             "a stateful signature must not verify once the commitment comes \
              from profile {}",
             other.profile_name
         );
         assert!(
-            !H5::verify_stateless(
+            !EdSh::verify_stateless(
                 &pk,
                 &f.stateless_msg,
                 &f.stateless_ctx,

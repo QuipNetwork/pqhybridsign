@@ -7,7 +7,7 @@
 //! already embeds the suite label, specification section 7.1) and by the
 //! public-key commitment, which is never shared across suites. That is why
 //! `domain_separator` and `action_type` below are fixed constants shared
-//! across every H5/H6 suite and profile combination rather than varying per
+//! across every EdSh/SrSh suite and profile combination rather than varying per
 //! suite.
 //!
 //! # Leaf-consuming signatures: the attempt spends the leaf
@@ -44,7 +44,7 @@ pub const HYBRID_DOMAIN_SEPARATOR: [u8; 32] = [
     0xfe, 0x2f, 0x77, 0x2d, 0x89, 0x9c, 0x7f, 0xc1, 0xbe, 0x3e, 0xb7, 0x37, 0x63, 0x80, 0xee, 0xbc,
 ];
 
-/// Fixed 32-byte action type shared across all H5/H6 suite and profile
+/// Fixed 32-byte action type shared across all EdSh/SrSh suite and profile
 /// combinations. Suite separation is carried by `payload_hash`, not by this
 /// field.
 ///
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn same_m_prime_maps_deterministically() {
-        let m_prime = b"suite-h5-hybrid-message";
+        let m_prime = b"suite-ed_sh-hybrid-message";
         let a = to_action_context(m_prime, NONZERO_NONCE, NONZERO_KEY_VERSION);
         let b = to_action_context(m_prime, NONZERO_NONCE, NONZERO_KEY_VERSION);
         assert_eq!(a, b);
@@ -185,11 +185,11 @@ mod tests {
         // M' embeds the suite label (specification section 7.1), so two
         // messages differing only in that label must map to different
         // payload hashes.
-        let m_prime_h5 = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
-        let m_prime_h6 = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
-        let ctx_h5 = to_action_context(m_prime_h5, ZERO, ZERO);
-        let ctx_h6 = to_action_context(m_prime_h6, ZERO, ZERO);
-        assert_ne!(ctx_h5.payload_hash, ctx_h6.payload_hash);
+        let m_prime_a = b"\x01hybrid-ed25519-mldsa44-v1\0\x00message";
+        let m_prime_b = b"\x01hybrid-sr25519-mldsa44-v1\0\x00message";
+        let ctx_a = to_action_context(m_prime_a, ZERO, ZERO);
+        let ctx_b = to_action_context(m_prime_b, ZERO, ZERO);
+        assert_ne!(ctx_a.payload_hash, ctx_b.payload_hash);
     }
 
     #[test]

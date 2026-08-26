@@ -14,7 +14,7 @@
     )
 )]
 //! Generator for `tests/node/verify_with_stored_public_key.fixture.json`,
-//! the H5 fixture `tests/node/sign_and_verify.mjs` checks
+//! the ED-SH fixture `tests/node/sign_and_verify.mjs` checks
 //! `verifyWithStoredPublicKey`/`storedPublicKeyLen` against.
 //!
 //! Ignored by default, following the convention of
@@ -77,8 +77,8 @@ impl LeafJournal for MemoryJournal {
 /// Offset of the 32-byte commitment inside a SHRINCS bundle
 /// (`statefulPublicKey(68) || commitment(32) || pkSeed || hypertreeRoot`),
 /// matching the private `BUNDLE_COMMITMENT_OFFSET` constant at
-/// `crates/pqhybridsign/src/shrincs/scheme.rs:48`, identical for H5 and H6
-/// and independent of the active profile (see that constant's own
+/// `crates/pqhybridsign/src/shrincs/scheme.rs:48`, identical for ED-SH and
+/// SR-SH and independent of the active profile (see that constant's own
 /// documentation and `crates/pqhybridsign/src/shrincs/bundle.rs`).
 const COMMITMENT_AT: usize = 68;
 
@@ -110,7 +110,7 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 #[ignore]
 fn generate_verify_with_stored_public_key_fixture() {
-    const SUITE: Suite = Suite::H5;
+    const SUITE: Suite = Suite::EdSh;
     const MSG: &[u8] = b"the message the node test verifies";
     const CTX: &[u8] = b"node-verify-stored-test";
 

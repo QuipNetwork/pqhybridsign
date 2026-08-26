@@ -2,9 +2,9 @@
 """Python bindings for pqhybridsign.
 
 This package re-exports the ``_pqhybridsign`` native extension. See the
-``pqhybridsign`` crate's documentation for the suites (H1 through H6) and
-the split between the stateless (H1-H4) and stateful (H5, H6) signing
-paths.
+``pqhybridsign`` crate's documentation for the six suites and the split
+between the four stateless suites and the two stateful suites, ``ED_SH``
+and ``SR_SH``.
 """
 
 from pqhybridsign._pqhybridsign import (

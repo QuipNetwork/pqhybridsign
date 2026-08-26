@@ -11,5 +11,5 @@
 
 [[allow]]
 name = "hashsigs-rs"
-version = "0.2.1-rc2"
+version = "0.2.1-rc6"
 reason = "First-party crate (quip.network), published and vetted by the maintainer."

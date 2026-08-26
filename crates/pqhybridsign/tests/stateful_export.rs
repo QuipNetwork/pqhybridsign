@@ -20,7 +20,7 @@
         unreachable_pub
     )
 )]
-//! Export and import of a live H5 composite secret key.
+//! Export and import of a live EdSh composite secret key.
 //!
 //! `stateful_spec.rs` proves the counter properties at the upstream
 //! `hashsigs_rs::shrincs::Keys` layer, where `to_bytes` and `import` live.
@@ -36,7 +36,7 @@
 // the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign::shrincs::{keygen, PublicKey, ShrincsScheme, H5};
+use pqhybridsign::shrincs::{keygen, EdSh, PublicKey, ShrincsScheme};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::stateful_composite::SecretKey;
 use pqhybridsign::{component::PqStatefulScheme, error::Error};
@@ -98,7 +98,7 @@ impl LeafJournal for MemoryJournal {
 /// One key, exported after two of its four leaves have been spent. Shared
 /// because keygen dominates the runtime of this file.
 struct Fixture {
-    public_key: PublicKey<H5>,
+    public_key: PublicKey<EdSh>,
     /// Export of the key with its counter at leaf 2.
     blob: Vec<u8>,
 }
@@ -106,10 +106,10 @@ struct Fixture {
 fn fixture() -> &'static Fixture {
     static FIXTURE: OnceLock<Fixture> = OnceLock::new();
     FIXTURE.get_or_init(|| {
-        let (mut sk, public_key) = keygen::<H5>(&SEED, MAX).expect("keygen");
+        let (mut sk, public_key) = keygen::<EdSh>(&SEED, MAX).expect("keygen");
         let mut journal = MemoryJournal::adopted(sk.key_identity());
-        H5::sign_stateful(&mut sk, &mut journal, b"first", b"").expect("sign");
-        H5::sign_stateful(&mut sk, &mut journal, b"second", b"").expect("sign");
+        EdSh::sign_stateful(&mut sk, &mut journal, b"first", b"").expect("sign");
+        EdSh::sign_stateful(&mut sk, &mut journal, b"second", b"").expect("sign");
         let blob = sk.export().expect("export");
         Fixture { public_key, blob }
     })
@@ -136,7 +136,7 @@ const ROOT_AT: usize = PQ_AT + 96;
 #[test]
 fn import_restores_the_advanced_counter_and_the_signer_continues() {
     let fixture = fixture();
-    let mut restored = SecretKey::<H5>::import(&fixture.blob).expect("import");
+    let mut restored = SecretKey::<EdSh>::import(&fixture.blob).expect("import");
 
     // The restored counter is observable through the driver's lockstep check:
     // a journal rewound to the start disagrees with a key that has already
@@ -145,7 +145,7 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
     // check and not the identity check that runs ahead of it.
     let mut fresh = MemoryJournal::adopted(restored.key_identity());
     assert!(
-        H5::sign_stateful(&mut restored, &mut fresh, b"rewound", b"").is_err(),
+        EdSh::sign_stateful(&mut restored, &mut fresh, b"rewound", b"").is_err(),
         "a restored key must not accept a journal that was rewound to the start"
     );
 
@@ -155,16 +155,16 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
     journal.committed.borrow_mut().extend([0, 1]);
     let mut journal = journal;
 
-    let sig = H5::sign_stateful(&mut restored, &mut journal, b"third", b"").expect("sign");
+    let sig = EdSh::sign_stateful(&mut restored, &mut journal, b"third", b"").expect("sign");
     assert!(
-        H5::verify_stateful(&fixture.public_key, b"third", b"", &sig),
+        EdSh::verify_stateful(&fixture.public_key, b"third", b"", &sig),
         "the restored key signs under the original public key"
     );
     assert_eq!(journal.committed.borrow().as_slice(), &[0, 1, 2]);
 
     // Import then export is byte-identical before anything is signed, so the
     // blob is a faithful record and not a re-encoding that drifts.
-    let untouched = SecretKey::<H5>::import(&fixture.blob).expect("import");
+    let untouched = SecretKey::<EdSh>::import(&fixture.blob).expect("import");
     assert_eq!(untouched.export().expect("export"), fixture.blob);
 }
 
@@ -173,13 +173,13 @@ fn import_restores_the_advanced_counter_and_the_signer_continues() {
 /// quietly turn back into a fresh budget.
 #[test]
 fn export_import_preserves_the_exhausted_counter() {
-    let mut restored = SecretKey::<H5>::import(&fixture().blob).expect("import");
+    let mut restored = SecretKey::<EdSh>::import(&fixture().blob).expect("import");
     let journal = MemoryJournal::adopted(restored.key_identity());
     journal.committed.borrow_mut().extend([0, 1]);
     let mut journal = journal;
 
-    H5::sign_stateful(&mut restored, &mut journal, b"third", b"").expect("sign");
-    H5::sign_stateful(&mut restored, &mut journal, b"fourth", b"").expect("sign");
+    EdSh::sign_stateful(&mut restored, &mut journal, b"third", b"").expect("sign");
+    EdSh::sign_stateful(&mut restored, &mut journal, b"fourth", b"").expect("sign");
 
     let spent = restored.export().expect("export");
     assert_eq!(
@@ -192,9 +192,9 @@ fn export_import_preserves_the_exhausted_counter() {
         "the exhausted counter is carried, not clamped"
     );
 
-    let mut again = SecretKey::<H5>::import(&spent).expect("an exhausted key still imports");
+    let mut again = SecretKey::<EdSh>::import(&spent).expect("an exhausted key still imports");
     assert!(
-        H5::sign_stateful(&mut again, &mut journal, b"fifth", b"").is_err(),
+        EdSh::sign_stateful(&mut again, &mut journal, b"fifth", b"").is_err(),
         "the restored key is still exhausted"
     );
 }
@@ -217,7 +217,7 @@ fn export_import_preserves_the_exhausted_counter() {
 /// would notice if they diverged.
 #[test]
 fn the_identity_is_the_same_before_and_after_an_export_import_round_trip() {
-    let (mut fresh, public_key) = keygen::<H5>(&[0x1du8; 32], MAX).expect("keygen");
+    let (mut fresh, public_key) = keygen::<EdSh>(&[0x1du8; 32], MAX).expect("keygen");
     let at_keygen = fresh.key_identity();
 
     // The public key names the same identity, so an integrator holding only
@@ -229,7 +229,7 @@ fn the_identity_is_the_same_before_and_after_an_export_import_round_trip() {
     );
 
     // Unspent round trip.
-    let restored = SecretKey::<H5>::import(&fresh.export().expect("export")).expect("import");
+    let restored = SecretKey::<EdSh>::import(&fresh.export().expect("export")).expect("import");
     assert_eq!(
         at_keygen,
         restored.key_identity(),
@@ -239,19 +239,19 @@ fn the_identity_is_the_same_before_and_after_an_export_import_round_trip() {
     // And after leaves have been spent, so the identity does not drift with
     // the counter it sits beside.
     let mut journal = MemoryJournal::adopted(at_keygen);
-    H5::sign_stateful(&mut fresh, &mut journal, b"spend one", b"").expect("sign");
+    EdSh::sign_stateful(&mut fresh, &mut journal, b"spend one", b"").expect("sign");
     assert_eq!(
         at_keygen,
         fresh.key_identity(),
         "spending a leaf must not change the identity"
     );
-    let advanced = SecretKey::<H5>::import(&fresh.export().expect("export")).expect("import");
+    let advanced = SecretKey::<EdSh>::import(&fresh.export().expect("export")).expect("import");
     assert_eq!(at_keygen, advanced.key_identity());
 
     // The journal adopted at keygen still accepts the key that came back
     // through import, which is the restart path in full.
     let mut advanced = advanced;
-    H5::sign_stateful(&mut advanced, &mut journal, b"spend two", b"")
+    EdSh::sign_stateful(&mut advanced, &mut journal, b"spend two", b"")
         .expect("the journal adopted at keygen must accept the reimported key");
 }
 
@@ -263,7 +263,7 @@ fn import_rejects_a_tampered_component_half() {
     let mut tampered = fixture().blob.clone();
     tampered[ROOT_AT] ^= 0x01;
     assert_eq!(
-        SecretKey::<H5>::import(&tampered).err(),
+        SecretKey::<EdSh>::import(&tampered).err(),
         Some(Error::ComponentFailure)
     );
 }
@@ -281,7 +281,7 @@ fn import_rejects_an_edited_counter() {
         let mut tampered = blob.clone();
         tampered[COUNTER_AT..COUNTER_AT + 4].copy_from_slice(&rewritten.to_be_bytes());
         assert_eq!(
-            SecretKey::<H5>::import(&tampered).err(),
+            SecretKey::<EdSh>::import(&tampered).err(),
             Some(Error::ComponentFailure),
             "composite counter field rewritten to {rewritten}"
         );
@@ -295,7 +295,7 @@ fn import_rejects_an_edited_counter() {
         tampered[component_counter_at..component_counter_at + 4]
             .copy_from_slice(&out_of_range.to_be_bytes());
         assert_eq!(
-            SecretKey::<H5>::import(&tampered).err(),
+            SecretKey::<EdSh>::import(&tampered).err(),
             Some(Error::ComponentFailure),
             "component counter rewritten to {out_of_range}"
         );
@@ -308,7 +308,7 @@ fn import_rejects_an_edited_counter() {
     rewound[component_counter_at..component_counter_at + 4].copy_from_slice(&1u32.to_be_bytes());
     rewound[COUNTER_AT..COUNTER_AT + 4].copy_from_slice(&1u32.to_be_bytes());
     assert_eq!(
-        SecretKey::<H5>::import(&rewound).err(),
+        SecretKey::<EdSh>::import(&rewound).err(),
         Some(Error::ComponentFailure)
     );
 }
@@ -316,10 +316,10 @@ fn import_rejects_an_edited_counter() {
 #[test]
 fn import_rejects_a_blob_of_the_wrong_length() {
     let blob = &fixture().blob;
-    let expected = SecretKey::<H5>::exported_len();
+    let expected = SecretKey::<EdSh>::exported_len();
 
     assert_eq!(
-        SecretKey::<H5>::import(&blob[..expected - 1]).err(),
+        SecretKey::<EdSh>::import(&blob[..expected - 1]).err(),
         Some(Error::BadLength {
             expected,
             actual: expected - 1
@@ -328,7 +328,7 @@ fn import_rejects_a_blob_of_the_wrong_length() {
     let mut long = blob.clone();
     long.push(0);
     assert_eq!(
-        SecretKey::<H5>::import(&long).err(),
+        SecretKey::<EdSh>::import(&long).err(),
         Some(Error::BadLength {
             expected,
             actual: expected + 1
@@ -340,7 +340,7 @@ fn import_rejects_a_blob_of_the_wrong_length() {
 /// carry a counter no signer ever reached.
 #[test]
 fn a_wiped_key_fails_to_export() {
-    let mut sk = SecretKey::<H5>::import(&fixture().blob).expect("import");
+    let mut sk = SecretKey::<EdSh>::import(&fixture().blob).expect("import");
     assert!(sk.export().is_ok());
     sk.zeroize();
     assert_eq!(sk.export().err(), Some(Error::ComponentFailure));

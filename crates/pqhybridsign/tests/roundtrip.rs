@@ -20,7 +20,7 @@
         unreachable_pub
     )
 )]
-//! End-to-end round trips for H5 (ed25519 + SHRINCS) and H6 (sr25519 +
+//! End-to-end round trips for EdSh (ed25519 + SHRINCS) and SrSh (sr25519 +
 //! SHRINCS): keygen, stateful signing with a durable leaf journal, stateless
 //! signing, and verification.
 
@@ -28,7 +28,7 @@
 // test does not depend on the SHRINCS parameter set.
 #![cfg(feature = "profile-256s")]
 
-use pqhybridsign::shrincs::{keygen, H5, H6};
+use pqhybridsign::shrincs::{keygen, EdSh, SrSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
@@ -82,26 +82,26 @@ impl LeafJournal for MemoryJournal {
     }
 }
 
-// 1. keygen -> sign_stateful -> verify, for both H5 and H6.
+// 1. keygen -> sign_stateful -> verify, for both EdSh and SrSh.
 
 #[test]
-fn h5_stateful_round_trip_verifies() {
-    let (mut sk, pk) = keygen::<H5>(&[1u8; 32], 4).expect("keygen");
+fn ed_sh_stateful_round_trip_verifies() {
+    let (mut sk, pk) = keygen::<EdSh>(&[1u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
 
-    let sig = H5::sign_stateful(&mut sk, &mut journal, b"hello H5", b"ctx").expect("sign");
+    let sig = EdSh::sign_stateful(&mut sk, &mut journal, b"hello EdSh", b"ctx").expect("sign");
 
-    assert!(H5::verify_stateful(&pk, b"hello H5", b"ctx", &sig));
+    assert!(EdSh::verify_stateful(&pk, b"hello EdSh", b"ctx", &sig));
 }
 
 #[test]
-fn h6_stateful_round_trip_verifies() {
-    let (mut sk, pk) = keygen::<H6>(&[1u8; 32], 4).expect("keygen");
+fn sr_sh_stateful_round_trip_verifies() {
+    let (mut sk, pk) = keygen::<SrSh>(&[1u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
 
-    let sig = H6::sign_stateful(&mut sk, &mut journal, b"hello H6", b"ctx").expect("sign");
+    let sig = SrSh::sign_stateful(&mut sk, &mut journal, b"hello SrSh", b"ctx").expect("sign");
 
-    assert!(H6::verify_stateful(&pk, b"hello H6", b"ctx", &sig));
+    assert!(SrSh::verify_stateful(&pk, b"hello SrSh", b"ctx", &sig));
 }
 
 // 2. Composite sizes live in `profile_conformance.rs` so they run under every
@@ -112,34 +112,35 @@ fn h6_stateful_round_trip_verifies() {
 
 #[test]
 fn successive_stateful_signatures_advance_the_leaf_and_both_verify() {
-    let (mut sk, pk) = keygen::<H5>(&[3u8; 32], 4).expect("keygen");
+    let (mut sk, pk) = keygen::<EdSh>(&[3u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
 
-    let first = H5::sign_stateful(&mut sk, &mut journal, b"message one", b"").expect("first sign");
+    let first =
+        EdSh::sign_stateful(&mut sk, &mut journal, b"message one", b"").expect("first sign");
     assert_eq!(*journal.committed.borrow(), vec![0]);
-    assert!(H5::verify_stateful(&pk, b"message one", b"", &first));
+    assert!(EdSh::verify_stateful(&pk, b"message one", b"", &first));
 
     let second =
-        H5::sign_stateful(&mut sk, &mut journal, b"message two", b"").expect("second sign");
+        EdSh::sign_stateful(&mut sk, &mut journal, b"message two", b"").expect("second sign");
     assert_eq!(*journal.committed.borrow(), vec![0, 1]);
-    assert!(H5::verify_stateful(&pk, b"message two", b"", &second));
+    assert!(EdSh::verify_stateful(&pk, b"message two", b"", &second));
 
     // Leaf-consuming: the two signatures over different messages must not
     // be interchangeable.
-    assert!(!H5::verify_stateful(&pk, b"message two", b"", &first));
+    assert!(!EdSh::verify_stateful(&pk, b"message two", b"", &first));
 }
 
-// 4. A signature made under H5 does NOT verify under H6.
+// 4. A signature made under EdSh does NOT verify under SrSh.
 
 #[test]
-fn h5_signature_does_not_verify_under_h6() {
-    let (mut sk_h5, _pk_h5) = keygen::<H5>(&[4u8; 32], 4).expect("h5 keygen");
-    let (_sk_h6, pk_h6) = keygen::<H6>(&[4u8; 32], 4).expect("h6 keygen");
-    let mut journal = MemoryJournal::adopted(sk_h5.key_identity());
+fn ed_sh_signature_does_not_verify_under_sr_sh() {
+    let (mut sk_ed_sh, _pk_ed_sh) = keygen::<EdSh>(&[4u8; 32], 4).expect("ed_sh keygen");
+    let (_sk_sr_sh, pk_sr_sh) = keygen::<SrSh>(&[4u8; 32], 4).expect("sr_sh keygen");
+    let mut journal = MemoryJournal::adopted(sk_ed_sh.key_identity());
 
-    let sig = H5::sign_stateful(&mut sk_h5, &mut journal, b"cross-suite", b"").expect("sign");
+    let sig = EdSh::sign_stateful(&mut sk_ed_sh, &mut journal, b"cross-suite", b"").expect("sign");
 
-    assert!(!H6::verify_stateful(&pk_h6, b"cross-suite", b"", &sig));
+    assert!(!SrSh::verify_stateful(&pk_sr_sh, b"cross-suite", b"", &sig));
 }
 
 // 5. Tampering with the classical half alone fails verification; tampering
@@ -147,16 +148,16 @@ fn h5_signature_does_not_verify_under_h6() {
 
 #[test]
 fn tampering_either_half_fails_verification() {
-    let (mut sk, pk) = keygen::<H5>(&[5u8; 32], 4).expect("keygen");
+    let (mut sk, pk) = keygen::<EdSh>(&[5u8; 32], 4).expect("keygen");
     let mut journal = MemoryJournal::adopted(sk.key_identity());
-    let sig = H5::sign_stateful(&mut sk, &mut journal, b"tamper me", b"").expect("sign");
-    assert!(H5::verify_stateful(&pk, b"tamper me", b"", &sig));
+    let sig = EdSh::sign_stateful(&mut sk, &mut journal, b"tamper me", b"").expect("sign");
+    assert!(EdSh::verify_stateful(&pk, b"tamper me", b"", &sig));
 
     // Classical half: the first 64 bytes of the composite encoding
     // (specification section 6, `pqhybridsign::encoding_path`).
     let mut classical_tampered = sig.clone();
     classical_tampered[0] ^= 0x01;
-    assert!(!H5::verify_stateful(
+    assert!(!EdSh::verify_stateful(
         &pk,
         b"tamper me",
         b"",
@@ -167,7 +168,7 @@ fn tampering_either_half_fails_verification() {
     let mut shrincs_tampered = sig.clone();
     let last = shrincs_tampered.len() - 1;
     shrincs_tampered[last] ^= 0x01;
-    assert!(!H5::verify_stateful(
+    assert!(!EdSh::verify_stateful(
         &pk,
         b"tamper me",
         b"",
@@ -191,24 +192,29 @@ fn tampering_either_half_fails_verification() {
 
 #[test]
 fn stateless_signature_verifies_and_resigning_is_byte_identical() {
-    let (sk, pk) = keygen::<H5>(&[7u8; 32], 4).expect("keygen");
+    let (sk, pk) = keygen::<EdSh>(&[7u8; 32], 4).expect("keygen");
 
     // One store across both calls: a resign draws a second unit of the same
     // budget, and the signature bytes must still match.
     let mut budget = MemoryBudget::default();
-    let a = H5::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign a");
-    let b = H5::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign b");
+    let a = EdSh::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign a");
+    let b = EdSh::sign_stateless(&sk, &mut budget, b"stateless message", b"ctx").expect("sign b");
 
     assert_eq!(a, b, "resigning the same message must be byte-identical");
-    assert!(H5::verify_stateless(&pk, b"stateless message", b"ctx", &a));
+    assert!(EdSh::verify_stateless(
+        &pk,
+        b"stateless message",
+        b"ctx",
+        &a
+    ));
 }
 
 #[test]
-fn h6_stateless_signature_verifies() {
-    let (sk, pk) = keygen::<H6>(&[8u8; 32], 4).expect("keygen");
+fn sr_sh_stateless_signature_verifies() {
+    let (sk, pk) = keygen::<SrSh>(&[8u8; 32], 4).expect("keygen");
 
-    let sig =
-        H6::sign_stateless(&sk, &mut MemoryBudget::default(), b"h6 stateless", b"").expect("sign");
+    let sig = SrSh::sign_stateless(&sk, &mut MemoryBudget::default(), b"sr_sh stateless", b"")
+        .expect("sign");
 
-    assert!(H6::verify_stateless(&pk, b"h6 stateless", b"", &sig));
+    assert!(SrSh::verify_stateless(&pk, b"sr_sh stateless", b"", &sig));
 }

@@ -4,7 +4,7 @@
 //! `sign_stateless` takes a `DedicatedVrfKey`, not a bare `SecretKey`.
 
 use pqhybridsign::budget::{BudgetKey, StatelessBudgetStore};
-use pqhybridsign::shrincs::{keygen, H6};
+use pqhybridsign::shrincs::{keygen, SrSh};
 
 /// A minimal store, since no public `StatelessBudgetStore` implementation
 /// ships with the crate. This case never runs; it only needs to type-check
@@ -24,13 +24,13 @@ impl StatelessBudgetStore for NoopBudget {
 }
 
 fn main() {
-    let (identity, _pk) = keygen::<H6>(&[3u8; 32], 8).expect("keygen");
+    let (identity, _pk) = keygen::<SrSh>(&[3u8; 32], 8).expect("keygen");
 
     let mut budget = NoopBudget;
     let mut rng = rand_core::OsRng;
     let mut proof = [0u8; 4096];
 
-    let _ = pqhybridsign::vrf::sign_stateless::<H6>(
+    let _ = pqhybridsign::vrf::sign_stateless::<SrSh>(
         &identity,
         &mut budget,
         b"input",

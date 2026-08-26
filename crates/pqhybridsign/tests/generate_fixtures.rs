@@ -36,13 +36,16 @@
 //! file itself under `tests/vectors/` rather than printing to stdout. Four
 //! profiles produce four files; paste-from-stdout does not scale.
 
-use pqhybridsign::shrincs::{keygen, ShrincsScheme, H5, H6};
+use pqhybridsign::shrincs::{keygen, EdSh, ShrincsScheme, SrSh};
 use pqhybridsign::stateful::{adopt_key, KeyIdentity, LeafJournal, StatefulHybridSignatureScheme};
 use pqhybridsign::{component::PqStatefulScheme, suite::StatefulSuite};
 use pqhybridsign_test_support::MemoryBudget;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+
+#[path = "profile_id/mod.rs"]
+mod profile_id;
 
 #[derive(Default, Clone)]
 struct MemoryJournal {
@@ -204,11 +207,12 @@ fn generate_fixtures() {
         active_profile_feature()
     );
 
-    let h5 = emit_suite::<H5>("H5", [0x50u8; 32]);
-    let h6 = emit_suite::<H6>("H6", [0x60u8; 32]);
+    let ed_sh = emit_suite::<EdSh>("ED-SH", [0x50u8; 32]);
+    let sr_sh = emit_suite::<SrSh>("SR-SH", [0x60u8; 32]);
 
+    let profile_id_hex = hex::encode(profile_id::PROFILE_ID);
     let body = format!(
-        "{{\n  \"profile_name\": \"{profile_name}\",\n  \"suites\": [\n{h5},\n{h6}\n  ]\n}}\n"
+        "{{\n  \"profile_name\": \"{profile_name}\",\n  \"profile_id_hex\": \"{profile_id_hex}\",\n  \"suites\": [\n{ed_sh},\n{sr_sh}\n  ]\n}}\n"
     );
 
     let out_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors"));

@@ -16,11 +16,12 @@
 //! macros generate to satisfy the CPython C API; nothing in this crate's
 //! own source writes `unsafe`.
 //!
-//! H1 through H4 are ordinary `bytes` in, `bytes` out: see the `stateless`
-//! module. H5 and H6 spend a one-time post-quantum leaf per signature, so
-//! their secret key is `stateful::StatefulSecretKey`, a type that refuses
-//! to be copied, deep-copied or pickled -- see that module's documentation
-//! for why a `bytes` secret key is not safe for those two suites.
+//! The four stateless suites are ordinary `bytes` in, `bytes` out: see the
+//! `stateless` module. ED_SH and SR_SH spend a one-time post-quantum leaf
+//! per signature, so their secret key is `stateful::StatefulSecretKey`, a
+//! type that refuses to be copied, deep-copied or pickled -- see that
+//! module's documentation for why a `bytes` secret key is not safe for
+//! those two suites.
 
 mod bytes_in;
 mod errors;

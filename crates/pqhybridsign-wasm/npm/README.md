@@ -1,7 +1,8 @@
 # @quip.network/pqhybridsign
 
-Hybrid classical/post-quantum signing (H1-H6), compiled to WebAssembly, with
-one Promise-based TypeScript API for both Node.js and browsers.
+Hybrid classical/post-quantum signing (ED-ML-44, ED-FN-512, SR-ML-44,
+SR-FN-512, ED-SH, SR-SH), compiled to WebAssembly, with one Promise-based
+TypeScript API for both Node.js and browsers.
 
 ```sh
 npm install @quip.network/pqhybridsign
@@ -19,21 +20,22 @@ call loads a new one.
 import { keygenFromSeed, sign, verify } from "@quip.network/pqhybridsign";
 
 const seed = crypto.getRandomValues(new Uint8Array(32));
-const { publicKey, secretKey } = await keygenFromSeed("H1", seed);
+const { publicKey, secretKey } = await keygenFromSeed("ED-ML-44", seed);
 
 const msg = new TextEncoder().encode("the message to sign");
 const ctx = new TextEncoder().encode("example-context");
-const sig = await sign("H1", secretKey, msg, ctx);
+const sig = await sign("ED-ML-44", secretKey, msg, ctx);
 
-const ok = await verify("H1", publicKey, msg, ctx, sig);
+const ok = await verify("ED-ML-44", publicKey, msg, ctx, sig);
 // ok === true
 ```
 
-`Suite` names H1 through H4 are stateless: `keygenFromSeed`, `sign` and
-`signDeterministic` sign and verify with them, and reject H5 and H6. H5 and
-H6 are stateful: each signature spends a one-time leaf. `keygenStatefulFromSeed`,
-`openStatefulKey`, `signStateful`, `signStateless` and `adoptKey` handle them
-instead. Each call takes a caller-supplied durable leaf journal, which
+`Suite` names ED-ML-44 through SR-FN-512 are stateless: `keygenFromSeed`,
+`sign` and `signDeterministic` sign and verify with them, and reject ED-SH
+and SR-SH. ED-SH and SR-SH are stateful: each signature spends a one-time
+leaf. `keygenStatefulFromSeed`, `openStatefulKey`, `signStateful`,
+`signStateless` and `adoptKey` handle them instead. Each call takes a
+caller-supplied durable leaf journal, which
 records a leaf before its signature returns. That durability stops a
 JavaScript secret key handle from forking its counter. A bare
 `structuredClone` or a second reference would otherwise fork it and destroy
@@ -46,10 +48,10 @@ existing master seed, using Substrate's key derivation rather than standard
 BIP39.
 
 `vrfProofLen`, `vrfProve`, `vrfProveDeterministic`, `vrfVerify` and
-`vrfMakeBytes` cover the hybrid verifiable random function for H1
-through H4. H5 and H6 use it through `deriveVrfStatelessKey` and the
-returned key's `prove`, which spend a caller-tracked few-time stateless
-budget instead of a signing leaf.
+`vrfMakeBytes` cover the hybrid verifiable random function for ED-ML-44
+through SR-FN-512. ED-SH and SR-SH use it through `deriveVrfStatelessKey`
+and the returned key's `prove`, which spend a caller-tracked few-time
+stateless budget instead of a signing leaf.
 
 ## Publishing this package
 

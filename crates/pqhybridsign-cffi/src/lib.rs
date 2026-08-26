@@ -18,7 +18,7 @@ Every function here is `extern \"C\"`, `#[no_mangle]`, and prefixed `pqhs_`.
 `cbindgen.toml` in this crate's root drives `include/pqhybridsign.h`, and
 its `header` block carries the whole contract this boundary keeps: what an
 error code means, who owns each buffer, which pointers may not overlap,
-whose job it is to wipe secret key material, why H5 and H6 have their own
+whose job it is to wipe secret key material, why ED-SH and SR-SH have their own
 entry points, what is and is not thread-safe, and why no panic crosses into
 C. That text is in the header rather than here because the header is the
 only artifact a C integrator reads -- they have no rustdoc build -- and

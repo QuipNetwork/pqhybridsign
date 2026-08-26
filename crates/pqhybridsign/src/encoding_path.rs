@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Path-selected composite encoding for the stateful constructions H5 and H6.
+//! Path-selected composite encoding for the stateful constructions EdSh and SrSh.
 //!
 //! ```text
 //! classical_sig(64) || PathSelector(1) || body

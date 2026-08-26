@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Stateful hash-based hybrid signatures: H5 (ed25519 + SHRINCS) and H6
+//! Stateful hash-based hybrid signatures: EdSh (ed25519 + SHRINCS) and SrSh
 //! (sr25519 + SHRINCS), over `hashsigs-rs`.
 //!
 //! This module is compiled only when a SHRINCS profile is active. The
@@ -30,4 +30,4 @@ pub mod suites;
 
 pub use crate::stateful_composite::{keygen, PublicKey, SecretKey};
 pub use scheme::ShrincsScheme;
-pub use suites::{H5, H6};
+pub use suites::{EdSh, SrSh};

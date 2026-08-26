@@ -14,22 +14,24 @@
 //!
 //! # All six suites, stateless and stateful
 //!
-//! `pqhybridsign-abi` ships six suites. H1 through H4 are stateless:
-//! [`sign`] and [`sign_deterministic`] cost nothing but CPU time. H5 and
-//! H6 are stateful -- their post-quantum half spends a one-time leaf per
-//! signature, and a leaf spent twice is a total loss of that key's
-//! post-quantum security. The stateful pair has its own entry points --
+//! `pqhybridsign-abi` ships six suites. ED-ML-44, ED-FN-512, SR-ML-44 and
+//! SR-FN-512 are stateless: [`sign`] and [`sign_deterministic`] cost
+//! nothing but CPU time. ED-SH and SR-SH are stateful -- their
+//! post-quantum half spends a one-time leaf per signature, and a leaf
+//! spent twice is a total loss of that key's post-quantum security. The
+//! stateful pair has its own entry points --
 //! [`keygen_stateful_from_seed`], [`sign_stateful`], [`sign_stateless`],
 //! [`StatefulKey`], [`adopt_key`], [`key_identity`] and
 //! [`key_identity_from_secret_key`] --
 //! and the stateless functions [`sign`], [`sign_deterministic`] and
-//! [`keygen_from_seed`] reject H5 and H6, because a stateless-looking call
-//! that silently spent a leaf would be the worst mistake this binding could
-//! make.
+//! [`keygen_from_seed`] reject ED-SH and SR-SH, because a stateless-looking
+//! call that silently spent a leaf would be the worst mistake this binding
+//! could make.
 //!
-//! # Why signing H5 and H6 from JavaScript is safe
+//! # Why signing ED-SH and SR-SH from JavaScript is safe
 //!
-//! An earlier version of this binding refused to sign H5 or H6 at all. The
+//! An earlier version of this binding refused to sign ED-SH or SR-SH at
+//! all. The
 //! reasoning was that a JavaScript value holding a live stateful secret key
 //! could be captured by `structuredClone`, serialized with `JSON.stringify`,
 //! sent through a `MessageChannel`, or aliased to a second variable, and any
@@ -101,7 +103,7 @@
 //! [`verify_with_stored_public_key_stateless`] and [`stored_public_key_len`]
 //! neither receive nor return a secret key, so no journal and no
 //! durability obligation attaches to them. The `WithStoredPublicKey`
-//! functions check an H5 or H6 signature against public data alone;
+//! functions check an ED-SH or SR-SH signature against public data alone;
 //! `stored_public_key_len` is a plain length accessor over public data,
 //! defined for all six suites, the same as its C and Python counterparts.
 //!
@@ -208,23 +210,21 @@ use zeroize::Zeroize;
 ///
 /// # Errors
 ///
-/// An error naming H5/H6 explicitly (see the crate documentation for why
-/// they are omitted) or listing the valid names for anything else
+/// An error naming ED-SH/SR-SH explicitly (see the crate documentation for
+/// why they are omitted) or listing the valid names for anything else
 /// unrecognised.
 fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
-    match name {
-        "H1" => Ok(pqhybridsign_abi::Suite::H1),
-        "H2" => Ok(pqhybridsign_abi::Suite::H2),
-        "H3" => Ok(pqhybridsign_abi::Suite::H3),
-        "H4" => Ok(pqhybridsign_abi::Suite::H4),
-        "H5" | "H6" => Err(format!(
+    match pqhybridsign_abi::Suite::from_name(name) {
+        Ok(suite) if suite.is_stateful() => Err(format!(
             "{name} is a stateful suite: this stateless entry point would spend a \
-             one-time leaf without recording it, so it is refused. Sign H5/H6 with \
-             keygenStatefulFromSeed and signStateful (which take a durable leaf \
+             one-time leaf without recording it, so it is refused. Sign ED-SH/SR-SH \
+             with keygenStatefulFromSeed and signStateful (which take a durable leaf \
              journal), or use signStateless for the few-time stateless path."
         )),
-        other => Err(format!(
-            "unknown suite \"{other}\"; expected one of H1, H2, H3, H4"
+        Ok(suite) => Ok(suite),
+        Err(_) => Err(format!(
+            "unknown suite \"{name}\"; expected one of ED-ML-44, ED-FN-512, SR-ML-44, \
+             SR-FN-512"
         )),
     }
 }
@@ -233,34 +233,32 @@ fn stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// to the four suites [`vrf_prove`] and [`vrf_prove_deterministic`] can
 /// prove under.
 ///
-/// H5 and H6 spend one unit of the few-time stateless budget on every VRF
-/// evaluation, the same hazard [`stateless_suite`] refuses for signing, and
-/// for the same reason: a call that looks free and is not is the worst
-/// failure mode this crate could offer. Rejecting here, at the wasm layer,
-/// rather than letting the request reach the abi, is what lets the error
-/// name the entry point to use instead -- the abi's own
+/// ED-SH and SR-SH spend one unit of the few-time stateless budget on
+/// every VRF evaluation, the same hazard [`stateless_suite`] refuses for
+/// signing, and for the same reason: a call that looks free and is not is
+/// the worst failure mode this crate could offer. Rejecting here, at the
+/// wasm layer, rather than letting the request reach the abi, is what lets
+/// the error name the entry point to use instead -- the abi's own
 /// `WrongEntryPointForSuite` has no way to know this binding calls that
 /// entry point `deriveVrfStatelessKey`.
 ///
 /// # Errors
 ///
-/// An error naming H5/H6 explicitly and the entry point to use instead, or
-/// listing the valid names for anything else unrecognised.
+/// An error naming ED-SH/SR-SH explicitly and the entry point to use
+/// instead, or listing the valid names for anything else unrecognised.
 fn vrf_stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
-    match name {
-        "H1" => Ok(pqhybridsign_abi::Suite::H1),
-        "H2" => Ok(pqhybridsign_abi::Suite::H2),
-        "H3" => Ok(pqhybridsign_abi::Suite::H3),
-        "H4" => Ok(pqhybridsign_abi::Suite::H4),
-        "H5" | "H6" => Err(format!(
+    match pqhybridsign_abi::Suite::from_name(name) {
+        Ok(suite) if suite.is_stateful() => Err(format!(
             "{name} is a stateful suite: this entry point would spend one \
              unit of a few-time stateless budget without recording it, so \
-             it is refused. Evaluate the VRF for H5/H6 with \
+             it is refused. Evaluate the VRF for ED-SH/SR-SH with \
              deriveVrfStatelessKey and the returned key's prove(budget, \
              input), which takes a durable budget store."
         )),
-        other => Err(format!(
-            "unknown suite \"{other}\"; expected one of H1, H2, H3, H4"
+        Ok(suite) => Ok(suite),
+        Err(_) => Err(format!(
+            "unknown suite \"{name}\"; expected one of ED-ML-44, ED-FN-512, SR-ML-44, \
+             SR-FN-512"
         )),
     }
 }
@@ -278,20 +276,19 @@ fn vrf_stateless_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// [`verifyWithStoredPublicKeyStateful`](verify_with_stored_public_key_stateful)
 /// and
 /// [`verifyWithStoredPublicKeyStateless`](verify_with_stored_public_key_stateless).
-/// It is the counterpart of [`stateless_suite`], which rejects H5/H6, and of
-/// [`any_suite`], which accepts all six for the length accessors and
+/// It is the counterpart of [`stateless_suite`], which rejects ED-SH/SR-SH,
+/// and of [`any_suite`], which accepts all six for the length accessors and
 /// [`verify`].
 ///
 /// # Errors
 ///
-/// An error listing the valid names for anything other than `"H5"` or
-/// `"H6"`, including H1 through H4.
+/// An error listing the valid names for anything other than `"ED-SH"` or
+/// `"SR-SH"`, including ED-ML-44 through SR-FN-512.
 fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
-    match name {
-        "H5" => Ok(pqhybridsign_abi::Suite::H5),
-        "H6" => Ok(pqhybridsign_abi::Suite::H6),
-        other => Err(format!(
-            "unknown or unsupported suite \"{other}\"; expected \"H5\" or \"H6\""
+    match pqhybridsign_abi::Suite::from_name(name) {
+        Ok(suite) if suite.is_stateful() => Ok(suite),
+        _ => Err(format!(
+            "unknown or unsupported suite \"{name}\"; expected \"ED-SH\" or \"SR-SH\""
         )),
     }
 }
@@ -305,12 +302,12 @@ fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// spends nothing regardless of statefulness -- parses through here rather
 /// than through [`stateless_suite`], [`stateful_suite`] or
 /// [`vrf_stateless_suite`], each of which excludes suites for a reason
-/// specific to what it guards: [`stateless_suite`] excludes H5/H6 because
-/// signing them would spend an unrecorded leaf,
+/// specific to what it guards: [`stateless_suite`] excludes ED-SH/SR-SH
+/// because signing them would spend an unrecorded leaf,
 /// [`vrf_stateless_suite`] excludes them for the matching reason on the
 /// VRF's few-time stateless budget, and [`stateful_suite`] exists only
 /// because the `WithStoredPublicKey` verify functions are specific to
-/// H5/H6. Eight entry points parse through here as of this writing:
+/// ED-SH/SR-SH. Eight entry points parse through here as of this writing:
 /// [`public_key_len`], [`secret_key_len`], [`signature_len`],
 /// [`stored_public_key_len`], [`verify`], [`vrf_proof_len`],
 /// [`vrf_verify`] and [`vrf_make_bytes`].
@@ -319,17 +316,12 @@ fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 ///
 /// An error naming the six valid suites, for anything else unrecognised.
 fn any_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
-    match name {
-        "H1" => Ok(pqhybridsign_abi::Suite::H1),
-        "H2" => Ok(pqhybridsign_abi::Suite::H2),
-        "H3" => Ok(pqhybridsign_abi::Suite::H3),
-        "H4" => Ok(pqhybridsign_abi::Suite::H4),
-        "H5" => Ok(pqhybridsign_abi::Suite::H5),
-        "H6" => Ok(pqhybridsign_abi::Suite::H6),
-        other => Err(format!(
-            "unknown suite \"{other}\"; expected one of H1, H2, H3, H4, H5, H6"
-        )),
-    }
+    pqhybridsign_abi::Suite::from_name(name).map_err(|_| {
+        format!(
+            "unknown suite \"{name}\"; expected one of ED-ML-44, ED-FN-512, SR-ML-44, \
+             SR-FN-512, ED-SH, SR-SH"
+        )
+    })
 }
 
 /// Wrap an error message as a thrown JavaScript `Error`.
@@ -372,7 +364,7 @@ pub fn profile_name() -> String {
 /// Public key length, in bytes, for `suite`.
 ///
 /// Total over all six suites, matching `pqhybridsign_abi::public_key_len`
-/// and the C and Python bindings. For H5 and H6 this is the verify-key
+/// and the C and Python bindings. For ED-SH and SR-SH this is the verify-key
 /// form [`keygenStatefulFromSeed`](keygen_stateful_from_seed) writes,
 /// larger than the on-storage commitment form
 /// [`storedPublicKeyLen`](stored_public_key_len) reports for the same suite
@@ -381,7 +373,7 @@ pub fn profile_name() -> String {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen(js_name = publicKeyLen)]
 pub fn public_key_len(suite: &str) -> Result<u32, JsValue> {
     Ok(pqhybridsign_abi::public_key_len(any_suite(suite).map_err(js_error)?) as u32)
@@ -390,8 +382,8 @@ pub fn public_key_len(suite: &str) -> Result<u32, JsValue> {
 /// Secret key length, in bytes, for `suite`.
 ///
 /// Total over all six suites, matching `pqhybridsign_abi::secret_key_len`
-/// and the C and Python bindings. For H1 through H4 this is the raw
-/// composite secret key. For H5 and H6 it is the length of the exported
+/// and the C and Python bindings. For ED-ML-44 through SR-FN-512 this is the raw
+/// composite secret key. For ED-SH and SR-SH it is the length of the exported
 /// blob [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returns and
 /// [`signStateful`](sign_stateful) reads and hands forward: the composite
 /// secret key plus the leaf counter and the cached verify key, because a
@@ -400,13 +392,13 @@ pub fn public_key_len(suite: &str) -> Result<u32, JsValue> {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen(js_name = secretKeyLen)]
 pub fn secret_key_len(suite: &str) -> Result<u32, JsValue> {
     Ok(pqhybridsign_abi::secret_key_len(any_suite(suite).map_err(js_error)?) as u32)
 }
 
-/// Maximum signature length, in bytes, for `suite`. H2, H4, H5 and H6 are
+/// Maximum signature length, in bytes, for `suite`. ED-FN-512, SR-FN-512, ED-SH and SR-SH are
 /// variable-length; see [`pqhybridsign_abi::signature_len`] for why each
 /// is. Size the buffer you expect a signature to fit in with this value,
 /// not the length of any one signature you have already seen.
@@ -416,7 +408,7 @@ pub fn secret_key_len(suite: &str) -> Result<u32, JsValue> {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen(js_name = signatureLen)]
 pub fn signature_len(suite: &str) -> Result<u32, JsValue> {
     Ok(pqhybridsign_abi::signature_len(any_suite(suite).map_err(js_error)?) as u32)
@@ -424,8 +416,8 @@ pub fn signature_len(suite: &str) -> Result<u32, JsValue> {
 
 /// A keypair: a secret key and its matching public key.
 ///
-/// Returned by both [`keygenFromSeed`](keygen_from_seed) (H1 through H4)
-/// and [`keygenStatefulFromSeed`](keygen_stateful_from_seed) (H5 and H6);
+/// Returned by both [`keygenFromSeed`](keygen_from_seed) (ED-ML-44 through SR-FN-512)
+/// and [`keygenStatefulFromSeed`](keygen_stateful_from_seed) (ED-SH and SR-SH);
 /// for the stateful suites the secret key is the exported blob, still
 /// `secretKeyLen(suite)` bytes.
 ///
@@ -524,8 +516,8 @@ pub fn sign_deterministic(
 
 /// Verify `sig` over `msg` under `ctx` for `suite`, against `public_key`.
 ///
-/// Total over all six suites, matching `pqhybridsign_abi::verify`. For H5
-/// and H6, `public_key` is the whole verify-form public key
+/// Total over all six suites, matching `pqhybridsign_abi::verify`. For ED-SH
+/// and SR-SH, `public_key` is the whole verify-form public key
 /// [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returns, and no
 /// commitment is checked because there is nothing to check one against; use
 /// this only where that verify key came from a trusted place, and
@@ -533,7 +525,7 @@ pub fn sign_deterministic(
 /// -- which binds a signer-supplied bundle to a stored commitment --
 /// otherwise.
 ///
-/// For H5 and H6 this accepts only a signature produced by
+/// For ED-SH and SR-SH this accepts only a signature produced by
 /// [`signStateful`](sign_stateful), the same behaviour
 /// [`verifyStateful`](verify_stateful) gives directly: specification section
 /// 20.2 reserves the primary stateless path for rotation and recovery, and
@@ -547,7 +539,7 @@ pub fn sign_deterministic(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen]
 pub fn verify(
     suite: &str,
@@ -560,14 +552,14 @@ pub fn verify(
     Ok(pqhybridsign_abi::verify(suite, public_key, msg, ctx, sig))
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
-/// `"H6"`), accepting only a signature produced by
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+/// `"SR-SH"`), accepting only a signature produced by
 /// [`signStateful`](sign_stateful), against one whole verify-form
 /// `public_key`.
 ///
-/// [`verify`] is the total dispatcher across all six suites and, for H5 and
-/// H6, behaves exactly as this function does; call this one directly only
-/// where the suite is already known to be H5 or H6. A signature whose wire
+/// [`verify`] is the total dispatcher across all six suites and, for ED-SH and
+/// SR-SH, behaves exactly as this function does; call this one directly only
+/// where the suite is already known to be ED-SH or SR-SH. A signature whose wire
 /// `PathSelector` names the stateless path is refused before either
 /// component signature is checked. Call
 /// [`verifyStateless`](verify_stateless) for a message deliberately signed
@@ -578,7 +570,7 @@ pub fn verify(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`.
 #[wasm_bindgen(js_name = verifyStateful)]
 pub fn verify_stateful(
     suite: &str,
@@ -591,8 +583,8 @@ pub fn verify_stateful(
     pqhybridsign_abi::verify_stateful(suite, public_key, msg, ctx, sig).map_err(js_error)
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
-/// `"H6"`), accepting only a signature produced by
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+/// `"SR-SH"`), accepting only a signature produced by
 /// [`signStateless`](sign_stateless), against one whole verify-form
 /// `public_key`.
 ///
@@ -625,11 +617,11 @@ pub fn verify_stateless(
 ///
 /// Total over all six suites, matching `pqhybridsign_abi::stored_public_key_len`,
 /// the C `pqhs_stored_public_key_len` and the Python `stored_public_key_len`:
-/// for H5 and H6 this is the classical public key and a 32-byte commitment
+/// for ED-SH and SR-SH this is the classical public key and a 32-byte commitment
 /// to the post-quantum verify key, smaller than
 /// [`publicKeyLen`](public_key_len) reports for the same suite because the
-/// verify key itself is supplied per signature rather than stored. For H1
-/// through H4 the stored and verify forms are the same bytes, so this
+/// verify key itself is supplied per signature rather than stored. For ED-ML-44
+/// through SR-FN-512 the stored and verify forms are the same bytes, so this
 /// equals [`publicKeyLen`](public_key_len). Deliberately routed through
 /// `any_suite` rather than `stateful_suite`: this is a pure length
 /// accessor over public data, not a signing or verification call, so it has
@@ -638,18 +630,18 @@ pub fn verify_stateless(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen(js_name = storedPublicKeyLen)]
 pub fn stored_public_key_len(suite: &str) -> Result<u32, JsValue> {
     Ok(pqhybridsign_abi::stored_public_key_len(any_suite(suite).map_err(js_error)?) as u32)
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
-/// `"H6"`), accepting only a signature produced by
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+/// `"SR-SH"`), accepting only a signature produced by
 /// [`signStateful`](sign_stateful), against a signer-supplied verify key
 /// that must be the one `stored_public_key` commits to.
 ///
-/// This is the entry point the H5/H6 deployment is built for: the
+/// This is the entry point the ED-SH/SR-SH deployment is built for: the
 /// verifier stores the small form (`ClassicalPK || commitment`,
 /// [`storedPublicKeyLen`](stored_public_key_len) bytes -- 64 for both
 /// suites) and the signer supplies the full 164-byte commitment bundle
@@ -678,7 +670,7 @@ pub fn stored_public_key_len(suite: &str) -> Result<u32, JsValue> {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`.
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`.
 #[wasm_bindgen(js_name = verifyWithStoredPublicKeyStateful)]
 pub fn verify_with_stored_public_key_stateful(
     suite: &str,
@@ -700,8 +692,8 @@ pub fn verify_with_stored_public_key_stateful(
     .map_err(js_error)
 }
 
-/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"H5"` or
-/// `"H6"`), accepting only a signature produced by
+/// Verify `sig` over `msg` under `ctx` for a stateful suite (`"ED-SH"` or
+/// `"SR-SH"`), accepting only a signature produced by
 /// [`signStateless`](sign_stateless), against a signer-supplied verify key
 /// that must be the one `stored_public_key` commits to.
 ///
@@ -736,7 +728,7 @@ pub fn verify_with_stored_public_key_stateless(
     .map_err(js_error)
 }
 
-// ---- Stateful suites (H5, H6): the leaf journal and budget bridges ----
+// ---- Stateful suites (ED-SH, SR-SH): the leaf journal and budget bridges ----
 //
 // `pqhybridsign_abi::sign_stateful` and `sign_stateless` do no I/O. Durability
 // and fork-detection are the caller's, supplied through a `LeafJournal` and a
@@ -1041,7 +1033,7 @@ pub struct SignStatefulResult {
     pub next_secret_key: Uint8Array,
 }
 
-/// Derive a stateful keypair for `suite` (`"H5"` or `"H6"`) from a 32-byte
+/// Derive a stateful keypair for `suite` (`"ED-SH"` or `"SR-SH"`) from a 32-byte
 /// master seed, with a budget of `max_stateful_signatures` one-time leaves.
 ///
 /// Returns a [`KeyPair`] whose `secretKey` is the exported blob
@@ -1058,7 +1050,7 @@ pub struct SignStatefulResult {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `seed` is not
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `seed` is not
 /// exactly 32 bytes, or if `max_stateful_signatures` is zero or exceeds the
 /// component's leaf capacity limit.
 #[wasm_bindgen(js_name = keygenStatefulFromSeed)]
@@ -1091,7 +1083,7 @@ pub fn keygen_stateful_from_seed(
 }
 
 /// The 32-byte identity of the key `public_key` describes, for a stateful
-/// `suite` (`"H5"` or `"H6"`).
+/// `suite` (`"ED-SH"` or `"SR-SH"`).
 ///
 /// `public_key` is the verify-form public key
 /// [`keygenStatefulFromSeed`](keygen_stateful_from_seed) returned. It is
@@ -1101,7 +1093,7 @@ pub fn keygen_stateful_from_seed(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, or if
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, or if
 /// `public_key` is not `publicKeyLen(suite)` bytes.
 #[wasm_bindgen(js_name = keyIdentity)]
 pub fn key_identity(suite: &str, public_key: &[u8]) -> Result<Uint8Array, JsValue> {
@@ -1120,7 +1112,7 @@ pub fn key_identity(suite: &str, public_key: &[u8]) -> Result<Uint8Array, JsValu
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `secret_key`
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `secret_key`
 /// is not `secretKeyLen(suite)` bytes, or if the blob does not import.
 #[wasm_bindgen(js_name = keyIdentityFromSecretKey)]
 pub fn key_identity_from_secret_key(
@@ -1182,7 +1174,7 @@ pub fn adopt_key(journal: &JsValue, identity: &[u8]) -> Result<(), JsValue> {
     result.map_err(js_error)
 }
 
-/// Sign `msg` under `ctx` for a stateful `suite` (`"H5"` or `"H6"`), spending
+/// Sign `msg` under `ctx` for a stateful `suite` (`"ED-SH"` or `"SR-SH"`), spending
 /// one leaf recorded through `journal`.
 ///
 /// `secret_key` is the exported blob from
@@ -1201,7 +1193,7 @@ pub fn adopt_key(journal: &JsValue, identity: &[u8]) -> Result<(), JsValue> {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `secret_key`
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `secret_key`
 /// is not `secretKeyLen(suite)` bytes, if the key's leaf budget is spent
 /// (`LeavesExhausted`), if `journal` is not this key's journal
 /// (`JournalKeyMismatch`), if the key and journal counters disagree
@@ -1257,7 +1249,7 @@ pub fn sign_stateful(
 /// Sign `msg` under `ctx` for a stateful `suite` without spending a leaf,
 /// spending one unit of the few-time stateless budget instead.
 ///
-/// Available because H5 and H6 pair their stateful fast path with a stateless
+/// Available because ED-SH and SR-SH pair their stateful fast path with a stateless
 /// few-time path (SHRINCS specification section 21). No leaf is spent and
 /// `secret_key` is not advanced, so there is nothing to persist afterward --
 /// but the stateless path has a hard bound of its own, `2^20` signatures
@@ -1270,7 +1262,7 @@ pub fn sign_stateful(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `secret_key`
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `secret_key`
 /// is not `secretKeyLen(suite)` bytes, if the stateless budget is spent
 /// (`StatelessBudgetExhausted`), or if the store could not durably record
 /// (`BudgetStoreFailed`). Any exception a budget method itself threw is
@@ -1334,9 +1326,9 @@ pub fn sign_stateless(
 /// it may never happen at all. A handle dropped without `free()` cannot
 /// be relied on to release its secret key material.
 ///
-/// # Only H5 and H6
+/// # Only ED-SH and SR-SH
 ///
-/// H1 through H4 are stateless and have nothing to hold open;
+/// ED-ML-44 through SR-FN-512 are stateless and have nothing to hold open;
 /// [`open`](Self::open) rejects them.
 #[wasm_bindgen]
 pub struct StatefulKey {
@@ -1353,7 +1345,7 @@ impl StatefulKey {
     ///
     /// # Errors
     ///
-    /// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if
+    /// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if
     /// `secret_key` is not `secretKeyLen(suite)` bytes, or if the blob
     /// does not import.
     pub fn open(suite: &str, secret_key: Vec<u8>) -> Result<Self, JsValue> {
@@ -1591,12 +1583,12 @@ pub fn derive_hard_junction_path(
 
 // ---- The hybrid verifiable random function ----
 //
-// H1 through H4 prove through `vrfProve`/`vrfProveDeterministic`, which
-// reject H5 and H6 -- proving under those suites spends one unit of a
+// ED-ML-44 through SR-FN-512 prove through `vrfProve`/`vrfProveDeterministic`, which
+// reject ED-SH and SR-SH -- proving under those suites spends one unit of a
 // few-time stateless budget on every evaluation, the same hazard
 // `sign`/`signDeterministic` refuse for signing, and for the same reason:
 // a call that looks free and is not is the worst failure mode this crate
-// could offer. `deriveVrfStatelessKey` and `VrfKey.prove` cover H5 and H6
+// could offer. `deriveVrfStatelessKey` and `VrfKey.prove` cover ED-SH and SR-SH
 // through a dedicated key and a caller-supplied budget store, on the same
 // bridge `sign_stateless` uses. `vrfProofLen`, `vrfVerify` and
 // `vrfMakeBytes` span all six suites: verifying and measuring a length
@@ -1604,12 +1596,12 @@ pub fn derive_hard_junction_path(
 
 /// Length in bytes of a hybrid VRF proof for `suite`.
 ///
-/// For H1 and H3 this is exact. For H2 and H4 this is the maximum a
-/// delta-length binding can occupy. For H5 and H6 this is exact.
+/// For ED-ML-44 and SR-ML-44 this is exact. For ED-FN-512 and SR-FN-512 this is the maximum a
+/// delta-length binding can occupy. For ED-SH and SR-SH this is exact.
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen(js_name = vrfProofLen)]
 pub fn vrf_proof_len(suite: &str) -> Result<u32, JsValue> {
     let suite = any_suite(suite).map_err(js_error)?;
@@ -1618,13 +1610,13 @@ pub fn vrf_proof_len(suite: &str) -> Result<u32, JsValue> {
 
 /// Evaluate the hybrid VRF for a stateless suite. Returns the proof.
 ///
-/// H1 through H4 only; see the section documentation above for why H5 and
-/// H6 have their own entry point.
+/// ED-ML-44 through SR-FN-512 only; see the section documentation above for why ED-SH and
+/// SR-SH have their own entry point.
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H4"`, if
-/// `suite` is `"H5"` or `"H6"` (naming `deriveVrfStatelessKey` as the entry
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-FN-512"`, if
+/// `suite` is `"ED-SH"` or `"SR-SH"` (naming `deriveVrfStatelessKey` as the entry
 /// point to use instead), if `secretKey` is not the suite's secret-key
 /// length, or if either component rejects its key.
 #[wasm_bindgen(js_name = vrfProve)]
@@ -1641,7 +1633,7 @@ pub fn vrf_prove(suite: &str, secret_key: Vec<u8>, input: &[u8]) -> Result<Uint8
 }
 
 /// Evaluate the hybrid VRF for a stateless suite with a reproducible
-/// classical proof. H1 through H4 only, on the same terms as
+/// classical proof. ED-ML-44 through SR-FN-512 only, on the same terms as
 /// [`vrfProve`](vrf_prove).
 ///
 /// # Errors
@@ -1672,7 +1664,7 @@ pub fn vrf_prove_deterministic(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`.
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`.
 #[wasm_bindgen(js_name = vrfVerify)]
 pub fn vrf_verify(
     suite: &str,
@@ -1699,7 +1691,7 @@ pub fn vrf_verify(
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of `"H1"` through `"H6"`, if
+/// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`, if
 /// `proof` is shorter than the proof header or `publicKey` shorter than
 /// the classical public key, or if `publicKey` or the pre-output does not
 /// decode.
@@ -1718,8 +1710,8 @@ pub fn vrf_make_bytes(
     Ok(Uint8Array::from(&out[..]))
 }
 
-/// A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"H5"`
-/// or `"H6"`), held across calls.
+/// A SHRINCS key dedicated to VRF evaluation for a stateful suite (`"ED-SH"`
+/// or `"SR-SH"`), held across calls.
 ///
 /// Returned by
 /// [`deriveVrfStatelessKey`](derive_vrf_stateless_key). This key is
@@ -1782,7 +1774,7 @@ impl VrfKey {
     }
 }
 
-/// Derive a dedicated VRF key for a stateful `suite` (`"H5"` or `"H6"`)
+/// Derive a dedicated VRF key for a stateful `suite` (`"ED-SH"` or `"SR-SH"`)
 /// from a 32-byte master seed, disjoint from the identity key
 /// (`pqhs-1l6`).
 ///
@@ -1793,7 +1785,7 @@ impl VrfKey {
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not `"H5"` or `"H6"`, if `master` is
+/// A JavaScript `Error` if `suite` is not `"ED-SH"` or `"SR-SH"`, if `master` is
 /// not exactly 32 bytes, or if derivation fails.
 #[wasm_bindgen(js_name = deriveVrfStatelessKey)]
 pub fn derive_vrf_stateless_key(suite: &str, master: &[u8]) -> Result<JsValue, JsValue> {
@@ -1822,50 +1814,80 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stateless_suite_accepts_h1_through_h4() {
-        assert_eq!(stateless_suite("H1").unwrap(), pqhybridsign_abi::Suite::H1);
-        assert_eq!(stateless_suite("H2").unwrap(), pqhybridsign_abi::Suite::H2);
-        assert_eq!(stateless_suite("H3").unwrap(), pqhybridsign_abi::Suite::H3);
-        assert_eq!(stateless_suite("H4").unwrap(), pqhybridsign_abi::Suite::H4);
+    fn stateless_suite_accepts_ed_ml_44_through_sr_fn_512() {
+        assert_eq!(
+            stateless_suite("ED-ML-44").unwrap(),
+            pqhybridsign_abi::Suite::EdMl44
+        );
+        assert_eq!(
+            stateless_suite("ED-FN-512").unwrap(),
+            pqhybridsign_abi::Suite::EdFn512
+        );
+        assert_eq!(
+            stateless_suite("SR-ML-44").unwrap(),
+            pqhybridsign_abi::Suite::SrMl44
+        );
+        assert_eq!(
+            stateless_suite("SR-FN-512").unwrap(),
+            pqhybridsign_abi::Suite::SrFn512
+        );
     }
 
     #[test]
-    fn stateless_suite_rejects_h5_h6_and_unknown_names() {
-        assert!(stateless_suite("H5").is_err());
-        assert!(stateless_suite("H6").is_err());
-        assert!(stateless_suite("H7").is_err());
+    fn stateless_suite_rejects_ed_sh_sr_sh_and_unknown_names() {
+        assert!(stateless_suite("ED-SH").is_err());
+        assert!(stateless_suite("SR-SH").is_err());
+        assert!(stateless_suite("ED-ML-45").is_err());
         assert!(stateless_suite("").is_err());
     }
 
     #[test]
-    fn stateful_suite_accepts_h5_and_h6() {
-        assert_eq!(stateful_suite("H5").unwrap(), pqhybridsign_abi::Suite::H5);
-        assert_eq!(stateful_suite("H6").unwrap(), pqhybridsign_abi::Suite::H6);
+    fn stateful_suite_accepts_ed_sh_and_sr_sh() {
+        assert_eq!(
+            stateful_suite("ED-SH").unwrap(),
+            pqhybridsign_abi::Suite::EdSh
+        );
+        assert_eq!(
+            stateful_suite("SR-SH").unwrap(),
+            pqhybridsign_abi::Suite::SrSh
+        );
     }
 
     #[test]
-    fn stateful_suite_rejects_h1_through_h4_and_unknown_names() {
-        assert!(stateful_suite("H1").is_err());
-        assert!(stateful_suite("H2").is_err());
-        assert!(stateful_suite("H3").is_err());
-        assert!(stateful_suite("H4").is_err());
-        assert!(stateful_suite("H7").is_err());
+    fn stateful_suite_rejects_ed_ml_44_through_sr_fn_512_and_unknown_names() {
+        assert!(stateful_suite("ED-ML-44").is_err());
+        assert!(stateful_suite("ED-FN-512").is_err());
+        assert!(stateful_suite("SR-ML-44").is_err());
+        assert!(stateful_suite("SR-FN-512").is_err());
+        assert!(stateful_suite("ED-ML-45").is_err());
         assert!(stateful_suite("").is_err());
     }
 
     #[test]
     fn any_suite_accepts_all_six() {
-        assert_eq!(any_suite("H1").unwrap(), pqhybridsign_abi::Suite::H1);
-        assert_eq!(any_suite("H2").unwrap(), pqhybridsign_abi::Suite::H2);
-        assert_eq!(any_suite("H3").unwrap(), pqhybridsign_abi::Suite::H3);
-        assert_eq!(any_suite("H4").unwrap(), pqhybridsign_abi::Suite::H4);
-        assert_eq!(any_suite("H5").unwrap(), pqhybridsign_abi::Suite::H5);
-        assert_eq!(any_suite("H6").unwrap(), pqhybridsign_abi::Suite::H6);
+        assert_eq!(
+            any_suite("ED-ML-44").unwrap(),
+            pqhybridsign_abi::Suite::EdMl44
+        );
+        assert_eq!(
+            any_suite("ED-FN-512").unwrap(),
+            pqhybridsign_abi::Suite::EdFn512
+        );
+        assert_eq!(
+            any_suite("SR-ML-44").unwrap(),
+            pqhybridsign_abi::Suite::SrMl44
+        );
+        assert_eq!(
+            any_suite("SR-FN-512").unwrap(),
+            pqhybridsign_abi::Suite::SrFn512
+        );
+        assert_eq!(any_suite("ED-SH").unwrap(), pqhybridsign_abi::Suite::EdSh);
+        assert_eq!(any_suite("SR-SH").unwrap(), pqhybridsign_abi::Suite::SrSh);
     }
 
     #[test]
     fn any_suite_rejects_unknown_names() {
-        assert!(any_suite("H7").is_err());
+        assert!(any_suite("ED-ML-45").is_err());
         assert!(any_suite("").is_err());
     }
 }

@@ -2,6 +2,67 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.0.0-rc9
+
+This release changes the stateless SHRINCS wire format and renames every
+public suite identifier. A stateless signature produced by an earlier
+version does not verify. The stateful (UXMSS) path and the stateful
+commitment do not change, but Rust, Python, and JavaScript callers must
+update the suite names their code passes. See the suite rename entries
+below for the full list of affected identifiers.
+
+### Changed
+
+- The `hashsigs-rs` pin moves from `0.2.1-rc2` to `0.2.1-rc6`. Version rc6
+  binds the profile identifier into the FORS message digest. The preimage is
+  now `H("fors-digest" || PROFILE_ID || pkSeed || hypertreeRoot ||
+  randomizer || counter || message)`. Without the profile identifier, two
+  profiles that share a hash suite derive the same leaf indices for a
+  message. Upstream made this change to answer external audit issue
+  `oak-sol-02`.
+- Stateless SHRINCS signatures written before rc6 do not verify under rc6,
+  and rc6 offers no compatibility mode. This release regenerates the
+  committed stateless fixtures and golden vectors under every profile:
+  `fixture-256s.json`, `fixture-256s-sha2.json`, `fixture-128s-q18.json`,
+  `fixture-128s-q20.json`, `h5.json` and `h6.json`.
+- The stateful path produces the same bytes it did before. In all six
+  regenerated files, the master seed, the secret key, the public key, the
+  stateful signatures and the public-key commitment are identical to the
+  values rc2 produced. Only the stateless signature fields moved.
+- Suites are named for the algorithms they pair. `H1` through `H6` become
+  `ED-ML-44`, `ED-FN-512`, `SR-ML-44`, `SR-FN-512`, `ED-SH` and `SR-SH`. This
+  renames `Suite` variants in Rust, `Suite` members in Python and the suite
+  strings in JavaScript. **This breaks those three APIs**, with no aliases: the
+  old names are gone. The C API is unchanged, because it takes a numeric suite
+  code and defines no constant for a suite name. The numeric codes (1 through 6) and the
+  wire labels do not change, so signatures and stored artefacts are unaffected.
+- The `pqhybridsign` library marker types rename to match. The four lattice
+  types at the crate root, `pqhybridsign::H1` through `H4`, become
+  `pqhybridsign::EdMl44` through `SrFn512`. The two SHRINCS types under
+  `pqhybridsign::shrincs`, `H5` and `H6`, become `EdSh` and `SrSh`.
+  **This breaks every caller that names a suite as a Rust type parameter**,
+  such as `composite::keypair_from_seed::<EdMl44>(...)`, with no alias for
+  the old names.
+- `pqhybridsign_abi::Suite::as_str()` and `impl FromStr for Suite` are
+  removed. `Suite::name()` and `Suite::from_name()` replace them and return
+  and accept the new suite strings. **This breaks every caller of the removed
+  methods**, including a caller who already updated a Rust type parameter
+  from `H1` to `EdMl44` but still calls `.as_str()` or parses a suite string
+  with `.parse::<Suite>()`.
+- The two SHRINCS suites carry no profile suffix. One build selects one
+  SHRINCS profile, so `ED-SH` means ed25519 plus SHRINCS at whatever profile
+  the build chose.
+
+### Added
+
+- Each fixture and golden vector records `profile_id_hex`, the `keccak256`
+  of the active profile's `hashsigs-rs` identity string, and every loader
+  asserts it. `crates/pqhybridsign/tests/profile_id/mod.rs` holds the
+  expected value as bytes, rather than reading it from `hashsigs-rs`. A
+  constant that reads through the library it checks cannot detect its own
+  drift. `hashsigs-rs` pins its own `version_tag` the same way and for the
+  same reason.
+
 ## 0.0.0-rc8
 
 rc8 changes nothing a caller of any published artifact can observe. Every

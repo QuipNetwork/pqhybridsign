@@ -20,7 +20,7 @@
         unreachable_pub
     )
 )]
-//! Compile-fail guarantees for the H5/H6 stateful secret key.
+//! Compile-fail guarantees for the EdSh/SrSh stateful secret key.
 //!
 //! Each case in `tests/compile_fail/` locks in one negative property that
 //! [`pqhybridsign::stateful_composite::SecretKey`] must never regain:

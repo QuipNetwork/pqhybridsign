@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! [`ShrincsScheme`]: the [`PqStatefulScheme`] implementation that lets H5
-//! and H6 (declared in `suites.rs`) sign and verify through
+//! [`ShrincsScheme`]: the [`PqStatefulScheme`] implementation that lets EdSh
+//! and SrSh (declared in `suites.rs`) sign and verify through
 //! `crate::stateful_composite`'s generic driver.
 //!
 //! Everything SHRINCS-specific lives here: the commitment bundle, the
@@ -59,12 +59,15 @@ const MAX_STATEFUL_SIGNATURES_LIMIT: u32 = 4096;
 // without hardcoding per-profile numbers.
 // ---------------------------------------------------------------------
 
+use hashsigs_rs::profiles::selected::{SelectedProfile, NUM_CHAINS, NUM_LAYERS};
+use hashsigs_rs::shrincs::Profile;
+
 const HASH_LEN: usize = hashsigs_rs::HASH_LEN;
-const NUM_WOTS_CHAINS: usize = hashsigs_rs::shrincs::NUM_WOTS_CHAINS as usize;
-const NUM_FORS_TREES: usize = hashsigs_rs::shrincs::NUM_FORS_TREES as usize;
-const FORS_TREE_HEIGHT: usize = hashsigs_rs::shrincs::FORS_TREE_HEIGHT as usize;
-const NUM_HYPERTREE_LAYERS: usize = hashsigs_rs::shrincs::NUM_HYPERTREE_LAYERS as usize;
-const HYPERTREE_HEIGHT: usize = hashsigs_rs::shrincs::HYPERTREE_HEIGHT as usize;
+const NUM_WOTS_CHAINS: usize = <SelectedProfile as Profile>::NUM_WOTS_CHAINS as usize;
+const NUM_FORS_TREES: usize = <SelectedProfile as Profile>::NUM_FORS_TREES as usize;
+const FORS_TREE_HEIGHT: usize = <SelectedProfile as Profile>::FORS_TREE_HEIGHT as usize;
+const NUM_HYPERTREE_LAYERS: usize = <SelectedProfile as Profile>::NUM_HYPERTREE_LAYERS as usize;
+const HYPERTREE_HEIGHT: usize = <SelectedProfile as Profile>::HYPERTREE_HEIGHT as usize;
 const SUBTREE_HEIGHT: usize = HYPERTREE_HEIGHT / NUM_HYPERTREE_LAYERS;
 
 /// `randomizer(32) || counter(4) || chains(NUM_WOTS_CHAINS * 32)`: the
@@ -160,7 +163,8 @@ impl PqStatefulScheme for ShrincsScheme {
             return Err(Error::ComponentFailure);
         }
         let (keys, public_key) =
-            ShrincsSigner::keygen(seed, max_signatures).ok_or(Error::ComponentFailure)?;
+            ShrincsSigner::keygen::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(seed, max_signatures)
+                .ok_or(Error::ComponentFailure)?;
         write_bundle(&public_key, vk_out);
         Ok(ShrincsSecretKey { keys: Some(keys) })
     }
@@ -220,7 +224,8 @@ impl PqStatefulScheme for ShrincsScheme {
                 actual: bytes.len(),
             });
         }
-        let keys = Keys::import(bytes).ok_or(Error::ComponentFailure)?;
+        let keys = Keys::import::<SelectedProfile, NUM_CHAINS, NUM_LAYERS>(bytes)
+            .ok_or(Error::ComponentFailure)?;
         Ok(ShrincsSecretKey { keys: Some(keys) })
     }
 
@@ -273,8 +278,12 @@ impl PqStatefulScheme for ShrincsScheme {
         // get a free retry. Validating first would create a signing path
         // that returns without advancing the counter, which is the
         // leaf-reuse hazard this ordering exists to remove.
-        let sig = ShrincsSigner::sign_stateful_action(sk.keys_mut()?, &public_key, &action_ctx)
-            .ok_or(Error::ComponentFailure)?;
+        let sig = ShrincsSigner::sign_stateful_action::<SelectedProfile, NUM_CHAINS>(
+            sk.keys_mut()?,
+            &public_key,
+            &action_ctx,
+        )
+        .ok_or(Error::ComponentFailure)?;
         // The leaf is spent now, and both counters have advanced. Validate
         // here so the caller gets a real error instead of a signature that
         // could never verify. The leaf stays spent either way.
@@ -289,8 +298,8 @@ impl PqStatefulScheme for ShrincsScheme {
         let keys = sk.keys()?;
         let commitment = *keys.public_key_commitment().as_bytes();
         let message = ShrincsVerifier::new().stateless_action_message_hash(commitment, &action_ctx);
-        let sig =
-            ShrincsSigner::sign_stateless_raw(keys, &message).ok_or(Error::ComponentFailure)?;
+        let sig = ShrincsSigner::sign_stateless_raw::<SelectedProfile, NUM_LAYERS>(keys, &message)
+            .ok_or(Error::ComponentFailure)?;
         write_flat_stateless(&sig, sig_out)
     }
 
@@ -356,8 +365,8 @@ impl PqStatefulScheme for ShrincsScheme {
         let keys = sk.keys()?;
         let commitment = *keys.public_key_commitment().as_bytes();
         let message = ShrincsVerifier::new().stateless_action_message_hash(commitment, &action_ctx);
-        let sig =
-            ShrincsSigner::sign_stateless_raw(keys, &message).ok_or(Error::ComponentFailure)?;
+        let sig = ShrincsSigner::sign_stateless_raw::<SelectedProfile, NUM_LAYERS>(keys, &message)
+            .ok_or(Error::ComponentFailure)?;
         write_flat_stateless(&sig, sig_out)
     }
 
@@ -843,16 +852,16 @@ mod tests {
         use crate::stateful_composite::{keygen, PublicKey};
         use crate::{component::ClassicalScheme, suite::StatefulSuite};
 
-        use crate::shrincs::H5;
+        use crate::shrincs::EdSh;
 
-        type Classical = <H5 as StatefulSuite>::Classical;
+        type Classical = <EdSh as StatefulSuite>::Classical;
         const CLASSICAL_LEN: usize = <Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
 
         /// The small on-storage form: classical public key || 32-byte
         /// commitment, taken from a composite verify key the holder produced
         /// themselves and therefore trusts.
         fn store(verify_public_key: &[u8]) -> Vec<u8> {
-            let mut stored = Vec::with_capacity(<H5 as StatefulSuite>::STORED_PUBLIC_KEY_LEN);
+            let mut stored = Vec::with_capacity(<EdSh as StatefulSuite>::STORED_PUBLIC_KEY_LEN);
             stored.extend_from_slice(&verify_public_key[..CLASSICAL_LEN]);
             stored.extend_from_slice(
                 &verify_public_key[CLASSICAL_LEN + BUNDLE_COMMITMENT_OFFSET..][..32],
@@ -860,8 +869,8 @@ mod tests {
             stored
         }
 
-        let (_victim_sk, victim_pk) = keygen::<H5>(&[0xA1; 32], 4).expect("victim keygen");
-        let (attacker_sk, attacker_pk) = keygen::<H5>(&[0xB2; 32], 4).expect("attacker keygen");
+        let (_victim_sk, victim_pk) = keygen::<EdSh>(&[0xA1; 32], 4).expect("victim keygen");
+        let (attacker_sk, attacker_pk) = keygen::<EdSh>(&[0xB2; 32], 4).expect("attacker keygen");
 
         let victim_stored = store(victim_pk.as_ref());
         let victim_bundle = &victim_pk.as_ref()[CLASSICAL_LEN..];
@@ -870,7 +879,7 @@ mod tests {
         // The fix: the attacker's bundle is not the key the victim's account
         // committed to, and the constructor says so.
         assert_eq!(
-            PublicKey::<H5>::from_stored_commitment_and_bundle(&victim_stored, attacker_bundle)
+            PublicKey::<EdSh>::from_stored_commitment_and_bundle(&victim_stored, attacker_bundle)
                 .err(),
             Some(Error::ComponentFailure),
             "a bundle the stored commitment does not name must be refused"
@@ -878,7 +887,7 @@ mod tests {
 
         // The victim's own bundle rebuilds the key `keygen` handed back.
         let rebuilt =
-            PublicKey::<H5>::from_stored_commitment_and_bundle(&victim_stored, victim_bundle)
+            PublicKey::<EdSh>::from_stored_commitment_and_bundle(&victim_stored, victim_bundle)
                 .expect("the installed bundle must be accepted");
         assert_eq!(rebuilt.as_ref(), victim_pk.as_ref());
 
@@ -892,17 +901,17 @@ mod tests {
             verify_bundle_self_consistent(attacker_bundle).is_some(),
             "an internally consistent bundle passes the self-consistency check"
         );
-        let signature = <H5 as StatefulHybridSignatureScheme>::sign_stateless(
+        let signature = <EdSh as StatefulHybridSignatureScheme>::sign_stateless(
             &attacker_sk,
             &mut MemoryBudget::default(),
             b"transfer everything",
             b"",
         )
         .expect("attacker signs under their own key");
-        let unchecked = PublicKey::<H5>::from_bytes(attacker_pk.as_ref())
+        let unchecked = PublicKey::<EdSh>::from_bytes(attacker_pk.as_ref())
             .expect("from_bytes checks only the length");
         assert!(
-            <H5 as StatefulHybridSignatureScheme>::verify_stateless(
+            <EdSh as StatefulHybridSignatureScheme>::verify_stateless(
                 &unchecked,
                 b"transfer everything",
                 b"",

@@ -24,7 +24,7 @@ pub const PQHS_ERR_CONTEXT_TOO_LONG: c_int = 2;
 /// A caller-supplied output buffer was too small. Mirrors
 /// `AbiError::OutputBufferTooSmall`.
 pub const PQHS_ERR_OUTPUT_BUFFER_TOO_SMALL: c_int = 3;
-/// A path-selected signature (H5/H6) carried an unknown selector. Mirrors
+/// A path-selected signature (ED-SH/SR-SH) carried an unknown selector. Mirrors
 /// `AbiError::BadPathSelector`.
 ///
 /// Code 4 was `PQHS_ERR_SOFT_JUNCTION_REJECTED`, removed: the `AbiError`
@@ -48,20 +48,20 @@ pub const PQHS_ERR_COMPONENT_FAILURE: c_int = 8;
 /// A rotation payload carried an unknown rotation kind. Mirrors
 /// `AbiError::BadRotationKind`.
 pub const PQHS_ERR_BAD_ROTATION_KIND: c_int = 9;
-/// A delta-length-encoded (H2/H4) signature's length did not fit its field.
+/// A delta-length-encoded (ED-FN-512/SR-FN-512) signature's length did not fit its field.
 /// Mirrors `AbiError::DeltaLengthOutOfRange`.
 pub const PQHS_ERR_DELTA_LENGTH_OUT_OF_RANGE: c_int = 10;
-/// H5/H6 only: the key's one-time leaf budget is spent. Permanent; rotate
+/// ED-SH/SR-SH only: the key's one-time leaf budget is spent. Permanent; rotate
 /// the key. Mirrors `AbiError::LeavesExhausted`.
 pub const PQHS_ERR_LEAVES_EXHAUSTED: c_int = 11;
-/// H5/H6 only: the signature-randomizer grind reached its bound. Mirrors
+/// ED-SH/SR-SH only: the signature-randomizer grind reached its bound. Mirrors
 /// `AbiError::GrindAbort`. As with the Rust API, `sk_out` is still written
 /// on this error: see [`crate::pqhs_sign_stateful`].
 pub const PQHS_ERR_GRIND_ABORT: c_int = 12;
-/// H5/H6 only: the caller's journal callback could not durably record the
+/// ED-SH/SR-SH only: the caller's journal callback could not durably record the
 /// advancing leaf. No leaf was consumed. Mirrors `AbiError::JournalFailed`.
 pub const PQHS_ERR_JOURNAL_FAILED: c_int = 13;
-/// H5/H6 only: a transient or internal failure inside the signing
+/// ED-SH/SR-SH only: a transient or internal failure inside the signing
 /// primitive. Mirrors `AbiError::SigningFailed`.
 pub const PQHS_ERR_SIGNING_FAILED: c_int = 14;
 /// The suite code did not name one of the six suites this crate knows
@@ -70,13 +70,13 @@ pub const PQHS_ERR_INVALID_SUITE: c_int = 15;
 /// The wrong entry point was called for this suite. Mirrors
 /// `AbiError::WrongEntryPointForSuite`.
 pub const PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE: c_int = 16;
-/// H5/H6 only: the secret key's leaf counter and the leaf journal no longer
+/// ED-SH/SR-SH only: the secret key's leaf counter and the leaf journal no longer
 /// agree, so this key can sign no more. Rotate it. Do not repair the
 /// counters by hand: that reissues a spent leaf, which destroys the key's
 /// security. Distinct from `PQHS_ERR_SIGNING_FAILED`, which may be worth
 /// retrying. Mirrors `AbiError::CountersDiverged`.
 pub const PQHS_ERR_COUNTERS_DIVERGED: c_int = 17;
-/// H5/H6 only: the journal does not belong to this key. Its `bound_key`
+/// ED-SH/SR-SH only: the journal does not belong to this key. Its `bound_key`
 /// callback reported no binding at all, or a binding to a different key.
 /// Nothing was spent and the key is intact -- unlike
 /// `PQHS_ERR_COUNTERS_DIVERGED`, this is not a reason to rotate. Reopen the
@@ -84,7 +84,7 @@ pub const PQHS_ERR_COUNTERS_DIVERGED: c_int = 17;
 /// bind one explicitly with [`crate::pqhs_adopt_key`]. Mirrors
 /// `AbiError::JournalKeyMismatch`.
 pub const PQHS_ERR_JOURNAL_KEY_MISMATCH: c_int = 18;
-/// H5/H6 only: the few-time stateless budget for this key's stateless
+/// ED-SH/SR-SH only: the few-time stateless budget for this key's stateless
 /// material is spent (specification section 21). Nothing was spent on the
 /// refused attempt.
 ///
@@ -95,7 +95,7 @@ pub const PQHS_ERR_JOURNAL_KEY_MISMATCH: c_int = 18;
 /// scheme. It clears only when a rotation actually changes the stateless key
 /// material. Mirrors `AbiError::StatelessBudgetExhausted`.
 pub const PQHS_ERR_STATELESS_BUDGET_EXHAUSTED: c_int = 19;
-/// H5/H6 only: the caller's [`crate::PqhsStatelessBudget`] reported that it
+/// ED-SH/SR-SH only: the caller's [`crate::PqhsStatelessBudget`] reported that it
 /// could not durably record the spend, so no stateless signature was
 /// released. The stateless counterpart of `PQHS_ERR_JOURNAL_FAILED`, and
 /// transient on the same terms: nothing was recorded, so the same unit of
@@ -160,7 +160,7 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
         PQHS_ERR_GRIND_ABORT => c"the randomizer grind bound was reached for this key and message",
         PQHS_ERR_JOURNAL_FAILED => c"the leaf journal could not durably commit",
         PQHS_ERR_SIGNING_FAILED => c"signing failed",
-        PQHS_ERR_INVALID_SUITE => c"the suite code or name is not one of H1-H6",
+        PQHS_ERR_INVALID_SUITE => c"the suite code or name is not one of ED-ML-44 through SR-SH",
         PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE => c"this entry point does not accept this suite",
         PQHS_ERR_COUNTERS_DIVERGED => {
             c"the key counter and leaf journal diverged; this key can sign no more, rotate it"
