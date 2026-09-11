@@ -26,7 +26,7 @@ fn-dsa.workspace = true
 hashsigs-rs = { workspace = true, optional = true }
 sha3 = { version = "0.10", default-features = false, optional = true }
 # BIP39 mnemonic-to-master-seed derivation, behind the `mnemonic` feature.
-# Pinned to the same 2.x line quip-protocol-rs uses so entropy extraction is
+# Pinned to the same 2.x line quip-validator uses so entropy extraction is
 # bit-identical; `default-features = false` keeps English-only, no
 # unicode-normalization. `zeroize` makes `Mnemonic` wipe on drop, which
 # matters because the parsed value holds the word indices and the entropy --

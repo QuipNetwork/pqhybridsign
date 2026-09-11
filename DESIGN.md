@@ -968,7 +968,7 @@ Recommendation: state the rule in section 9 of the specification.
 
 Section 9 requires suite-separated HKDF. Section 22 records that the shipped
 `quip-crypto-primitives` uses a fixed `info` value of `pq` for every suite,
-tracked as QuipNetwork/quip-protocol-rs#9. A conforming crate gives different
+tracked as QuipNetwork/quip-validator#9. A conforming crate gives different
 component keys from the same master seed than the deployed EdMl44 and SrMl44 code.
 
 Both sides are self-consistent. This is a recorded incompatibility, not a
