@@ -27,3 +27,12 @@ examples/typescript/package-lock.json
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Emacs autosave and backup files
+\#*\#
+*~
+
+# Local review notes and audit documents. Kept out of the repository.
+/falcon-review-actions.org
+/rc9-upgrade-notice.md
+/Falcon Integration Review.pdf
