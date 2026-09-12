@@ -247,7 +247,7 @@ the suites, canonical and hedged signing, key rotation, single-master-seed
 derivation, the stateful safety machinery, and the hybrid VRF.
 
 The Polkadot-SDK integration is a separate codebase: the QuipNetwork
-`polkadot-sdk` fork and `quip-protocol-rs`. It implements the same hybrid
+`polkadot-sdk` fork and `quip-validator`. It implements the same hybrid
 constructions and adds the pieces that need Substrate: the `Pair`, `Public`, and
 `Signature` types, keystore and host functions, 32-byte account-ID derivation,
 session keys, SCALE envelopes, and the BABE and GRANDPA wiring. That code does

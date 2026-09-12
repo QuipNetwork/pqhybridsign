@@ -27,7 +27,7 @@ const MAX_INFO: usize = 64 + 16;
 /// appears in `M'`.
 ///
 /// This differs from the deployed `quip-crypto-primitives`, which uses a
-/// fixed info value for every suite. See QuipNetwork/quip-protocol-rs#9.
+/// fixed info value for every suite. See QuipNetwork/quip-validator#9.
 pub fn derive_component_seeds(
     master: &[u8; 32],
     label: &[u8],

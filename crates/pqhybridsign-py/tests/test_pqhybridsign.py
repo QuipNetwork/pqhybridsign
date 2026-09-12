@@ -837,7 +837,7 @@ def test_master_seed_from_mnemonic_is_stable():
 # `crates/pqhybridsign/src/mnemonic.rs`'s own `PHRASE_12` golden-vector
 # phrase, copied verbatim rather than retyped. The core crate pins that a
 # derivation over this phrase's entropy (not its text) matches
-# `quip-protocol-rs`'s own `master_seed_from_mnemonic`
+# `quip-validator`'s own `master_seed_from_mnemonic`
 # (crates/transaction-crypto-core/src/lib.rs, on top of substrate-bip39
 # 0.6.1), generated 2026-08-21; this test pins that this binding's call
 # reaches that same derivation rather than mangling an argument along the
