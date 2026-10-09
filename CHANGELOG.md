@@ -2,6 +2,17 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- The deterministic RNG that seeds FN-DSA key generation and signing, and
+  the sr25519 nonce, now runs on `rand_core::block::BlockRng`. The library
+  type owns the output buffer and the read index. The expander still uses
+  SHA-512 over the seed and a counter. It produces the same byte stream, so
+  every key and signature derived under an earlier version stays the same.
+  Answers audit finding QUI-1765.
+
 ## 0.0.0-rc9
 
 This release changes the stateless SHRINCS wire format and renames every

@@ -3,8 +3,8 @@ use crate::{
     classical::Wiped,
     component::ClassicalScheme,
     error::{Error, Result},
+    seeded_rng::SeededRng,
 };
-use rand_core::{CryptoRng, RngCore};
 use schnorrkel::context::attach_rng;
 use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, PublicKey, SecretKey, Signature};
 use sha2::{Digest, Sha512};
@@ -22,72 +22,6 @@ pub struct Sr25519;
 /// which omits it; harmless either way since a fixed-length domain is
 /// always followed by an explicit 8-byte length.
 const NONCE_SEED_DOMAIN: &[u8] = b"pqhybridsign/nonce-seed/sr25519/v1\0";
-
-/// A deterministic RNG seeded from [`nonce_seed`].
-///
-/// schnorrkel draws its Schnorr nonce from this RNG. Seeding it from the
-/// secret key keeps the nonce secret, which specification section 14
-/// requires: a public nonce makes the signing key trivially recoverable.
-struct SeededRng {
-    state: [u8; 32],
-    counter: u64,
-    buffer: [u8; 64],
-    used: usize,
-}
-
-impl SeededRng {
-    fn new(seed: [u8; 32]) -> Self {
-        Self {
-            state: seed,
-            counter: 0,
-            buffer: [0u8; 64],
-            used: 64,
-        }
-    }
-    fn refill(&mut self) {
-        let mut hasher = Sha512::new();
-        hasher.update(self.state);
-        hasher.update(self.counter.to_be_bytes());
-        self.buffer.copy_from_slice(&hasher.finalize());
-        self.counter += 1;
-        self.used = 0;
-    }
-}
-
-impl RngCore for SeededRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
-    }
-    fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
-    }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        for byte in dest.iter_mut() {
-            if self.used == self.buffer.len() {
-                self.refill();
-            }
-            *byte = self.buffer[self.used];
-            self.used += 1;
-        }
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> core::result::Result<(), rand_core::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-impl CryptoRng for SeededRng {}
-
-impl Drop for SeededRng {
-    fn drop(&mut self) {
-        self.state.zeroize();
-        self.buffer.zeroize();
-    }
-}
 
 impl ClassicalScheme for Sr25519 {
     const NAME: &'static str = "sr25519";
