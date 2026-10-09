@@ -5,9 +5,11 @@ use core::fmt;
 
 /// Errors from encoding, decoding and key handling.
 ///
-/// Every variant describes public data. Verification failure is not an
-/// error variant: verification returns `bool` so it cannot reveal which
-/// component failed.
+/// Every variant describes public data. The `verify` functions return
+/// `bool`, not a variant, so they cannot reveal which component failed.
+/// [`Error::InvalidProof`] exists because `vrf::make_bytes` must refuse to
+/// derive from a proof that did not verify, and it says no more than that
+/// `bool` does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
@@ -51,6 +53,12 @@ pub enum Error {
     },
     /// A component crate reported an internal failure.
     ComponentFailure,
+    /// A hybrid VRF proof did not verify under the public key and input it
+    /// was presented with, so no output bytes were derived from it.
+    ///
+    /// One variant for both halves. Whether the classical proof or the
+    /// post-quantum binding failed is not reported.
+    InvalidProof,
     /// A rotation payload carried a `RotationKind` other than `0x01`
     /// (stateful graft) or `0x02` (full swap).
     BadRotationKind {
@@ -118,6 +126,7 @@ impl fmt::Display for Error {
                 )
             }
             Self::ComponentFailure => write!(f, "component algorithm failed"),
+            Self::InvalidProof => write!(f, "hybrid VRF proof did not verify; no output derived"),
             Self::BadRotationKind { kind } => {
                 write!(f, "rotation kind {kind:#04x} is not 0x01 or 0x02")
             }

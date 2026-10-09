@@ -2,6 +2,18 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- `vrf::make_bytes`, `vrf::make_bytes_delta` and `vrf::make_bytes_stateless`
+  verify the whole hybrid proof, classical proof and post-quantum binding,
+  before they derive output. They return the new `Error::InvalidProof` for
+  a proof that does not verify. They now require the full composite public
+  key and the full proof; a classical-only key or a header-only proof is a
+  `BadLength` error. Output bytes still come from the pre-output alone.
+  Answers audit finding QUI-1766.
+
 ## 0.0.0-rc9
 
 This release changes the stateless SHRINCS wire format and renames every

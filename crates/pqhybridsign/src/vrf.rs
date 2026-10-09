@@ -25,7 +25,8 @@
 //!     AND the binding against the post-quantum public key
 //!
 //! derive bytes:
-//!     from pre_output ALONE. The binding is verified and never read here.
+//!     verify as above, then from pre_output ALONE. The binding is verified
+//!     and never read.
 //! ```
 //!
 //! # The uniqueness rule
@@ -253,10 +254,11 @@ pub trait ClassicalVrf: ClassicalScheme {
     /// way BABE draws a leadership score and a randomness contribution from a
     /// single VRF.
     ///
-    /// **Verify first.** This reads the pre-output without checking the proof,
-    /// because a verifier that has already checked it should not pay for a
-    /// second check and a prover has nothing to check. Deriving bytes from an
-    /// unverified pre-output derives them from a value nobody vouched for.
+    /// **The composite layer verifies first.** This reads the pre-output
+    /// without checking the proof, because [`make_bytes`] and its delta and
+    /// stateless twins run the full hybrid verification before they call
+    /// it, and a second check here would be paid twice. Call this only on a
+    /// pre-output a verify has accepted.
     ///
     /// # Errors
     ///
@@ -350,34 +352,32 @@ fn split_proof<C: ClassicalVrf>(proof: &[u8], binding_len: usize) -> Result<(&[u
     ))
 }
 
-/// Derive output bytes given the classical half of a composite public key.
+/// Refuse a buffer that is not exactly `expected` bytes long.
+fn check_len(buf: &[u8], expected: usize) -> Result<()> {
+    if buf.len() == expected {
+        Ok(())
+    } else {
+        Err(Error::BadLength {
+            expected,
+            actual: buf.len(),
+        })
+    }
+}
+
+/// Derive output bytes from a proof that has just verified.
 ///
-/// Shared by the three families' `make_bytes` entry points, which differ only
-/// in how they bound the suite: the classical public key always opens a
-/// composite public key, and the pre-output always opens a hybrid VRF proof.
-fn make_bytes_inner<C: ClassicalVrf, B: Default + AsMut<[u8]>>(
+/// Every public `make_bytes` entry point runs its family's `verify` before
+/// it reaches here, so the pre-output this reads is one the classical proof
+/// and the post-quantum binding both vouched for. The binding is verified
+/// and never read: every output byte comes from the pre-output alone, which
+/// is the uniqueness rule in the module documentation.
+fn derive_output<C: ClassicalVrf, B: Default + AsMut<[u8]>>(
     label: &'static [u8],
     composite_pk: &[u8],
     input: &[u8],
     proof: &[u8],
     context: &[u8],
 ) -> Result<B> {
-    // Two checks rather than one disjunction, so the error names the field
-    // that was actually wrong. A caller who passed a short public key and read
-    // back a complaint about the proof length would go looking in the wrong
-    // place.
-    if composite_pk.len() < C::PUBLIC_KEY_LEN {
-        return Err(Error::BadLength {
-            expected: C::PUBLIC_KEY_LEN,
-            actual: composite_pk.len(),
-        });
-    }
-    if proof.len() < header_len::<C>() {
-        return Err(Error::BadLength {
-            expected: header_len::<C>(),
-            actual: proof.len(),
-        });
-    }
     C::vrf_make_bytes(
         &composite_pk[..C::PUBLIC_KEY_LEN],
         label,
@@ -510,14 +510,18 @@ where
     bool::from(classical_ok & binding_ok)
 }
 
-/// Derive output bytes from a verified proof's pre-output.
+/// Verify a hybrid VRF proof and derive output bytes from its pre-output.
 ///
-/// **Verify first**, for the reason given on [`ClassicalVrf::vrf_make_bytes`].
+/// This runs [`verify`] first and derives only on success, so a caller
+/// cannot reach output bytes from a proof nobody vouched for. A caller that
+/// has already called [`verify`] pays for the check twice; the check is
+/// cheap next to deriving consensus bytes from an attacker's proof.
 ///
 /// # Errors
 ///
-/// [`Error::BadLength`] if `proof` is shorter than [`header_len`] or `pk`
-/// shorter than the classical public key, [`Error::ComponentFailure`] if the
+/// [`Error::BadLength`] if `pk` is not the suite's public-key length or
+/// `proof` is not [`proof_len`]. [`Error::InvalidProof`] if the proof does
+/// not verify under `pk` and `input`. [`Error::ComponentFailure`] if the
 /// public key or the pre-output does not decode.
 pub fn make_bytes<S: Suite, B: Default + AsMut<[u8]>>(
     pk: &[u8],
@@ -528,7 +532,12 @@ pub fn make_bytes<S: Suite, B: Default + AsMut<[u8]>>(
 where
     S::Classical: ClassicalVrf,
 {
-    make_bytes_inner::<S::Classical, B>(S::LABEL, pk, input, proof, context)
+    check_len(pk, S::PUBLIC_KEY_LEN)?;
+    check_len(proof, proof_len::<S>())?;
+    if !verify::<S>(pk, input, proof) {
+        return Err(Error::InvalidProof);
+    }
+    derive_output::<S::Classical, B>(S::LABEL, pk, input, proof, context)
 }
 
 // ---------------------------------------------------------------------------
@@ -738,11 +747,14 @@ where
     Ok((classical, binding))
 }
 
-/// Derive output bytes from a verified delta-length proof's pre-output.
+/// Verify a delta-length proof and derive output bytes from its pre-output.
 ///
 /// # Errors
 ///
-/// The same as [`make_bytes`].
+/// [`Error::BadLength`] if `pk` is not the suite's public-key length or
+/// `proof` cannot be cut into its header, `DeltaLen` byte and binding.
+/// [`Error::DeltaLengthOutOfRange`] on the same terms as [`verify_delta`].
+/// Otherwise the same as [`make_bytes`].
 pub fn make_bytes_delta<S: DeltaSuite, B: Default + AsMut<[u8]>>(
     pk: &[u8],
     input: &[u8],
@@ -752,7 +764,21 @@ pub fn make_bytes_delta<S: DeltaSuite, B: Default + AsMut<[u8]>>(
 where
     S::Classical: ClassicalVrf,
 {
-    make_bytes_inner::<S::Classical, B>(S::LABEL, pk, input, proof, context)
+    check_len(pk, S::PUBLIC_KEY_LEN)?;
+    if proof.len() < PRE_OUTPUT_LEN {
+        return Err(Error::BadLength {
+            expected: PRE_OUTPUT_LEN,
+            actual: proof.len(),
+        });
+    }
+    // Run the cut for its error: `verify_delta` folds a malformed body into
+    // `false`, and a caller who sized the buffer wrong should hear which
+    // length was wrong rather than that the proof is bad.
+    decode_delta_body::<S>(&proof[PRE_OUTPUT_LEN..])?;
+    if !verify_delta::<S>(pk, input, proof) {
+        return Err(Error::InvalidProof);
+    }
+    derive_output::<S::Classical, B>(S::LABEL, pk, input, proof, context)
 }
 
 // ---------------------------------------------------------------------------
@@ -762,8 +788,8 @@ where
 #[cfg(feature = "alloc")]
 mod stateless {
     use super::{
-        binding_message, header_len, make_bytes_inner, split_proof, split_proof_out, ClassicalVrf,
-        Error, Result,
+        binding_message, check_len, derive_output, header_len, split_proof, split_proof_out,
+        ClassicalVrf, Error, Result,
     };
     use crate::budget::{spend_stateless_budget, StatelessBudgetStore};
     use crate::component::{ClassicalScheme, PqStatefulScheme};
@@ -992,11 +1018,17 @@ mod stateless {
         bool::from(classical_ok & binding_ok)
     }
 
-    /// Derive output bytes from a verified stateful-suite proof's pre-output.
+    /// Verify a stateful-suite proof and derive output bytes from its
+    /// pre-output.
+    ///
+    /// `pk` is the verify-form public key, on the same terms as
+    /// [`verify_stateless`].
     ///
     /// # Errors
     ///
-    /// The same as [`super::make_bytes`].
+    /// [`Error::BadLength`] if `pk` is not the suite's verify-form length
+    /// or `proof` is not [`proof_len_stateless`]. Otherwise the same as
+    /// [`super::make_bytes`].
     pub fn make_bytes_stateless<S: StatefulSuite, B: Default + AsMut<[u8]>>(
         pk: &[u8],
         input: &[u8],
@@ -1006,7 +1038,12 @@ mod stateless {
     where
         S::Classical: ClassicalVrf,
     {
-        make_bytes_inner::<S::Classical, B>(S::LABEL, pk, input, proof, context)
+        check_len(pk, S::VERIFY_PUBLIC_KEY_LEN)?;
+        check_len(proof, proof_len_stateless::<S>())?;
+        if !verify_stateless::<S>(pk, input, proof) {
+            return Err(Error::InvalidProof);
+        }
+        derive_output::<S::Classical, B>(S::LABEL, pk, input, proof, context)
     }
 
     /// Derive a stateless-only key dedicated to this suite's hybrid VRF
@@ -1146,6 +1183,53 @@ mod tests {
         let (sk, pk) = sr_ml44_keypair(1);
         let proof = sr_ml44_proof(&sk);
         assert!(verify::<SrMl44>(&pk, INPUT, &proof));
+    }
+
+    /// QUI-1766. `make_bytes` reads the pre-output, the first 32 bytes, and
+    /// the old code checked nothing past them. A binding altered after the
+    /// header still decodes to the same pre-output, so only a check over the
+    /// whole proof refuses it. A proof for another input is the second case:
+    /// its pre-output decodes too, and it is the wrong one.
+    #[test]
+    fn make_bytes_refuses_a_proof_that_does_not_verify() {
+        let (sk, pk) = sr_ml44_keypair(1);
+        let mut altered = sr_ml44_proof(&sk);
+        altered[SR_HEADER] ^= 0x01;
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&pk, INPUT, &altered, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+
+        let other_input = sr_ml44_proof(&sk);
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&pk, OTHER_INPUT, &other_input, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    /// Verification reads the whole composite key and the whole proof, so
+    /// `make_bytes` now wants exactly those. The old code accepted a
+    /// classical-only key and a header-only proof, because that was all it
+    /// read. The length errors name the field, so a caller who sized from
+    /// the wrong constant is told which one.
+    #[test]
+    fn make_bytes_wants_the_whole_composite_key_and_proof() {
+        let (sk, pk) = sr_ml44_keypair(2);
+        let proof = sr_ml44_proof(&sk);
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&pk[..SR_ML44_CLASSICAL_PK_LEN], INPUT, &proof, OUT_CTX),
+            Err(Error::BadLength {
+                expected: SR_ML44_PK_LEN,
+                actual: SR_ML44_CLASSICAL_PK_LEN,
+            })
+        );
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&pk, INPUT, &proof[..SR_HEADER], OUT_CTX),
+            Err(Error::BadLength {
+                expected: SR_ML44_PROOF_LEN,
+                actual: SR_HEADER,
+            })
+        );
     }
 
     #[test]
@@ -1405,6 +1489,56 @@ mod tests {
             make_bytes_delta::<SrFn512, [u8; 32]>(&pk, INPUT, &ground[..len], OUT_CTX)
                 .expect("bytes");
         assert_eq!(first, second);
+    }
+
+    /// The delta-length twin of `make_bytes_refuses_a_proof_that_does_not_verify`.
+    /// The binding is the tail of the proof, so the last written byte is
+    /// inside it.
+    #[test]
+    fn make_bytes_delta_refuses_a_proof_that_does_not_verify() {
+        let mut sk = [0u8; <SrFn512 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut pk = [0u8; <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<SrFn512>(&[16u8; 32], &mut sk, &mut pk)
+            .expect("keygen");
+        let mut proof =
+            [0u8; SR_HEADER + 1 + <<SrFn512 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let written =
+            sign_delta_deterministic::<SrFn512>(&sk, INPUT, &mut proof).expect("evaluate");
+
+        proof[written - 1] ^= 0x01;
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&pk, INPUT, &proof[..written], OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+        proof[written - 1] ^= 0x01;
+
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&pk, OTHER_INPUT, &proof[..written], OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+
+        // A header-only proof has no `DeltaLen` byte. `decode_delta_body`
+        // names the length it wanted, so the caller is told it is a length
+        // problem rather than a bad proof.
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&pk, INPUT, &proof[..SR_HEADER], OUT_CTX),
+            Err(Error::BadLength {
+                expected: SR_HEADER - PRE_OUTPUT_LEN + encoding_delta::DELTA_LEN,
+                actual: SR_HEADER - PRE_OUTPUT_LEN,
+            })
+        );
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(
+                &pk[..SR_ML44_CLASSICAL_PK_LEN],
+                INPUT,
+                &proof[..written],
+                OUT_CTX
+            ),
+            Err(Error::BadLength {
+                expected: <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN,
+                actual: SR_ML44_CLASSICAL_PK_LEN,
+            })
+        );
     }
 
     #[test]
@@ -1838,6 +1972,43 @@ mod stateful_tests {
         let b: [u8; 32] =
             make_bytes_stateless::<SrSh, [u8; 32]>(&pk, INPUT, &second, OUT_CTX).expect("bytes");
         assert_eq!(a, b, "a re-evaluated binding must not move the output");
+    }
+
+    /// The stateless twin of `make_bytes_refuses_a_proof_that_does_not_verify`.
+    #[test]
+    fn make_bytes_stateless_refuses_a_proof_that_does_not_verify() {
+        let (sk, pk) = sr_sh_key(6);
+        let mut budget = MemoryBudget::default();
+        let mut proof = evaluate(&sk, &mut budget);
+
+        let last = proof.len() - 1;
+        proof[last] ^= 0x01;
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&pk, INPUT, &proof, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+        proof[last] ^= 0x01;
+
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&pk, b"another input", &proof, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+
+        let classical_pk = <<SrSh as StatefulSuite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&pk[..classical_pk], INPUT, &proof, OUT_CTX),
+            Err(Error::BadLength {
+                expected: <SrSh as StatefulSuite>::VERIFY_PUBLIC_KEY_LEN,
+                actual: classical_pk,
+            })
+        );
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&pk, INPUT, &proof[..SR_HEADER], OUT_CTX),
+            Err(Error::BadLength {
+                expected: proof_len_stateless::<SrSh>(),
+                actual: SR_HEADER,
+            })
+        );
     }
 
     fn ed_sh_key(seed: u8) -> (DedicatedVrfKey<EdSh>, Vec<u8>) {
