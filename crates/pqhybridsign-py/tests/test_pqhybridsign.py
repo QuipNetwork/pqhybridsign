@@ -958,6 +958,25 @@ def test_vrf_make_bytes_refuses_a_proof_that_does_not_verify(suite):
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_proof_whose_classical_field_is_altered(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    assert len(phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")) == 32
+    proof[32] ^= 0x01
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_valid_key_that_is_not_the_signer(suite):
+    sk, _pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    _other_sk, other_pk = phs.keygen_from_seed(suite, bytes(range(32, 64)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, other_pk, b"input", proof, b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
 def test_vrf_make_bytes_refuses_a_public_key_that_does_not_decode(suite):
     sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
     proof = phs.vrf_prove(suite, sk, b"input")

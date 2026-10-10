@@ -271,9 +271,8 @@ pub unsafe extern "C" fn pqhs_vrf_verify(
 /// `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
 /// [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
 /// the capacity of the buffer that held it, on the same terms as
-/// [`pqhs_vrf_verify`]'s `proof_len`. Passing
-/// [`crate::pqhs_vrf_proof_len`]'s maximum for ED-FN-512 or SR-FN-512 instead
-/// fails rather than derives output.
+/// [`pqhs_vrf_verify`]'s `proof_len`. Passing the buffer capacity fails if
+/// it exceeds `*proof_written`, so pass the written byte count.
 ///
 /// # Errors
 ///

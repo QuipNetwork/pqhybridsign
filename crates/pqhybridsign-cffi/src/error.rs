@@ -2,11 +2,12 @@
 //! The integer error codes every entry point in this crate returns, and the
 //! lookup this crate offers to turn one into a message.
 //!
-//! Codes `1..=21` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
+//! Codes `1..=22` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
 //! a C caller that already branches on the numbers the ABI crate documents
-//! keeps working against this crate. Codes `100` and above are this crate's
-//! own vocabulary, for failures that only exist at a raw-pointer boundary
-//! and that the ABI crate -- which never sees a pointer -- has no code for.
+//! keeps working against this crate. Code `4` is retired and never reused.
+//! Codes `100` and above are this crate's own vocabulary, for failures that
+//! only exist at a raw-pointer boundary and that the ABI crate -- which never
+//! sees a pointer -- has no code for.
 
 use std::ffi::c_char;
 use std::os::raw::c_int;

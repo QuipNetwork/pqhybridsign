@@ -1209,6 +1209,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn make_bytes_refuses_a_proof_whose_classical_field_is_altered() {
+        let (sk, pk) = sr_ml44_keypair(1);
+        let original = sr_ml44_proof(&sk);
+        assert!(make_bytes::<SrMl44, [u8; 32]>(&pk, INPUT, &original, OUT_CTX).is_ok());
+
+        let mut altered = original;
+        altered[PRE_OUTPUT_LEN] ^= 0x01;
+        assert_eq!(altered[..PRE_OUTPUT_LEN], original[..PRE_OUTPUT_LEN]);
+        assert_eq!(altered[SR_HEADER..], original[SR_HEADER..]);
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&pk, INPUT, &altered, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_valid_key_that_is_not_the_signer() {
+        let (sk, _) = sr_ml44_keypair(1);
+        let (_, other_pk) = sr_ml44_keypair(2);
+        let proof = sr_ml44_proof(&sk);
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&other_pk, INPUT, &proof, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_composite_key_whose_classical_half_is_swapped() {
+        let (sk, pk) = sr_ml44_keypair(1);
+        let (_, other_pk) = sr_ml44_keypair(2);
+        let proof = sr_ml44_proof(&sk);
+        let mut swapped = pk;
+        swapped[..SR_ML44_CLASSICAL_PK_LEN].copy_from_slice(&other_pk[..SR_ML44_CLASSICAL_PK_LEN]);
+        assert_eq!(
+            swapped[SR_ML44_CLASSICAL_PK_LEN..],
+            pk[SR_ML44_CLASSICAL_PK_LEN..]
+        );
+        assert_eq!(
+            make_bytes::<SrMl44, [u8; 32]>(&swapped, INPUT, &proof, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
     /// Verification reads the whole composite key and the whole proof, so
     /// `make_bytes` now wants exactly those. The old code accepted a
     /// classical-only key and a header-only proof, because that was all it
@@ -1540,6 +1584,75 @@ mod tests {
                 expected: <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN,
                 actual: SR_ML44_CLASSICAL_PK_LEN,
             })
+        );
+    }
+
+    #[test]
+    fn make_bytes_delta_refuses_a_proof_whose_classical_field_is_altered() {
+        let mut sk = [0u8; <SrFn512 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut pk = [0u8; <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<SrFn512>(&[16u8; 32], &mut sk, &mut pk)
+            .expect("keygen");
+        let mut original =
+            [0u8; SR_HEADER + 1 + <<SrFn512 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let written =
+            sign_delta_deterministic::<SrFn512>(&sk, INPUT, &mut original).expect("evaluate");
+        assert!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&pk, INPUT, &original[..written], OUT_CTX)
+                .is_ok()
+        );
+
+        let mut altered = original;
+        altered[PRE_OUTPUT_LEN] ^= 0x01;
+        assert_eq!(altered[..PRE_OUTPUT_LEN], original[..PRE_OUTPUT_LEN]);
+        assert_eq!(altered[SR_HEADER..written], original[SR_HEADER..written]);
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&pk, INPUT, &altered[..written], OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn make_bytes_delta_refuses_a_valid_key_that_is_not_the_signer() {
+        let mut sk = [0u8; <SrFn512 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut pk = [0u8; <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<SrFn512>(&[16u8; 32], &mut sk, &mut pk)
+            .expect("signer's keygen");
+        let mut other_sk = [0u8; <SrFn512 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut other_pk = [0u8; <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<SrFn512>(&[17u8; 32], &mut other_sk, &mut other_pk)
+            .expect("other keygen");
+        let mut proof =
+            [0u8; SR_HEADER + 1 + <<SrFn512 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let written =
+            sign_delta_deterministic::<SrFn512>(&sk, INPUT, &mut proof).expect("evaluate");
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&other_pk, INPUT, &proof[..written], OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn make_bytes_delta_refuses_a_composite_key_whose_classical_half_is_swapped() {
+        let mut sk = [0u8; <SrFn512 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut pk = [0u8; <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<SrFn512>(&[16u8; 32], &mut sk, &mut pk)
+            .expect("signer's keygen");
+        let mut other_sk = [0u8; <SrFn512 as DeltaSuite>::SECRET_KEY_LEN];
+        let mut other_pk = [0u8; <SrFn512 as DeltaSuite>::PUBLIC_KEY_LEN];
+        composite_delta::keypair_from_seed::<SrFn512>(&[17u8; 32], &mut other_sk, &mut other_pk)
+            .expect("other keygen");
+        let mut proof =
+            [0u8; SR_HEADER + 1 + <<SrFn512 as DeltaSuite>::Pq as PqScheme>::SIGNATURE_LEN];
+        let written =
+            sign_delta_deterministic::<SrFn512>(&sk, INPUT, &mut proof).expect("evaluate");
+        let classical_pk = <<SrFn512 as DeltaSuite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        let mut swapped = pk;
+        swapped[..classical_pk].copy_from_slice(&other_pk[..classical_pk]);
+        assert_eq!(swapped[classical_pk..], pk[classical_pk..]);
+        assert_eq!(
+            make_bytes_delta::<SrFn512, [u8; 32]>(&swapped, INPUT, &proof[..written], OUT_CTX),
+            Err(Error::InvalidProof)
         );
     }
 
@@ -2010,6 +2123,51 @@ mod stateful_tests {
                 expected: proof_len_stateless::<SrSh>(),
                 actual: SR_HEADER,
             })
+        );
+    }
+
+    #[test]
+    fn make_bytes_stateless_refuses_a_proof_whose_classical_field_is_altered() {
+        let (sk, pk) = sr_sh_key(6);
+        let mut budget = MemoryBudget::default();
+        let original = evaluate(&sk, &mut budget);
+        assert!(make_bytes_stateless::<SrSh, [u8; 32]>(&pk, INPUT, &original, OUT_CTX).is_ok());
+
+        let mut altered = original.clone();
+        altered[PRE_OUTPUT_LEN] ^= 0x01;
+        assert_eq!(altered[..PRE_OUTPUT_LEN], original[..PRE_OUTPUT_LEN]);
+        assert_eq!(altered[SR_HEADER..], original[SR_HEADER..]);
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&pk, INPUT, &altered, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn make_bytes_stateless_refuses_a_valid_key_that_is_not_the_signer() {
+        let (sk, _) = sr_sh_key(6);
+        let (_, other_pk) = sr_sh_key(7);
+        let mut budget = MemoryBudget::default();
+        let proof = evaluate(&sk, &mut budget);
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&other_pk, INPUT, &proof, OUT_CTX),
+            Err(Error::InvalidProof)
+        );
+    }
+
+    #[test]
+    fn make_bytes_stateless_refuses_a_composite_key_whose_classical_half_is_swapped() {
+        let (sk, pk) = sr_sh_key(6);
+        let (_, other_pk) = sr_sh_key(7);
+        let mut budget = MemoryBudget::default();
+        let proof = evaluate(&sk, &mut budget);
+        let classical_pk = <<SrSh as StatefulSuite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        let mut swapped = pk.clone();
+        swapped[..classical_pk].copy_from_slice(&other_pk[..classical_pk]);
+        assert_eq!(swapped[classical_pk..], pk[classical_pk..]);
+        assert_eq!(
+            make_bytes_stateless::<SrSh, [u8; 32]>(&swapped, INPUT, &proof, OUT_CTX),
+            Err(Error::InvalidProof)
         );
     }
 

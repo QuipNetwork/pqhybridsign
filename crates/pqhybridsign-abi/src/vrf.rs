@@ -563,6 +563,102 @@ mod tests {
     }
 
     #[test]
+    fn make_bytes_refuses_a_proof_whose_classical_field_is_altered() {
+        for suite in STATELESS {
+            let (sk, pk) = keypair(suite);
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert!(vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out).is_ok());
+
+            proof[vrf::PRE_OUTPUT_LEN] ^= 0x01;
+            out.fill(0);
+            assert_eq!(
+                vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes from an altered classical proof"
+            );
+            assert_eq!(out, [0u8; VRF_OUTPUT_LEN]);
+        }
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_valid_key_that_is_not_the_signer() {
+        for suite in STATELESS {
+            let (sk, pk) = keypair(suite);
+            let mut other_sk = vec![0u8; secret_key_len(suite)];
+            let mut other_pk = vec![0u8; public_key_len(suite)];
+            keygen_from_seed(suite, &[12u8; 32], &mut other_sk, &mut other_pk).unwrap();
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert!(vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out).is_ok());
+
+            out.fill(0);
+            assert_eq!(
+                vrf_make_bytes(suite, &other_pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes under another valid key"
+            );
+            assert_eq!(out, [0u8; VRF_OUTPUT_LEN]);
+        }
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_composite_key_whose_classical_half_is_swapped() {
+        for suite in STATELESS {
+            let (sk, pk) = keypair(suite);
+            let mut other_sk = vec![0u8; secret_key_len(suite)];
+            let mut other_pk = vec![0u8; public_key_len(suite)];
+            keygen_from_seed(suite, &[12u8; 32], &mut other_sk, &mut other_pk).unwrap();
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert!(vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out).is_ok());
+
+            let classical_pk = match suite {
+                Suite::EdMl44 | Suite::EdFn512 => {
+                    <pqhybridsign::classical::Ed25519 as ClassicalScheme>::PUBLIC_KEY_LEN
+                }
+                _ => <pqhybridsign::classical::Sr25519 as ClassicalScheme>::PUBLIC_KEY_LEN,
+            };
+            let mut swapped = pk.clone();
+            swapped[..classical_pk].copy_from_slice(&other_pk[..classical_pk]);
+            assert_eq!(swapped[classical_pk..], pk[classical_pk..]);
+            out.fill(0);
+            assert_eq!(
+                vrf_make_bytes(suite, &swapped, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes under a swapped classical key"
+            );
+            assert_eq!(out, [0u8; VRF_OUTPUT_LEN]);
+        }
+    }
+
+    #[test]
+    #[ignore = "derive_stateless_key runs keygen; 47s at 128s"]
+    fn make_bytes_stateless_refuses_a_proof_whose_classical_field_is_altered() {
+        for suite in [Suite::EdSh, Suite::SrSh] {
+            let mut pk = vec![0u8; public_key_len(suite)];
+            let key = VrfStatelessKey::derive(suite, &[13u8; 32], &mut pk).unwrap();
+            let mut budget = MemoryBudget::default();
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove_stateless(&key, &mut budget, INPUT, &mut OsRng, &mut proof).unwrap();
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert!(vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out).is_ok());
+
+            proof[vrf::PRE_OUTPUT_LEN] ^= 0x01;
+            out.fill(0);
+            assert_eq!(
+                vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes from an altered classical proof"
+            );
+            assert_eq!(out, [0u8; VRF_OUTPUT_LEN]);
+        }
+    }
+
+    #[test]
     fn make_bytes_refuses_a_public_key_that_does_not_decode() {
         for suite in STATELESS {
             let (sk, mut pk) = keypair(suite);
