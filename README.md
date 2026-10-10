@@ -8,8 +8,9 @@ either component survives a break.
 This crate is a standalone reference implementation. It does not depend on
 Substrate.
 
-**Status: pre-release.** The wire format is not frozen, and no
-cross-implementation test vectors exist yet. See [Limitations](#limitations).
+**Status: first stable release.** The wire format is the one `0.0.0-rc9`
+shipped. No cross-implementation test vectors exist yet. See
+[Limitations](#limitations).
 
 ## Features
 
@@ -312,10 +313,10 @@ Each binding ships from its own registry.
 ```toml
 [dependencies]
 # Every suite, stateful (SHRINCS) on by default.
-pqhybridsign = "0.0.0-rc9"
+pqhybridsign = "0.0.0"
 
 # Lattice suites only, no hashsigs-rs:
-# pqhybridsign = { version = "0.0.0-rc9", default-features = false, features = ["std"] }
+# pqhybridsign = { version = "0.0.0", default-features = false, features = ["std"] }
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -324,10 +325,8 @@ published to crates.io.
 
 ### JavaScript and TypeScript
 
-The package is prerelease, so install the `next` tag.
-
 ```sh
-npm install @quip.network/pqhybridsign@next
+npm install @quip.network/pqhybridsign
 ```
 
 The module loads a WebAssembly binary before it can sign or verify. Every
@@ -355,11 +354,8 @@ accessors work for every suite.
 ### Python
 
 ```sh
-pip install --pre pqhybridsign
+pip install pqhybridsign
 ```
-
-PEP 440 spells the prerelease version `0.0.0rc9`, not `0.0.0-rc9`. Without
-`--pre`, pip does not find it.
 
 ### C and C++
 
@@ -496,8 +492,7 @@ That ignored smoke takes about 46 seconds in release. Debug builds run about
 
 ## Limitations
 
-Stated plainly, because a release candidate should not imply more than it
-delivers.
+Stated plainly, because a release should not imply more than it delivers.
 
 - **The golden vectors pin this implementation against itself.** They catch
   wire-format drift. They cannot catch an error that was present when they were

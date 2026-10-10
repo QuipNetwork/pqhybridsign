@@ -23,7 +23,7 @@ publish = false
 # BIP39's PBKDF2. A binding consumer has no such choice: they get the
 # compiled artifact, so a feature left off here is a mechanism that does
 # not exist for C, Python and JavaScript callers at all.
-pqhybridsign = { path = "../pqhybridsign", version = "0.0.0-rc9", features = ["vrf", "mnemonic"] }
+pqhybridsign = { path = "../pqhybridsign", version = "0.0.0", features = ["vrf", "mnemonic"] }
 rand_core.workspace = true
 zeroize.workspace = true
 
