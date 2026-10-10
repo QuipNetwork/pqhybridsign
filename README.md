@@ -312,10 +312,10 @@ Each binding ships from its own registry.
 ```toml
 [dependencies]
 # Every suite, stateful (SHRINCS) on by default.
-pqhybridsign = "0.0.0-rc9"
+pqhybridsign = "0.0.0"
 
 # Lattice suites only, no hashsigs-rs:
-# pqhybridsign = { version = "0.0.0-rc9", default-features = false, features = ["std"] }
+# pqhybridsign = { version = "0.0.0", default-features = false, features = ["std"] }
 ```
 
 `pqhybridsign-abi` is the type-erased layer that the C, Python, and
@@ -355,11 +355,8 @@ accessors work for every suite.
 ### Python
 
 ```sh
-pip install --pre pqhybridsign
+pip install pqhybridsign
 ```
-
-PEP 440 spells the prerelease version `0.0.0rc9`, not `0.0.0-rc9`. Without
-`--pre`, pip does not find it.
 
 ### C and C++
 

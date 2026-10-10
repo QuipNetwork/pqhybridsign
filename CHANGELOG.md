@@ -2,7 +2,10 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.0.0
+
+This is the first stable release. It carries the two audit fixes below and
+the wire formats of `0.0.0-rc9`.
 
 ### Changed
 
