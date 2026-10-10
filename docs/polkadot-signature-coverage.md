@@ -289,19 +289,237 @@ rg -n "verify_batch|BatchVerifier|batch_verify|aggregate" $P/substrate/primitive
 rg -n "identity::Keypair|ed25519::Keypair|sign\(" $P/substrate/client/network/src $P/substrate/client/authority-discovery/src $P/substrate/client/statement-store --type rust > target/polkadot-scan/node-keys.txt
 ```
 
+### Host functions and keystore methods
+
 The original host search returned zero lines because the functions moved from `io/src/lib.rs` to `io/src/relay_chain.rs`.
-The scan widened that search to `io/src/` and found 27 lines.
-The host pattern also omits names that start with `secp256k1`.
-A separate recovery search found six lines.
+The file list identified the current source path.
 
 ```sh
-rg -n "fn (ed25519|sr25519|ecdsa|bls|bandersnatch)[a-z0-9_]*(verify|sign|recover|generate|public_keys)[a-z0-9_]*" $P/substrate/primitives/io/src > target/polkadot-scan/host-functions-wide.txt
-rg -n "fn secp256k1_ecdsa_recover" $P/substrate/primitives/io/src > target/polkadot-scan/host-recovery.txt
+# Initial file discovery: 3 lines
+rg --files target/polkadot-sdk/substrate/primitives/io/src
 ```
 
-Other searches examine the whole Rust tree and follow consumers, key derivation, enum variants, certificates, personhood, and bridge verification.
-Those searches found the `Eth` enum variant, approval VRFs, `P-256` uses, and `Sassafras` ephemeral `ed25519` keys.
-They also found `BLS377` core primitives and `Snowbridge` signature aggregation outside the original primitive patterns.
+The scan widened the original host path to `io/src/` and found 27 lines.
+The original pattern omits names that start with `secp256k1`.
+The separate recovery pattern found six lines.
+
+```sh
+# host-functions-wide.txt: 27 lines, exit 0
+rg -n "fn (ed25519|sr25519|ecdsa|bls|bandersnatch)[a-z0-9_]*(verify|sign|recover|generate|public_keys)[a-z0-9_]*" $P/substrate/primitives/io/src > target/polkadot-scan/host-functions-wide.txt 2> target/polkadot-scan/host-functions-wide.err
+
+# host-recovery.txt: 6 lines, exit 0
+rg -n "fn secp256k1_ecdsa_recover" $P/substrate/primitives/io/src > target/polkadot-scan/host-recovery.txt 2> target/polkadot-scan/host-recovery.err
+```
+
+The keystore search applies scheme-specific patterns to the keystore interface.
+The primitive search adds module definitions and proof-of-possession operations.
+
+```sh
+# keystore-apis.txt: 52 lines, exit 0
+rg -n "^\s*fn (ed25519|sr25519|ecdsa|bls381|ecdsa_bls381|bandersnatch)_(public_keys|generate_new|sign|vrf|ring|generate_proof)" $P/substrate/primitives/keystore/src/lib.rs > target/polkadot-scan/keystore-apis.txt 2> target/polkadot-scan/keystore-apis.err
+
+# primitive-definitions.txt: 78 lines, exit 0
+rg -n "^pub mod (bls377|bls381|ecdsa_bls377|ecdsa_bls381)|^pub type (Signature|Public)|^pub struct .*Signature|proof_of_possession|fn bls381" $P/substrate/primitives/core/src/{bls,paired_crypto,proof_of_possession}.rs $P/substrate/primitives/io/src/relay_chain.rs > target/polkadot-scan/primitive-definitions.txt 2> target/polkadot-scan/primitive-definitions.err
+```
+
+### Primitive inventory
+
+The `crypto-inventory` search expands `uncovered-primitives` to the whole Rust tree and adds supported schemes and signature types.
+Its globs exclude test files and test directories.
+The file list identifies the current core, network, and bridge client sources.
+The final patterns use word boundaries for candidate primitive names and then isolate `ed448`.
+
+```sh
+# crypto-inventory.txt: 182 lines, exit 0
+rg -l "ed25519::|sr25519::|ecdsa::|secp256k1|bls377|bls381|ecdsa_bls|bandersnatch|ed448|paired_crypto|MultiSignature|VrfSignature|RingProof|ring_vrf" $P --type rust -g "!**/tests/**" -g "!**/tests.rs" -g "!**/mock.rs" -g "!**/benchmarking.rs" -g "!**/benches/**" -g "!**/test_utils.rs" -g "!**/test-utils/**" > target/polkadot-scan/crypto-inventory.txt 2> target/polkadot-scan/crypto-inventory.err
+
+# crypto-tree.txt: 89 lines, exit 0
+rg --files $P/substrate/primitives/core/src $P/substrate/client/network/src $P/bridges/relays/client-substrate/src > target/polkadot-scan/crypto-tree.txt 2> target/polkadot-scan/crypto-tree.err
+
+# absent-primitives.txt: 25 lines, exit 0
+rg -n "\b(ed448|bls377|ecdsa_bls377)\b" $P --type rust > target/polkadot-scan/absent-primitives.txt 2> target/polkadot-scan/absent-primitives.err
+
+# no-ed448.txt: 0 lines, exit 1
+rg -n "\bed448\b" $P --type rust > target/polkadot-scan/no-ed448.txt 2> target/polkadot-scan/no-ed448.err
+```
+
+### Key derivation and signing contexts
+
+The derivation search adds hard and soft junctions to the original signature and key patterns.
+The context search then checks native derivation labels and signing functions.
+It also reads `bridges/snowbridge/primitives/beacon/Cargo.toml`.
+
+```sh
+# derivation.txt: 68 lines, exit 0
+rg -n "fn (derive|from_phrase|from_string|from_seed_slice)|DeriveJunction::(Soft|Hard)|DeriveError::SoftKeyInPath|mini_secret_from_entropy" $P/substrate/primitives/core/src/{crypto,ed25519,sr25519,ecdsa,bandersnatch,bls,paired_crypto}.rs > target/polkadot-scan/derivation.txt 2> target/polkadot-scan/derivation.err
+
+# seed-and-context.txt: 79 lines, exit 0
+rg -n "seed_from_entropy|SIGNING_CTX|Ed25519HDKD|substrate-bip39|verifiable|BLS12|BlsEngine|fn sign|fn verify" $P/substrate/primitives/core/src/{ed25519,sr25519,bls}.rs $P/substrate/primitives/core/src/crypto.rs $P/bridges/snowbridge/primitives/beacon/Cargo.toml > target/polkadot-scan/seed-and-context.txt 2> target/polkadot-scan/seed-and-context.err
+```
+
+### Transcripts and signature enums
+
+The `vrf-extra` search widens the original VRF search to the whole Rust tree.
+Its exclusion globs did not match the prefixed paths, so the output retains repeated hits.
+The enum search adds `Eth` and `AnySignature` to the original enum patterns.
+It also checks `BABE` input construction and approval extra transcripts.
+
+```sh
+# vrf-extra.txt: 363 lines, exit 0
+rg -n "vrf_sign|VrfSignature|VrfPreOutput|vrf_pre_output|RingVrfSignature|ring_vrf|make_bytes" $P --type rust -g "!substrate/primitives/**" -g "!substrate/client/consensus/**" -g "!substrate/frame/**" > target/polkadot-scan/vrf-extra.txt 2> target/polkadot-scan/vrf-extra.err
+
+# enum-and-transcripts.txt: 59 lines, exit 0
+rg -n "Eth\(|AnySignature|make_vrf_transcript|BABE_ENGINE_ID|vrf_sign_extra_after_check|VrfInput::new|Transcript::new|extra" $P/substrate/primitives/runtime/src/lib.rs $P/substrate/primitives/consensus/babe/src/lib.rs $P/polkadot/node/core/approval-voting/src/criteria.rs $P/substrate/primitives/core/src/sr25519.rs > target/polkadot-scan/enum-and-transcripts.txt 2> target/polkadot-scan/enum-and-transcripts.err
+```
+
+### Batch verification and signature aggregation
+
+The first command widens the original batch search to the whole Rust tree and targets definitions.
+The next patterns isolate `BatchVerifier` and `verify_batch`, then `BatchVerifier` alone.
+The `BEEFY` search adds feature conditions and commitment verification to the aggregation patterns.
+
+```sh
+# verification-extra.txt: 26 lines, exit 0
+rg -n "fn (verify_batch|batch_verify)|struct BatchVerifier|fn.*aggregate|SignatureAggregator" $P --type rust > target/polkadot-scan/verification-extra.txt 2> target/polkadot-scan/verification-extra.err
+
+# no-batch-verifier.txt: 7 lines, exit 0
+rg -n "BatchVerifier|verify_batch" $P --type rust > target/polkadot-scan/no-batch-verifier.txt 2> target/polkadot-scan/no-batch-verifier.err
+
+# batch-verifier-only.txt: 0 lines, exit 1
+rg -n "BatchVerifier" $P --type rust > target/polkadot-scan/batch-verifier-only.txt 2> target/polkadot-scan/batch-verifier-only.err
+
+# beefy-crypto.txt: 215 lines, exit 0
+rg -n "app_crypto!|cfg\(|Signature|ProofOfPossession|verify|commitment|aggregate|public_key_to|bls381|BLS381" $P/substrate/primitives/consensus/beefy/src/{lib,witness}.rs $P/substrate/frame/beefy-mmr/src/lib.rs > target/polkadot-scan/beefy-crypto.txt 2> target/polkadot-scan/beefy-crypto.err
+```
+
+### Consensus and runtime consumers
+
+These commands follow app key bindings into concrete consumers.
+The runtime and contract patterns add verification call sites beyond the original app macros and signature enum.
+The node search adds primitive and network type paths to `node-keys`.
+The ticket search isolates `Sassafras` ephemeral keys from authority keys.
+
+```sh
+# polkadot-signatures.txt: 64 lines, exit 0
+rg -n "app_crypto!|type (Collator|Validator|Assignment)|Signature|sign_payload|check_signature|fn sign" $P/polkadot/primitives/src/v9/mod.rs $P/polkadot/node/primitives/src/{lib,disputes/mod}.rs $P/polkadot/node/network/protocol/src/lib.rs > target/polkadot-scan/polkadot-signatures.txt 2> target/polkadot-scan/polkadot-signatures.err
+
+# runtime-crypto.txt: 170 lines, exit 0
+rg -n "MultiSignature|sr25519|ed25519|verify\(|Signature|signing" $P/polkadot/runtime/common/src/{claims/mod,crowdloan/mod,purchase/mod}.rs $P/substrate/frame/{identity,nfts}/src/lib.rs $P/substrate/frame/system/src/offchain.rs $P/substrate/frame/verify-signature/src/extension.rs > target/polkadot-scan/runtime-crypto.txt 2> target/polkadot-scan/runtime-crypto.err
+
+# contract-crypto.txt: 32 lines, exit 0
+rg -n "fn.*(ed25519|sr25519|ecdsa|secp256k1)|secp256k1_ecdsa|ecdsa_recover|Signature::|verify\(|recover\(" $P/substrate/frame/{contracts,revive}/src/exec.rs $P/substrate/frame/revive/src/{precompiles/builtin/ecrecover,evm/api/signature,evm/eip7702}.rs $P/substrate/frame/assets/precompiles/src/permit.rs > target/polkadot-scan/contract-crypto.txt 2> target/polkadot-scan/contract-crypto.err
+
+# node-extra.txt: 324 lines, exit 0
+rg -n "sr25519|ed25519|ecdsa|sign\(|verify\(|PeerId|from_public|Proof|Bandersnatch|verifiable" $P/substrate/primitives/statement-store/src/lib.rs $P/substrate/client/network/src/service/signature.rs $P/substrate/client/network/types/src/{peer_id,ed25519}.rs $P/substrate/primitives/mixnet/src/types.rs $P/substrate/client/authority-discovery/src/worker.rs > target/polkadot-scan/node-extra.txt 2> target/polkadot-scan/node-extra.err
+
+# sassafras-ephemeral.txt: 5 lines, exit 0
+rg -n "EphemeralPublic|EphemeralSignature|EphemeralPair|bandersnatch|ed25519|sr25519|verify" $P/substrate/primitives/consensus/sassafras/src/ticket.rs $P/substrate/frame/sassafras/src/lib.rs > target/polkadot-scan/sassafras-ephemeral.txt 2> target/polkadot-scan/sassafras-ephemeral.err
+```
+
+### Certificates and other primitives
+
+The original `uncovered-primitives` pattern omitted `P-256`.
+The whole-tree pattern adds `secp256r1` and `p256::`, along with other candidate schemes.
+The certificate search then isolates the network certificate operations.
+
+```sh
+# other-primitives.txt: 43 lines, exit 0
+rg -n "secp256r1|p256::|P256|rsa::|RS256|ed448|blst::|milagro_bls|BandersnatchVrfVerifiable" $P --type rust > target/polkadot-scan/other-primitives.txt 2> target/polkadot-scan/other-primitives.err
+
+# network-certificates.txt: 62 lines, exit 0
+rg -n "p256|ecdsa|SigningKey|sign_prehash|Certificate|certificate|fn derive|fn generate|seed" $P/substrate/client/network/src/webrtc.rs > target/polkadot-scan/network-certificates.txt 2> target/polkadot-scan/network-certificates.err
+```
+
+### Encryption and key exchange
+
+This pattern adds encryption and key exchange operations to the original node signing search.
+It examines statement encryption and mixnet public keys, along with network transport.
+
+```sh
+# key-exchange.txt: 30 lines, exit 0
+rg -n "fn (encrypt|decrypt)|x25519|X25519|NoiseConfig|noise::|SecretKey|fn derive_shared" $P/substrate/primitives/statement-store/src/ecies.rs $P/substrate/client/network/src/transport.rs $P/substrate/primitives/mixnet/src/types.rs > target/polkadot-scan/key-exchange.txt 2> target/polkadot-scan/key-exchange.err
+```
+
+### Consumer account bindings
+
+The first command checks concrete runtime signature and authority types.
+It names the absent path `substrate/frame/hop/src/lib.rs`.
+
+```sh
+# runtime-bindings.txt: 20 lines, exit 2
+rg -n "type (OffchainSignature|OffchainPublic|SigningPublicKey|Signature|AccountKeyPair)|pub type Signature|type Crypto =|Crypto = verifiable|type AuthorityId" $P/cumulus/parachains/runtimes/{people,assets}/ $P/polkadot/core-primitives/src/lib.rs $P/templates/{parachain,solochain}/runtime/src/{lib,configs/mod}.rs $P/substrate/frame/{verify-signature,hop}/src/lib.rs > target/polkadot-scan/runtime-bindings.txt 2> target/polkadot-scan/runtime-bindings.err
+```
+
+The `HOP` search uses the current client and primitive directories instead of that absent pallet path.
+Its pattern follows signatures and verification call sites.
+
+```sh
+# hop-crypto.txt: 43 lines, exit 0
+rg -n "sr25519|ed25519|Signature|verify|sign\(" $P/substrate/primitives/hop/src/lib.rs $P/substrate/client/hop/src/{promotion,types,rpc}.rs > target/polkadot-scan/hop-crypto.txt 2> target/polkadot-scan/hop-crypto.err
+```
+
+The next command names the absent bridge client path `bridges/relays/client-polkadot/src/lib.rs`.
+
+```sh
+# configured-consumers.txt: 4 lines, exit 2
+rg -n "type AccountKeyPair|OffchainSignature|pub type Signature|signature.verify|\.verify\(|sr25519|ed25519" $P/bridges/relays/client-polkadot/src/lib.rs $P/substrate/frame/nfts/src/features/{create_delete_item,attributes}.rs $P/cumulus/parachains/common/types/src/lib.rs > target/polkadot-scan/configured-consumers.txt 2> target/polkadot-scan/configured-consumers.err
+```
+
+The binding search widens that path to `bridges/relays` and checks account key aliases.
+It also checks proof system configuration and ephemeral key types in current runtime and primitive paths.
+
+```sh
+# binding-closure.txt: 11 lines, exit 0
+rg -n "type AccountKeyPair =|BandersnatchVrfVerifiable|type (Crypto|Verifier) =|impl pallet_hop|type Signature =|PublicKey =|EphemeralPublic|EphemeralSignature" $P/bridges/relays $P/cumulus/parachains/runtimes/people $P/substrate/primitives/consensus/sassafras/src/lib.rs $P/substrate/frame/people > target/polkadot-scan/binding-closure.txt 2> target/polkadot-scan/binding-closure.err
+```
+
+### Personhood and asset authorization
+
+The first pattern adds membership proof terms to the original VRF and primitive searches.
+The runtime search checks the inspected `People` configuration.
+
+```sh
+# people-crypto.txt: 278 lines, exit 0
+rg -n "Bandersnatch|ring_vrf|verifiable|Proof|signature|key" $P/substrate/frame/people/src/lib.rs $P/substrate/primitives/statement-store/Cargo.toml $P/Cargo.toml > target/polkadot-scan/people-crypto.txt 2> target/polkadot-scan/people-crypto.err
+
+# people-bindings.txt: 2 lines, exit 0
+rg -n "Bandersnatch|GenerateVerifiable|Crypto|OffchainSignature|Signature|verify|Proof" $P/cumulus/parachains/runtimes/people/people-westend/src/people.rs > target/polkadot-scan/people-bindings.txt 2> target/polkadot-scan/people-bindings.err
+```
+
+The next command names the absent path `substrate/frame/people/src/impls.rs`.
+
+```sh
+# consumer-closure.txt: 8 lines, exit 2
+rg -n "OffchainSignature|verify|fn.*sign|Signature|Crypto|Verifier" $P/substrate/frame/nfts/src/features/{create_delete_item,attributes}.rs $P/substrate/frame/people/src/{types,impls}.rs > target/polkadot-scan/consumer-closure.txt 2> target/polkadot-scan/consumer-closure.err
+```
+
+The replacement search widens `NFT` paths to `nfts/src` and reads personhood configuration from `people/src/lib.rs`.
+It adds `bridges/snowbridge/primitives/beacon/Cargo.toml` and excludes test files.
+
+```sh
+# current-consumers.txt: 57 lines, exit 0
+rg -n "OffchainSignature|fn validate_signature|\.verify\(|type Crypto|impl.*Config|BLS12-381|milagro" $P/substrate/frame/nfts/src $P/substrate/frame/people/src/lib.rs $P/bridges/snowbridge/primitives/beacon/Cargo.toml -g "!**/tests.rs" -g "!**/tests/**" -g "!**/mock.rs" -g "!**/benchmarking.rs" > target/polkadot-scan/current-consumers.txt 2> target/polkadot-scan/current-consumers.err
+```
+
+### Bridge verification
+
+The first command adds bridge authority types and `BLS` verification to the original unsupported primitive search.
+It names the absent path `bridges/relays/client-substrate/src/signing.rs`.
+
+```sh
+# bridge-crypto.txt: 94 lines, exit 2
+rg -n "AuthorityId|AuthoritySignature|Grandpa|Pair|Signature|ecdsa|bls|Bls|BLST|PublicKey|fast_aggregate" $P/bridges/primitives/{header-chain,polkadot-core}/src/lib.rs $P/bridges/relays/client-substrate/src/{chain,signing}.rs $P/bridges/snowbridge/primitives/beacon/src/bls.rs > target/polkadot-scan/bridge-crypto.txt 2> target/polkadot-scan/bridge-crypto.err
+```
+
+The replacement widens the relay path to `bridges/relays/client-substrate/src`.
+It also searches the header verifier directory.
+Its changed pattern targets signing methods and verification call sites.
+
+```sh
+# bridge-signing-wide.txt: 6 lines, exit 0
+rg -n "type AccountKeyPair|fn sign_transaction|fn sign\(|check_message_signature|AuthoritySignature::|signature.verify" $P/bridges/relays/client-substrate/src $P/bridges/primitives/header-chain/src > target/polkadot-scan/bridge-signing-wide.txt 2> target/polkadot-scan/bridge-signing-wide.err
+```
+
 All search output files received a full read before drafting.
 Source reads resolve ambiguous hits in deprecated batch operations and aggregation tests.
 
@@ -317,11 +535,7 @@ No raw output enters the documentation commit.
 Upstream citations can also use this fixed source root:
 `https://github.com/paritytech/polkadot-sdk/blob/05ddbee5c062d49c8a2a072c529a2fc80aad243e/`.
 
-## blocked / needs-decision
-
-No blocker prevents this report.
-
-The report makes these assumptions and records these limits:
+### Limits
 
 - Covered measures primitive support.
   Existing wire formats, suite contexts, and Substrate interfaces still need integration.
