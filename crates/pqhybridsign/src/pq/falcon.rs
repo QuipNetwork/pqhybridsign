@@ -2,13 +2,13 @@
 use crate::{
     component::PqScheme,
     error::{Error, Result},
+    seeded_rng::SeededRng,
 };
 use fn_dsa::{
     sign_key_size, signature_size, vrfy_key_size, DomainContext, KeyPairGenerator,
     KeyPairGenerator512, SigningKey, SigningKey512, VerifyingKey, VerifyingKey512, DOMAIN_NONE,
     FN_DSA_LOGN_512, HASH_ID_RAW,
 };
-use rand_core::{CryptoRng, RngCore};
 use sha2::{Digest, Sha512};
 use subtle::Choice;
 use zeroize::Zeroize;
@@ -138,78 +138,6 @@ fn nonce_seed(sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
     seed
 }
 
-/// A deterministic RNG seeded from a 32-byte value, expanded by repeated
-/// SHA-512 hashing over a counter.
-///
-/// FN-DSA has no all-zero deterministic mode the way ML-DSA-44's `rnd` does:
-/// its key generation and signing both draw an RNG-sized, unbounded amount
-/// of randomness. Seeding this expander from a value derived from the
-/// secret key (see `sign_deterministic`) or, for `derive`, from the
-/// HKDF-expanded component seed, reproduces the same output for the same
-/// input while keeping the seed itself secret. Mirrors `Sr25519`'s
-/// `SeededRng`, duplicated here rather than shared because it is private to
-/// each component module.
-struct SeededRng {
-    state: [u8; 32],
-    counter: u64,
-    buffer: [u8; 64],
-    used: usize,
-}
-
-impl SeededRng {
-    fn new(seed: [u8; 32]) -> Self {
-        Self {
-            state: seed,
-            counter: 0,
-            buffer: [0u8; 64],
-            used: 64,
-        }
-    }
-    fn refill(&mut self) {
-        let mut hasher = Sha512::new();
-        hasher.update(self.state);
-        hasher.update(self.counter.to_be_bytes());
-        self.buffer.copy_from_slice(&hasher.finalize());
-        self.counter += 1;
-        self.used = 0;
-    }
-}
-
-impl RngCore for SeededRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut b = [0u8; 4];
-        self.fill_bytes(&mut b);
-        u32::from_le_bytes(b)
-    }
-    fn next_u64(&mut self) -> u64 {
-        let mut b = [0u8; 8];
-        self.fill_bytes(&mut b);
-        u64::from_le_bytes(b)
-    }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        for byte in dest.iter_mut() {
-            if self.used == self.buffer.len() {
-                self.refill();
-            }
-            *byte = self.buffer[self.used];
-            self.used += 1;
-        }
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> core::result::Result<(), rand_core::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-impl CryptoRng for SeededRng {}
-
-impl Drop for SeededRng {
-    fn drop(&mut self) {
-        self.state.zeroize();
-        self.buffer.zeroize();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,12 +164,15 @@ mod tests {
 
     #[test]
     fn derivation_is_deterministic() {
+        use subtle::ConstantTimeEq;
         let (sk1, pk1) = keypair(1);
         let (sk2, pk2) = keypair(1);
-        assert_eq!(sk1, sk2);
+        // Secret keys compare in constant time, even in a test, so no copy
+        // of this comparison can be lifted into library code as written.
+        assert!(bool::from(sk1[..].ct_eq(&sk2[..])));
         assert_eq!(pk1, pk2);
         let (sk3, _) = keypair(2);
-        assert_ne!(sk1, sk3);
+        assert!(!bool::from(sk1[..].ct_eq(&sk3[..])));
     }
 
     #[test]
