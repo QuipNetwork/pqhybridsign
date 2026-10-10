@@ -399,7 +399,7 @@ smoke-128s-q18:
 # exercised by the merge request that makes it.
 .fixture-drift:
   stage: test
-  timeout: 15m
+  timeout: 30m
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
@@ -412,8 +412,11 @@ smoke-128s-q18:
 
 # One job per profile rather than one job looping over four. The loop took
 # 938 seconds, 3.6 times the longest ordinary job, and that is what made a
-# per-commit run look unaffordable. Split, each shard lands near the 264
-# seconds test-debug already takes and adds nothing to the critical path.
+# per-commit run look unaffordable. Split, the 256s shards land near the 264
+# seconds test-debug already takes. The 128s shards re-derive hypertree
+# roots and took 460 to 857 seconds across the green runs of September 2026,
+# then crossed 900 seconds under Rust 1.99.0, which is why the template
+# above allows 30 minutes.
 regenerate-fixtures:
   extends: .fixture-drift
   parallel:
