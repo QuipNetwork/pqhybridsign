@@ -118,6 +118,12 @@ sub_exception!(
      unknown word, or a bad checksum. The three are not distinguished, because telling an \
      attacker which part of a guessed phrase was wrong narrows the search."
 );
+sub_exception!(
+    InvalidProofError,
+    "The hybrid VRF proof did not verify under the public key and input it was presented \
+     with, so no output bytes were derived. One exception for both halves: which of the \
+     classical proof or the post-quantum binding failed is not reported."
+);
 
 /// Translate an [`AbiError`] into the matching Python exception.
 pub(crate) fn to_py_err(e: AbiError) -> PyErr {
@@ -142,6 +148,7 @@ pub(crate) fn to_py_err(e: AbiError) -> PyErr {
         AbiError::StatelessBudgetExhausted => StatelessBudgetExhaustedError::new_err(msg),
         AbiError::BudgetStoreFailed => BudgetStoreFailedError::new_err(msg),
         AbiError::InvalidMnemonic => InvalidMnemonicError::new_err(msg),
+        AbiError::InvalidProof => InvalidProofError::new_err(msg),
         AbiError::ComponentFailure => ComponentFailureError::new_err(msg),
         // `AbiError` is `#[non_exhaustive]`, so this arm is required by the
         // compiler even though every variant that exists today now has its
@@ -217,5 +224,6 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
         "InvalidMnemonicError",
         py.get_type::<InvalidMnemonicError>(),
     )?;
+    m.add("InvalidProofError", py.get_type::<InvalidProofError>())?;
     Ok(())
 }

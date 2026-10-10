@@ -312,6 +312,17 @@ test("a different VRF output context gives different bytes", async () => {
   assert.notDeepEqual(score, randomness);
 });
 
+test("vrfMakeBytes refuses a proof that does not verify", async () => {
+  const suite = "SR-ML-44";
+  const { publicKey, secretKey } = await pqhs.keygenFromSeed(suite, seed(3));
+  const proof = await pqhs.vrfProve(suite, secretKey, VRF_INPUT);
+  proof[proof.length - 1] ^= 0x01;
+  await assert.rejects(
+    () => pqhs.vrfMakeBytes(suite, publicKey, VRF_INPUT, proof, VRF_CTX),
+    /did not verify/,
+  );
+});
+
 test("vrfProve refuses ED-SH and SR-SH and names deriveVrfStatelessKey", async () => {
   // The placeholder key is 32 bytes, not a valid ED-SH/SR-SH secret key -- but the
   // suite gate runs before the key length is ever inspected, exactly as the

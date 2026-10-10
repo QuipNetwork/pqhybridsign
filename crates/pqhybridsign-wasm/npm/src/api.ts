@@ -334,13 +334,10 @@ export interface RawModule {
  * same reason `sign` and `signDeterministic` do, and
  * `deriveVrfStatelessKey` covers those two suites
  * instead, through a dedicated key disjoint from the identity key and a
- * caller-supplied {@link StatelessBudgetStore}. **Call `vrfVerify` before
- * `vrfMakeBytes`.** `vrfVerify` is what establishes that a proof's
- * pre-output belongs to the claimed key and input; `vrfMakeBytes` derives
- * bytes from that pre-output unconditionally, without checking it, so
- * calling it on a proof that has not verified derives bytes from whatever an
- * attacker supplied. A caller who then treats the result as a leadership
- * score or a randomness beacon is trusting an attacker's numbers.
+ * caller-supplied {@link StatelessBudgetStore}.
+ * `vrfMakeBytes` verifies the proof first, the same check `vrfVerify`
+ * makes, and derives bytes only on success; a proof that does not verify
+ * rejects with an `Error` whose message says so.
  *
  * The stateful signing methods are `async` only because loading the wasm
  * module is; the {@link LeafJournal} and {@link StatelessBudgetStore} a

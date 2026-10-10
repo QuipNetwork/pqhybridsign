@@ -230,9 +230,10 @@ pub fn vrf_verify(suite: Suite, pk: &[u8], input: &[u8], proof: &[u8]) -> bool {
 
 /// Derive [`VRF_OUTPUT_LEN`] output bytes from a verified proof.
 ///
-/// **Verify the proof first.** [`vrf_verify`] is what establishes that the
-/// pre-output belongs to this key and this input. Deriving bytes from an
-/// unverified proof derives bytes from whatever an attacker supplied.
+/// This verifies the proof first, the same check [`vrf_verify`] makes, and
+/// derives only on success. A caller that already called [`vrf_verify`]
+/// pays for the check twice, which is cheap next to deriving consensus
+/// bytes from an attacker's proof.
 ///
 /// `context` separates two uses of one proof: the same proof under
 /// `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
@@ -246,10 +247,10 @@ pub fn vrf_verify(suite: Suite, pk: &[u8], input: &[u8], proof: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// [`AbiError::BadLength`] if `proof` is shorter than the proof header or
-/// `pk` shorter than the classical public key.
-/// [`AbiError::ComponentFailure`] if the public key or the pre-output does
-/// not decode.
+/// [`AbiError::BadLength`] if `pk` or `proof` is not the suite's length.
+/// [`AbiError::InvalidProof`] if the proof does not verify under `pk` and
+/// `input`. [`AbiError::ComponentFailure`] if the public key or the
+/// pre-output does not decode.
 pub fn vrf_make_bytes(
     suite: Suite,
     pk: &[u8],
@@ -539,6 +540,40 @@ mod tests {
             assert!(
                 !vrf_verify(suite, &pk, INPUT, &proof[..n]),
                 "{suite:?} verified a tampered proof"
+            );
+        }
+    }
+
+    /// QUI-1766: `vrf_make_bytes` verifies before it derives, so a proof
+    /// that `vrf_verify` rejects is refused with its own code rather than
+    /// turned into output bytes.
+    #[test]
+    fn make_bytes_refuses_a_tampered_proof() {
+        for suite in STATELESS {
+            let (sk, pk) = keypair(suite);
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
+            proof[n - 1] ^= 0x01;
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert_eq!(
+                vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes from a tampered proof"
+            );
+        }
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_proof_for_another_input() {
+        for suite in STATELESS {
+            let (sk, pk) = keypair(suite);
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, OTHER, &mut OsRng, &mut proof).unwrap();
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert_eq!(
+                vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes from another input's proof"
             );
         }
     }

@@ -946,6 +946,26 @@ def test_vrf_make_bytes_context_separates_two_uses_of_one_proof(suite):
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_proof_that_does_not_verify(suite):
+    """make_bytes verifies before it derives. A proof with its last byte
+    flipped still carries a decodable pre-output, so only a check over the
+    whole proof refuses it."""
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    proof[-1] ^= 0x01
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_proof_for_another_input(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"other input")
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", proof, b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
 def test_vrf_prove_deterministic_repeats_byte_for_byte(suite):
     sk, _pk = phs.keygen_from_seed(suite, bytes(range(32)))
     a = phs.vrf_prove_deterministic(suite, sk, b"input")
