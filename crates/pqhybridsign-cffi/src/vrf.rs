@@ -281,9 +281,9 @@ pub unsafe extern "C" fn pqhs_vrf_verify(
 /// `PQHS_ERR_BAD_LENGTH` if `out_len` is not `PQHS_VRF_OUTPUT_LEN`, if
 /// `proof` is not the suite's proof length, or if `pk` is not the suite's
 /// public-key length. `PQHS_ERR_INVALID_PROOF` if the proof does not verify
-/// under `pk` and `input`. `PQHS_ERR_COMPONENT_FAILURE` if `pk` or the
-/// pre-output does not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired
-/// with a nonzero length is null.
+/// under `pk` and `input`, including a public key or pre-output that does
+/// not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero
+/// length is null.
 ///
 /// # Safety
 ///

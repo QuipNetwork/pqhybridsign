@@ -249,8 +249,7 @@ pub fn vrf_verify(suite: Suite, pk: &[u8], input: &[u8], proof: &[u8]) -> bool {
 ///
 /// [`AbiError::BadLength`] if `pk` or `proof` is not the suite's length.
 /// [`AbiError::InvalidProof`] if the proof does not verify under `pk` and
-/// `input`. [`AbiError::ComponentFailure`] if the public key or the
-/// pre-output does not decode.
+/// `input`, including a public key or pre-output that does not decode.
 pub fn vrf_make_bytes(
     suite: Suite,
     pk: &[u8],
@@ -559,6 +558,38 @@ mod tests {
                 vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
                 Err(AbiError::InvalidProof),
                 "{suite:?} derived bytes from a tampered proof"
+            );
+        }
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_public_key_that_does_not_decode() {
+        for suite in STATELESS {
+            let (sk, mut pk) = keypair(suite);
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
+            pk.fill(0xff);
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert_eq!(
+                vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes from a public key that does not decode"
+            );
+        }
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_pre_output_that_does_not_decode() {
+        for suite in STATELESS {
+            let (sk, pk) = keypair(suite);
+            let mut proof = vec![0u8; vrf_proof_len(suite).unwrap()];
+            let n = vrf_prove(suite, &sk, INPUT, &mut OsRng, &mut proof).unwrap();
+            proof[..32].fill(0xff);
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert_eq!(
+                vrf_make_bytes(suite, &pk, INPUT, &proof[..n], OUT_CTX, &mut out),
+                Err(AbiError::InvalidProof),
+                "{suite:?} derived bytes from a pre-output that does not decode"
             );
         }
     }

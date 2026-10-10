@@ -213,8 +213,8 @@ fn vrf_verify(
 /// # Errors
 ///
 /// `BadLengthError` if `public_key` or `proof` is not the suite's length.
-/// `InvalidProofError` if the proof does not verify under `public_key` and `input`.
-/// `ComponentFailureError` if the public key or the pre-output does not decode.
+/// `InvalidProofError` if the proof does not verify under `public_key` and
+/// `input`, including a public key or pre-output that does not decode.
 #[pyfunction]
 fn vrf_make_bytes(
     py: Python<'_>,

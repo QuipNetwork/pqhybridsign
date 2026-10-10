@@ -958,6 +958,24 @@ def test_vrf_make_bytes_refuses_a_proof_that_does_not_verify(suite):
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_public_key_that_does_not_decode(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    pk = b"\xff" * len(pk)
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", proof, b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_pre_output_that_does_not_decode(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    proof[:32] = b"\xff" * 32
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
 def test_vrf_make_bytes_refuses_a_proof_for_another_input(suite):
     sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
     proof = phs.vrf_prove(suite, sk, b"other input")
