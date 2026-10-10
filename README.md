@@ -492,8 +492,7 @@ That ignored smoke takes about 46 seconds in release. Debug builds run about
 
 ## Limitations
 
-Stated plainly, because a release candidate should not imply more than it
-delivers.
+Stated plainly, because a release should not imply more than it delivers.
 
 - **The golden vectors pin this implementation against itself.** They catch
   wire-format drift. They cannot catch an error that was present when they were
