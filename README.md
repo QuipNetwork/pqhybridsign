@@ -8,8 +8,9 @@ either component survives a break.
 This crate is a standalone reference implementation. It does not depend on
 Substrate.
 
-**Status: pre-release.** The wire format is not frozen, and no
-cross-implementation test vectors exist yet. See [Limitations](#limitations).
+**Status: first stable release.** The wire format is the one `0.0.0-rc9`
+shipped. No cross-implementation test vectors exist yet. See
+[Limitations](#limitations).
 
 ## Features
 
@@ -324,10 +325,8 @@ published to crates.io.
 
 ### JavaScript and TypeScript
 
-The package is prerelease, so install the `next` tag.
-
 ```sh
-npm install @quip.network/pqhybridsign@next
+npm install @quip.network/pqhybridsign
 ```
 
 The module loads a WebAssembly binary before it can sign or verify. Every
