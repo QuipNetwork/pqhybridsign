@@ -97,6 +97,13 @@ class StatefulKeyNotCloneableError(PqHybridSignError):
 class InvalidMnemonicError(PqHybridSignError):
     """The recovery phrase is not a valid English BIP39 mnemonic."""
 
+class InvalidProofError(PqHybridSignError):
+    """The hybrid VRF proof did not verify; no output bytes were derived.
+
+    One exception for both halves: which of the classical proof or the
+    post-quantum binding failed is not reported.
+    """
+
 class Suite:
     """One of the six hybrid suites pqhybridsign ships.
 
@@ -522,11 +529,12 @@ def vrf_make_bytes(
     proof: ReadableBuffer,
     context: ReadableBuffer,
 ) -> bytes:
-    """Derive 32 output bytes from a verified VRF proof for `suite`.
+    """Verify a VRF proof for `suite` and derive 32 output bytes from it.
 
-    Verify the proof first: `vrf_verify` is what establishes that the
-    pre-output belongs to this key and this input. Deriving bytes from an
-    unverified proof derives bytes from whatever an attacker supplied.
+    The proof is verified first, the same check `vrf_verify` makes, and
+    bytes are derived only on success. Raises `InvalidProofError` if the
+    proof does not verify under `public_key` and `input`, `BadLengthError`
+    if `public_key` or `proof` is not the suite's length.
 
     `context` separates two uses of one proof: the same proof under two
     different contexts gives unrelated bytes."""

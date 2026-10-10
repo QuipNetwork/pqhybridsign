@@ -139,6 +139,14 @@ pub enum AbiError {
     /// attacker which part of a guessed phrase was wrong narrows the search.
     /// Mirrors [`CoreError::InvalidMnemonic`].
     InvalidMnemonic = 21,
+    /// A hybrid VRF proof did not verify under the public key and input it
+    /// was presented with, so [`crate::vrf_make_bytes`] derived nothing.
+    /// Mirrors [`CoreError::InvalidProof`].
+    ///
+    /// One code for both halves: which of the classical proof or the
+    /// post-quantum binding failed is not reported, for the same reason
+    /// [`crate::vrf_verify`] returns a bare `bool`.
+    InvalidProof = 22,
 }
 
 impl AbiError {
@@ -182,6 +190,7 @@ impl fmt::Display for AbiError {
                 "the stateless budget store could not durably record; nothing consumed"
             }
             Self::InvalidMnemonic => "not a valid English BIP39 mnemonic phrase",
+            Self::InvalidProof => "hybrid VRF proof did not verify; no output derived",
         };
         f.write_str(msg)
     }
@@ -204,6 +213,7 @@ impl From<CoreError> for AbiError {
             CoreError::StatelessBudgetExhausted => Self::StatelessBudgetExhausted,
             CoreError::BudgetStoreFailed => Self::BudgetStoreFailed,
             CoreError::InvalidMnemonic => Self::InvalidMnemonic,
+            CoreError::InvalidProof => Self::InvalidProof,
             // `CoreError` is `#[non_exhaustive]`: only a variant added after
             // this crate was written can reach this arm, since every
             // variant that exists today has its own arm above.
@@ -262,6 +272,7 @@ mod tests {
         assert_eq!(AbiError::StatelessBudgetExhausted.code(), 19);
         assert_eq!(AbiError::BudgetStoreFailed.code(), 20);
         assert_eq!(AbiError::InvalidMnemonic.code(), 21);
+        assert_eq!(AbiError::InvalidProof.code(), 22);
     }
 
     #[test]
@@ -328,6 +339,10 @@ mod tests {
         assert_eq!(
             AbiError::from(CoreError::InvalidMnemonic),
             AbiError::InvalidMnemonic
+        );
+        assert_eq!(
+            AbiError::from(CoreError::InvalidProof),
+            AbiError::InvalidProof
         );
     }
 

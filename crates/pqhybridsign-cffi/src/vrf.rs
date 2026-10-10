@@ -258,11 +258,10 @@ pub unsafe extern "C" fn pqhs_vrf_verify(
 
 /// Derive `PQHS_VRF_OUTPUT_LEN` output bytes from a verified `proof`.
 ///
-/// **Verify the proof first**, with [`pqhs_vrf_verify`]. That is what
-/// establishes that the pre-output belongs to this key and this input.
-/// Deriving bytes from an unverified proof derives bytes from whatever an
-/// attacker supplied, and this function performs no verification of its
-/// own.
+/// This verifies the proof first, the same check [`pqhs_vrf_verify`] makes,
+/// and derives only on success. A caller that already called
+/// [`pqhs_vrf_verify`] pays for the check twice, which is cheap next to
+/// deriving consensus bytes from an attacker's proof.
 ///
 /// `context` separates two uses of one proof: the same proof under
 /// `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
@@ -272,18 +271,18 @@ pub unsafe extern "C" fn pqhs_vrf_verify(
 /// `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
 /// [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
 /// the capacity of the buffer that held it, on the same terms as
-/// [`pqhs_vrf_verify`]'s `proof_len`. Passing
-/// [`crate::pqhs_vrf_proof_len`]'s maximum for ED-FN-512 or SR-FN-512 instead derives
-/// bytes from the wrong proof.
+/// [`pqhs_vrf_verify`]'s `proof_len`. Passing the buffer capacity fails if
+/// it exceeds `*proof_written`, so pass the written byte count.
 ///
 /// # Errors
 ///
 /// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
 /// `PQHS_ERR_BAD_LENGTH` if `out_len` is not `PQHS_VRF_OUTPUT_LEN`, if
-/// `proof` is shorter than the proof header, or if `pk` is shorter than
-/// the classical public key. `PQHS_ERR_COMPONENT_FAILURE` if `pk` or the
-/// pre-output does not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired
-/// with a nonzero length is null.
+/// `proof` is not the suite's proof length, or if `pk` is not the suite's
+/// public-key length. `PQHS_ERR_INVALID_PROOF` if the proof does not verify
+/// under `pk` and `input`, including a public key or pre-output that does
+/// not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero
+/// length is null.
 ///
 /// # Safety
 ///
@@ -594,6 +593,7 @@ pub unsafe extern "C" fn pqhs_vrf_prove_stateless(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::PQHS_ERR_INVALID_PROOF;
     use crate::error::PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE;
     use crate::keygen::pqhs_keygen_from_seed;
     use std::cell::RefCell;
@@ -831,6 +831,51 @@ mod tests {
                 PQHS_OK
             );
             assert_eq!(out_a, out_b);
+        }
+    }
+
+    #[test]
+    fn make_bytes_refuses_a_tampered_proof() {
+        let (sk, pk) = ed_ml44_keypair();
+        let mut proof_len = 0usize;
+        // SAFETY: `proof_len` is a live local `usize`.
+        assert_eq!(unsafe { pqhs_vrf_proof_len(1, &mut proof_len) }, PQHS_OK);
+        let mut proof = vec![0u8; proof_len];
+        let mut written = 0usize;
+        // SAFETY: every pointer below is a live local buffer of the length
+        // passed.
+        unsafe {
+            assert_eq!(
+                pqhs_vrf_prove(
+                    1,
+                    sk.as_ptr(),
+                    sk.len(),
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_mut_ptr(),
+                    proof.len(),
+                    &mut written,
+                ),
+                PQHS_OK
+            );
+            proof[written - 1] ^= 0x01;
+            let mut out = [0u8; VRF_OUTPUT_LEN];
+            assert_eq!(
+                pqhs_vrf_make_bytes(
+                    1,
+                    pk.as_ptr(),
+                    pk.len(),
+                    INPUT.as_ptr(),
+                    INPUT.len(),
+                    proof.as_ptr(),
+                    written,
+                    OUT_CTX.as_ptr(),
+                    OUT_CTX.len(),
+                    out.as_mut_ptr(),
+                    out.len(),
+                ),
+                PQHS_ERR_INVALID_PROOF
+            );
         }
     }
 

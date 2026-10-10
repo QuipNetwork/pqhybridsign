@@ -1680,10 +1680,8 @@ pub fn vrf_verify(
 
 /// Derive 32 output bytes from a verified hybrid VRF proof.
 ///
-/// **Verify the proof first.** [`vrfVerify`](vrf_verify) is what
-/// establishes that the pre-output belongs to this key and this input.
-/// Deriving bytes from an unverified proof derives bytes from whatever an
-/// attacker supplied.
+/// This verifies the proof first, the same check [`vrfVerify`](vrf_verify)
+/// makes, and derives only on success.
 ///
 /// `context` separates two uses of one proof: the same proof under two
 /// different contexts gives unrelated bytes, so one evaluation can feed
@@ -1692,9 +1690,9 @@ pub fn vrf_verify(
 /// # Errors
 ///
 /// A JavaScript `Error` if `suite` is not one of `"ED-ML-44"` through `"SR-SH"`, if
-/// `proof` is shorter than the proof header or `publicKey` shorter than
-/// the classical public key, or if `publicKey` or the pre-output does not
-/// decode.
+/// `publicKey` or `proof` is not the suite's length, if `publicKey` or the
+/// pre-output does not decode, or if the proof does not verify under
+/// `publicKey` and `input`.
 #[wasm_bindgen(js_name = vrfMakeBytes)]
 pub fn vrf_make_bytes(
     suite: &str,

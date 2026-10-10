@@ -946,6 +946,63 @@ def test_vrf_make_bytes_context_separates_two_uses_of_one_proof(suite):
 
 
 @pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_proof_that_does_not_verify(suite):
+    """make_bytes verifies before it derives. A proof with its last byte
+    flipped still carries a decodable pre-output, so only a check over the
+    whole proof refuses it."""
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    proof[-1] ^= 0x01
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_proof_whose_classical_field_is_altered(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    assert len(phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")) == 32
+    proof[32] ^= 0x01
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_valid_key_that_is_not_the_signer(suite):
+    sk, _pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    _other_sk, other_pk = phs.keygen_from_seed(suite, bytes(range(32, 64)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, other_pk, b"input", proof, b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_public_key_that_does_not_decode(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"input")
+    pk = b"\xff" * len(pk)
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", proof, b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_pre_output_that_does_not_decode(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = bytearray(phs.vrf_prove(suite, sk, b"input"))
+    proof[:32] = b"\xff" * 32
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", bytes(proof), b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
+def test_vrf_make_bytes_refuses_a_proof_for_another_input(suite):
+    sk, pk = phs.keygen_from_seed(suite, bytes(range(32)))
+    proof = phs.vrf_prove(suite, sk, b"other input")
+    with pytest.raises(phs.InvalidProofError):
+        phs.vrf_make_bytes(suite, pk, b"input", proof, b"context")
+
+
+@pytest.mark.parametrize("suite", STATELESS_SUITES)
 def test_vrf_prove_deterministic_repeats_byte_for_byte(suite):
     sk, _pk = phs.keygen_from_seed(suite, bytes(range(32)))
     a = phs.vrf_prove_deterministic(suite, sk, b"input")

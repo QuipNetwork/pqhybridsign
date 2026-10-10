@@ -202,9 +202,8 @@ fn vrf_verify(
 
 /// Derive 32 output bytes from a verified VRF proof for `suite`.
 ///
-/// **Verify the proof first.** `vrf_verify` is what establishes that the
-/// pre-output belongs to this key and this input. Deriving bytes from an
-/// unverified proof derives bytes from whatever an attacker supplied.
+/// This verifies the proof first, the same check `vrf_verify` makes, and
+/// derives only on success.
 ///
 /// `context` separates two uses of one proof: the same proof under
 /// `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
@@ -213,9 +212,9 @@ fn vrf_verify(
 ///
 /// # Errors
 ///
-/// `BadLengthError` if `proof` is shorter than the proof header or
-/// `public_key` shorter than the classical public key. `ComponentFailureError`
-/// if the public key or the pre-output does not decode.
+/// `BadLengthError` if `public_key` or `proof` is not the suite's length.
+/// `InvalidProofError` if the proof does not verify under `public_key` and
+/// `input`, including a public key or pre-output that does not decode.
 #[pyfunction]
 fn vrf_make_bytes(
     py: Python<'_>,

@@ -1153,6 +1153,13 @@ static int check_seed_and_vrf(void) {
     rc = pqhs_vrf_make_bytes(3, pk, pk_len, input, sizeof(input), proof, proof_written, out_ctx,
                              sizeof(out_ctx), out, sizeof(out));
     failures += expect_rc("vrf_make_bytes call", rc, PQHS_OK);
+    /* QUI-1766: make_bytes verifies before it derives. A proof with its
+     * last byte flipped still carries a decodable pre-output, so only a
+     * check over the whole proof refuses it. */
+    proof[proof_written - 1] ^= 0x01;
+    rc = pqhs_vrf_make_bytes(3, pk, pk_len, input, sizeof(input), proof, proof_written, out_ctx,
+                             sizeof(out_ctx), out, sizeof(out));
+    failures += expect_rc("vrf_make_bytes refuses a tampered proof", rc, PQHS_ERR_INVALID_PROOF);
 
 done:
     free(sk);

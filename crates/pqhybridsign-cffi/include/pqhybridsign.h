@@ -326,6 +326,14 @@
 #define PQHS_ERR_INVALID_MNEMONIC 21
 
 /**
+ * A hybrid VRF proof did not verify under the public key and input it was
+ * presented with, so [`crate::pqhs_vrf_make_bytes`] derived nothing. One
+ * code for both halves: which of the classical proof or the post-quantum
+ * binding failed is not reported. Mirrors `AbiError::InvalidProof`.
+ */
+#define PQHS_ERR_INVALID_PROOF 22
+
+/**
  * A required pointer argument was null while its paired length was
  * nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
  * raw pointer, so it has no code for a null one. A null pointer paired
@@ -1804,11 +1812,10 @@ int pqhs_vrf_verify(uint8_t suite,
 /**
  * Derive `PQHS_VRF_OUTPUT_LEN` output bytes from a verified `proof`.
  *
- * **Verify the proof first**, with [`pqhs_vrf_verify`]. That is what
- * establishes that the pre-output belongs to this key and this input.
- * Deriving bytes from an unverified proof derives bytes from whatever an
- * attacker supplied, and this function performs no verification of its
- * own.
+ * This verifies the proof first, the same check [`pqhs_vrf_verify`] makes,
+ * and derives only on success. A caller that already called
+ * [`pqhs_vrf_verify`] pays for the check twice, which is cheap next to
+ * deriving consensus bytes from an attacker's proof.
  *
  * `context` separates two uses of one proof: the same proof under
  * `b"leadership"` and `b"randomness"` gives unrelated bytes, so one
@@ -1818,18 +1825,18 @@ int pqhs_vrf_verify(uint8_t suite,
  * `proof_len` is the exact byte count [`crate::pqhs_vrf_prove`] or
  * [`crate::pqhs_vrf_prove_stateless`] wrote through `*proof_written`, not
  * the capacity of the buffer that held it, on the same terms as
- * [`pqhs_vrf_verify`]'s `proof_len`. Passing
- * [`crate::pqhs_vrf_proof_len`]'s maximum for ED-FN-512 or SR-FN-512 instead derives
- * bytes from the wrong proof.
+ * [`pqhs_vrf_verify`]'s `proof_len`. Passing the buffer capacity fails if
+ * it exceeds `*proof_written`, so pass the written byte count.
  *
  * # Errors
  *
  * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
  * `PQHS_ERR_BAD_LENGTH` if `out_len` is not `PQHS_VRF_OUTPUT_LEN`, if
- * `proof` is shorter than the proof header, or if `pk` is shorter than
- * the classical public key. `PQHS_ERR_COMPONENT_FAILURE` if `pk` or the
- * pre-output does not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired
- * with a nonzero length is null.
+ * `proof` is not the suite's proof length, or if `pk` is not the suite's
+ * public-key length. `PQHS_ERR_INVALID_PROOF` if the proof does not verify
+ * under `pk` and `input`, including a public key or pre-output that does
+ * not decode. `PQHS_ERR_NULL_POINTER` if a pointer paired with a nonzero
+ * length is null.
  *
  * # Safety
  *

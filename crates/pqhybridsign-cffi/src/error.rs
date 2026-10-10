@@ -2,11 +2,12 @@
 //! The integer error codes every entry point in this crate returns, and the
 //! lookup this crate offers to turn one into a message.
 //!
-//! Codes `1..=21` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
+//! Codes `1..=22` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
 //! a C caller that already branches on the numbers the ABI crate documents
-//! keeps working against this crate. Codes `100` and above are this crate's
-//! own vocabulary, for failures that only exist at a raw-pointer boundary
-//! and that the ABI crate -- which never sees a pointer -- has no code for.
+//! keeps working against this crate. Code `4` is retired and never reused.
+//! Codes `100` and above are this crate's own vocabulary, for failures that
+//! only exist at a raw-pointer boundary and that the ABI crate -- which never
+//! sees a pointer -- has no code for.
 
 use std::ffi::c_char;
 use std::os::raw::c_int;
@@ -108,6 +109,11 @@ pub const PQHS_ERR_BUDGET_STORE_FAILED: c_int = 20;
 /// distinguished, because telling an attacker which part of a guessed
 /// phrase was wrong narrows the search. Mirrors `AbiError::InvalidMnemonic`.
 pub const PQHS_ERR_INVALID_MNEMONIC: c_int = 21;
+/// A hybrid VRF proof did not verify under the public key and input it was
+/// presented with, so [`crate::pqhs_vrf_make_bytes`] derived nothing. One
+/// code for both halves: which of the classical proof or the post-quantum
+/// binding failed is not reported. Mirrors `AbiError::InvalidProof`.
+pub const PQHS_ERR_INVALID_PROOF: c_int = 22;
 
 /// A required pointer argument was null while its paired length was
 /// nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
@@ -172,6 +178,7 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
             c"the stateless budget store could not durably record; nothing consumed"
         }
         PQHS_ERR_INVALID_MNEMONIC => c"not a valid English BIP39 mnemonic phrase",
+        PQHS_ERR_INVALID_PROOF => c"hybrid VRF proof did not verify; no output derived",
         PQHS_ERR_JOURNAL_KEY_MISMATCH => {
             c"this leaf journal does not belong to this key; reopen the key's own journal"
         }
@@ -189,7 +196,7 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
 mod tests {
     use super::*;
 
-    /// Every code this table hands out for `1..=21` must equal the code
+    /// Every code this table hands out for `1..=22` must equal the code
     /// [`AbiError::code`] reports for the variant it mirrors, and the
     /// message text must match [`AbiError`]'s own [`std::fmt::Display`]
     /// text, so the two crates' vocabularies cannot drift apart silently.
@@ -231,6 +238,7 @@ mod tests {
             ),
             (AbiError::BudgetStoreFailed, PQHS_ERR_BUDGET_STORE_FAILED),
             (AbiError::InvalidMnemonic, PQHS_ERR_INVALID_MNEMONIC),
+            (AbiError::InvalidProof, PQHS_ERR_INVALID_PROOF),
         ];
         for (err, code) in cases {
             assert_eq!(code_of(err), code, "{err}");
