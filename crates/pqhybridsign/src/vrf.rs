@@ -521,8 +521,10 @@ where
 ///
 /// [`Error::BadLength`] if `pk` is not the suite's public-key length or
 /// `proof` is not [`proof_len`]. [`Error::InvalidProof`] if the proof does
-/// not verify under `pk` and `input`. [`Error::ComponentFailure`] if the
-/// public key or the pre-output does not decode.
+/// not verify under `pk` and `input`, including a public key or pre-output
+/// that does not decode. [`Error::ComponentFailure`] if `B` is wider than
+/// the classical component can fill, which is 16 320 bytes under the
+/// Ed25519 suites.
 pub fn make_bytes<S: Suite, B: Default + AsMut<[u8]>>(
     pk: &[u8],
     input: &[u8],
