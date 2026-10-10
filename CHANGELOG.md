@@ -6,6 +6,13 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The deterministic RNG that seeds FN-DSA key generation and signing, and
+  the sr25519 nonce, now runs on `rand_core::block::BlockRng`. The library
+  type owns the output buffer and the read index. The expander still uses
+  SHA-512 over the seed and a counter. It produces the same byte stream, so
+  every key and signature derived under an earlier version stays the same.
+  Answers audit finding QUI-1765.
+
 - `vrf::make_bytes`, `vrf::make_bytes_delta` and `vrf::make_bytes_stateless`
   verify the whole hybrid proof, classical proof and post-quantum binding,
   before they derive output. They return the new `Error::InvalidProof` for

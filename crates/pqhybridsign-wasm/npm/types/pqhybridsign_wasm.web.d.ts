@@ -806,10 +806,10 @@ export interface InitOutput {
     readonly vrfProveDeterministic: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly vrfVerify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
     readonly vrfkey_prove: (a: number, b: any, c: number, d: number) => [number, number, number];
-    readonly __wbg_set_signstatefulresult_nextSecretKey: (a: number, b: any) => void;
-    readonly __wbg_set_signstatefulresult_signature: (a: number, b: any) => void;
     readonly __wbg_get_signstatefulresult_nextSecretKey: (a: number) => any;
     readonly __wbg_get_signstatefulresult_signature: (a: number) => any;
+    readonly __wbg_set_signstatefulresult_nextSecretKey: (a: number, b: any) => void;
+    readonly __wbg_set_signstatefulresult_signature: (a: number, b: any) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
