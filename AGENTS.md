@@ -33,7 +33,7 @@ edits.
 | Crate | Purpose | Published |
 |---|---|---|
 | `pqhybridsign` | The library: suites, composition, encoding | crates.io |
-| `pqhybridsign-abi` | Byte-buffer API the bindings share | crates.io |
+| `pqhybridsign-abi` | Byte-buffer API the bindings share | no |
 | `pqhybridsign-cffi` | C library and header | archive |
 | `pqhybridsign-py` | Python extension | PyPI |
 | `pqhybridsign-wasm` | WebAssembly and the npm package | npm |
