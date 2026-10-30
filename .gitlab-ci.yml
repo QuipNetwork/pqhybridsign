@@ -1,3 +1,8 @@
+include:
+  - project: quip.network/ci-templates
+    ref: v1.1.0
+    file: templates/dependency-gate.yml
+
 # Stage order is publish order. The reversible registries go first: an
 # unwanted npm version can be unpublished for 72 hours and PyPI tolerates
 # re-upload attempts with --skip-existing, but a crates.io version can only
@@ -567,6 +572,8 @@ release:validate:
   # merge request touches. A needs: edge onto a job that is absent from the
   # pipeline makes the whole pipeline invalid.
   needs:
+    - job: dependency-gate
+      optional: true
     - job: fmt
     - job: clippy
     - job: deps
@@ -625,6 +632,8 @@ release:validate:
   extends: .everywhere
   stage: smoke
   needs:
+    - job: dependency-gate
+      optional: true
     - job: release:validate
       artifacts: true
   timeout: 30m
@@ -696,6 +705,8 @@ release:npm:
   stage: release
   <<: *on-release-tag
   needs:
+    - job: dependency-gate
+      optional: true
     - job: release:validate
       artifacts: true
     - job: smoke:rust
@@ -791,6 +802,8 @@ release:pypi:
   <<: *on-release-tag
   # Waits for npm, the one registry whose publish can still be undone.
   needs:
+    - job: dependency-gate
+      optional: true
     - job: release:validate
       artifacts: true
     - job: smoke:rust
@@ -852,6 +865,8 @@ release:clib:
   stage: release
   <<: *on-release-tag
   needs:
+    - job: dependency-gate
+      optional: true
     - job: release:validate
       artifacts: true
     - job: smoke:rust
@@ -876,6 +891,8 @@ release:crates:
   # irreversible publish, so it must not run until the reversible ones have
   # succeeded.
   needs:
+    - job: dependency-gate
+      optional: true
     - job: release:validate
       artifacts: true
     - job: smoke:rust
@@ -929,6 +946,8 @@ release:notes:
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   <<: *on-release-tag
   needs:
+    - job: dependency-gate
+      optional: true
     - job: release:crates
     - job: release:pypi
     - job: release:npm
