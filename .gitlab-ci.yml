@@ -62,6 +62,14 @@ default:
     - rustup component add clippy rustfmt
     - rustup target add wasm32-unknown-unknown
 
+# The gate runs in the dep-gate image, which has no rustup. Without this the
+# global default before_script (rustup component add) fails both jobs.
+dependency-gate:
+  before_script: []
+
+dependency-report:
+  before_script: []
+
 variables:
   NODE_MAJOR: "24"
 
