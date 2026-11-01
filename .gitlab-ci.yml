@@ -1,6 +1,6 @@
 include:
   - project: quip.network/ci-templates
-    ref: v1.1.0
+    ref: v1.1.1
     file: templates/dependency-gate.yml
 
 # Stage order is publish order. The reversible registries go first: an
@@ -64,12 +64,6 @@ default:
 
 # The gate runs in the dep-gate image, which has no rustup. Without this the
 # global default before_script (rustup component add) fails both jobs.
-dependency-gate:
-  before_script: []
-
-dependency-report:
-  before_script: []
-
 variables:
   NODE_MAJOR: "24"
 
