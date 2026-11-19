@@ -295,6 +295,7 @@ msrv:
 test-debug:
   extends: .everywhere
   stage: test
+  tags: [docker, amd64]
   script:
     - cargo test --locked --workspace
     # `vrf` is not a default feature, so the workspace run above skips the
@@ -304,6 +305,7 @@ test-debug:
 test-release:
   extends: .everywhere
   stage: test
+  tags: [docker, amd64]
   script:
     # subtle uses debug_assert with secret-dependent branches, so release
     # mode exercises different code than the debug build above.
@@ -321,6 +323,7 @@ test-release:
 profile-matrix:
   extends: .everywhere
   stage: test
+  tags: [docker, amd64]
   script:
     - |
       set -euo pipefail
@@ -362,6 +365,7 @@ profile-matrix:
 # cooldown job exists to stop for Cargo.lock.
 mutants:
   stage: test
+  tags: [docker, amd64]
   timeout: 3h
   rules:
     - if: $CI_PIPELINE_SOURCE == "schedule"
@@ -562,6 +566,7 @@ python:
 release:validate:
   extends: .everywhere
   stage: validate
+  tags: [docker, amd64]
   # Extends `.everywhere` rather than declaring its own rules: a broken
   # release setup must fail on a branch pipeline, not halfway through a
   # release, so this job needs to run in every pipeline shape, branch push,
@@ -668,6 +673,7 @@ smoke:rust:
 # that does not match the shipped object fails here.
 smoke:cpp:
   extends: .smoke
+  tags: [docker, amd64]
   script:
     - mkdir -p /opt/clib && tar xzf dist/pqhybridsign-clib-*.tar.gz -C /opt/clib
     - ls -R /opt/clib
@@ -679,6 +685,7 @@ smoke:cpp:
 # imports pqhybridsign from site-packages, not from crates/ in this tree.
 smoke:python:
   extends: .smoke
+  tags: [docker, amd64]
   image: python:3.11
   before_script: []
   script:
