@@ -196,7 +196,7 @@ use pqhybridsign_abi::{
 use rand_core::OsRng;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Parse a suite name into the ABI's [`pqhybridsign_abi::Suite`],
 /// restricted to the four stateless suites this binding exposes.
@@ -1508,6 +1508,17 @@ pub fn master_seed_from_mnemonic(
 /// and must be integers in `[0, 2^31)`: a wasm-bindgen `u32` parameter would
 /// wrap a negative or oversized number silently into another account.
 ///
+/// # Secret copies
+///
+/// `passphrase` arrives as an owned `String` in wasm linear memory. It is
+/// wrapped in `Zeroizing` before anything that can return early, so it is
+/// wiped on every path: an unknown suite, a bad `account` or `index`, an
+/// invalid phrase, and success. The leaf's own buffer is wiped after it is
+/// copied out. `phrase` arrives as a `&str` borrowed from wasm-bindgen's
+/// copy of the JavaScript string, which wasm-bindgen frees after the call
+/// without wiping it. That copy, the JavaScript strings themselves and the
+/// returned `Uint8Array` are host-side copies this function cannot reach.
+///
 /// # Errors
 ///
 /// A JavaScript `Error` if `suite` is not one of the four stateless suites,
@@ -1521,6 +1532,8 @@ pub fn hybrid_leaf(
     account: Option<f64>,
     index: Option<f64>,
 ) -> Result<Uint8Array, JsValue> {
+    // First, before any `?`: every return path below then wipes the copy.
+    let passphrase = passphrase.map(Zeroizing::new);
     let suite = stateless_suite(suite).map_err(js_error)?;
     let account = hd_level(account, "account")?;
     let index = hd_level(index, "index")?;
@@ -1528,7 +1541,7 @@ pub fn hybrid_leaf(
     let result = pqhybridsign_abi::hybrid_leaf(
         suite,
         phrase,
-        passphrase.as_deref(),
+        passphrase.as_deref().map(String::as_str),
         account,
         index,
         &mut out,

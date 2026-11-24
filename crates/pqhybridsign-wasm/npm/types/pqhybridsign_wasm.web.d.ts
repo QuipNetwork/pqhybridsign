@@ -327,6 +327,17 @@ export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
  * and must be integers in `[0, 2^31)`: a wasm-bindgen `u32` parameter would
  * wrap a negative or oversized number silently into another account.
  *
+ * # Secret copies
+ *
+ * `passphrase` arrives as an owned `String` in wasm linear memory. It is
+ * wrapped in `Zeroizing` before anything that can return early, so it is
+ * wiped on every path: an unknown suite, a bad `account` or `index`, an
+ * invalid phrase, and success. The leaf's own buffer is wiped after it is
+ * copied out. `phrase` arrives as a `&str` borrowed from wasm-bindgen's
+ * copy of the JavaScript string, which wasm-bindgen frees after the call
+ * without wiping it. That copy, the JavaScript strings themselves and the
+ * returned `Uint8Array` are host-side copies this function cannot reach.
+ *
  * # Errors
  *
  * A JavaScript `Error` if `suite` is not one of the four stateless suites,
