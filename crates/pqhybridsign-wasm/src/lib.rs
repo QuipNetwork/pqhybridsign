@@ -1481,13 +1481,27 @@ impl StatefulKey {
 /// a wrong word count, an unknown word, or a bad checksum. The three are
 /// not distinguished, because telling an attacker which part of a guessed
 /// phrase was wrong narrows the search.
+///
+/// # Secret copies
+///
+/// `password` arrives as an owned `String` in wasm linear memory and is
+/// wrapped in `Zeroizing` before anything else, so it is wiped on every
+/// path. `phrase` is a `&str` borrowed from wasm-bindgen's copy of the
+/// JavaScript string, which wasm-bindgen frees without wiping; see
+/// `hybridLeaf` for the same host-side limits.
 #[wasm_bindgen(js_name = masterSeedFromMnemonic)]
 pub fn master_seed_from_mnemonic(
     phrase: &str,
     password: Option<String>,
 ) -> Result<Uint8Array, JsValue> {
+    // First, before anything that can return: every path then wipes the copy.
+    let password = password.map(Zeroizing::new);
     let mut out = [0u8; pqhybridsign_abi::MASTER_SEED_LEN];
-    let result = pqhybridsign_abi::master_seed_from_mnemonic(phrase, password.as_deref(), &mut out);
+    let result = pqhybridsign_abi::master_seed_from_mnemonic(
+        phrase,
+        password.as_deref().map(String::as_str),
+        &mut out,
+    );
     let out_value = result.map(|()| Uint8Array::from(&out[..]));
     out.zeroize();
     out_value.map_err(js_error)

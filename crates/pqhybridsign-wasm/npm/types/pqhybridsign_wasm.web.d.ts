@@ -426,6 +426,14 @@ export function keygenStatefulFromSeed(suite: string, seed: Uint8Array, max_stat
  * a wrong word count, an unknown word, or a bad checksum. The three are
  * not distinguished, because telling an attacker which part of a guessed
  * phrase was wrong narrows the search.
+ *
+ * # Secret copies
+ *
+ * `password` arrives as an owned `String` in wasm linear memory and is
+ * wrapped in `Zeroizing` before anything else, so it is wiped on every
+ * path. `phrase` is a `&str` borrowed from wasm-bindgen's copy of the
+ * JavaScript string, which wasm-bindgen frees without wiping; see
+ * `hybridLeaf` for the same host-side limits.
  */
 export function masterSeedFromMnemonic(phrase: string, password?: string | null): Uint8Array;
 
