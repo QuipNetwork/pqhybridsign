@@ -213,6 +213,9 @@ fn is_js_whitespace(c: char) -> bool {
 /// The phrase with surrounding whitespace removed and every inner run of
 /// whitespace collapsed to one space, as `hd.ts`'s `normalizeMnemonic`
 /// (`trim().replace(/\s+/g, " ")`).
+///
+/// The returned `String` is a copy of the phrase: the caller should wipe it
+/// (for example with `zeroize::Zeroizing`), as this module does internally.
 pub fn normalize_mnemonic(phrase: &str) -> String {
     let words: Vec<&str> = phrase
         .split(is_js_whitespace)
@@ -240,8 +243,12 @@ fn parse_mnemonic(normalized: &str) -> Result<bip39::Mnemonic> {
 
 /// True when `phrase`, normalized, is a valid English BIP-39 mnemonic: every
 /// word in the wordlist, a valid word count and checksum.
+///
+/// The normalized copy of the phrase is wiped before this returns, as in
+/// [`mnemonic_to_seed`]. The parsed `bip39::Mnemonic` wipes itself on drop.
 pub fn validate_mnemonic(phrase: &str) -> bool {
-    parse_mnemonic(&normalize_mnemonic(phrase)).is_ok()
+    let normalized = Zeroizing::new(normalize_mnemonic(phrase));
+    parse_mnemonic(&normalized).is_ok()
 }
 
 /// The standard BIP-39 seed of `phrase` and `passphrase`: PBKDF2-HMAC-SHA512
