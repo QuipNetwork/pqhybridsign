@@ -44,6 +44,9 @@ use sha2::{Digest, Sha256};
 const LEGAL: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
 /// sp-core's `DEV_PHRASE`: an empty SURI phrase means this.
 const DEV_PHRASE: &str = "bottom drive obey lake curtain smoke basket hold race lonely fit walk";
+/// A phrase with a tab, a no-break space and a trailing newline.
+const TAB_NBSP_SURI: &str =
+    "legal\twinner thank year wave sausage worth useful legal winner thank\u{a0}yellow\n";
 const RAW: &str = "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a";
 /// `f(t)` of design §3 for named junctions: `u32::from_le_bytes(
 /// blake2_256(SCALE(t))[0..4]) & 0x7FFF_FFFF`. Recomputed independently
@@ -228,7 +231,7 @@ fn positive_inputs() -> Vec<Positive> {
         ),
         phrase_case(
             "tab, newline and no-break space (library only: not in the ASCII SURI phrase class)",
-            "legal\twinner thank year wave sausage worth useful legal winner thank\u{a0}yellow\n",
+            TAB_NBSP_SURI,
             &lib,
             LEGAL,
             "",
@@ -388,6 +391,19 @@ fn negatives() -> Vec<Negative> {
             "named junction (signers take no junctions)",
             format!("{LEGAL}//Alice"),
             &signer,
+        ),
+        // The two library-only positives, as SURIs: the SDK's AddressUri phrase
+        // class and the signers' grammar are ASCII letters, digits and space, so
+        // both layers reject them rather than normalise them into a key.
+        n(
+            "tab, newline and no-break space between words",
+            s(TAB_NBSP_SURI),
+            &both,
+        ),
+        n(
+            "fi ligature in the phrase",
+            DEV_PHRASE.replace("fit", "\u{fb01}t"),
+            &both,
         ),
         n(
             "bad checksum",
@@ -549,6 +565,16 @@ fn the_parity_file_encodes_the_design_equivalences() {
     // The raw seed's keys are keypair_from_seed of the seed itself.
     for (id, (seed, _)) in by_name("raw seed") {
         assert_eq!(seed, RAW, "{id}");
+    }
+    // Each library-only positive is a negative for the SDK and the signers.
+    for case in file.positive.iter().filter(|c| c.scope == ["quip-hd"]) {
+        let negative = file.negative.iter().find(|n| n.suri == case.suri);
+        assert_eq!(
+            negative.map(|n| n.rejected_by.clone()),
+            Some(vec![s("sdk"), s("signer")]),
+            "{}",
+            case.name
+        );
     }
     // Every negative is rejected by at least one layer.
     for case in &file.negative {

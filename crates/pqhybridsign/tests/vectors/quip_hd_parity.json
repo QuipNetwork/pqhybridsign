@@ -783,6 +783,22 @@
       ]
     },
     {
+      "name": "tab, newline and no-break space between words",
+      "suri": "legal\twinner thank year wave sausage worth useful legal winner thank yellow\n",
+      "rejected_by": [
+        "sdk",
+        "signer"
+      ]
+    },
+    {
+      "name": "fi ligature in the phrase",
+      "suri": "bottom drive obey lake curtain smoke basket hold race lonely ﬁt walk",
+      "rejected_by": [
+        "sdk",
+        "signer"
+      ]
+    },
+    {
       "name": "bad checksum",
       "suri": "legal winner thank year wave sausage worth useful legal winner thank legal",
       "rejected_by": [
