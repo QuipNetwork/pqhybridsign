@@ -12,6 +12,12 @@ PINNED_WASM_PACK_VERSION=0.13.1
 
 require_pinned_wasm_pack() {
     local found
+    # Checked first: under `set -euo pipefail` a missing binary would end the
+    # script at the version read below (exit 127) before any hint printed.
+    command -v wasm-pack >/dev/null 2>&1 || {
+        echo "wasm-pack not found; install it with: cargo install wasm-pack --version ${PINNED_WASM_PACK_VERSION} --locked" >&2
+        exit 1
+    }
     found="$(wasm-pack --version 2>/dev/null | awk '{print $2}')"
     if [ "$found" != "$PINNED_WASM_PACK_VERSION" ]; then
         echo "wasm-pack ${found:-(not found)} is not the pinned ${PINNED_WASM_PACK_VERSION}:" \
