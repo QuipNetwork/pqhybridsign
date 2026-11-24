@@ -39,6 +39,9 @@ if __name__ == "__main__":
     s = b"QUIP HD v1 regression vector seed"
     assert leaf(s, [0x514E, 0x7FFFFFFF, 20049, 0, 0]).hex().startswith("e384e035")
     assert bip39_seed("abandon " * 11 + "about", "TREZOR").hex().startswith("c55257c3")
+    # Design v2.1: the phrase is NFKD-normalized, so the "fi" ligature (U+FB01) gives the ASCII leaf.
+    dev = "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+    assert hybrid_leaf("H4", dev.replace("fit", "\ufb01t"), "", 0, 0) == hybrid_leaf("H4", dev, "", 0, 0)
     cases = [
         ("legal winner thank year wave sausage worth useful legal winner thank yellow", "", 0, 0),
         ("legal winner thank year wave sausage worth useful legal winner thank yellow", "", 1, 0),

@@ -7,8 +7,8 @@
 //! raw 32-byte seed, which a suite then expands with its own key generation.
 //!
 //! 1. **BIP-39 seed.** Standard BIP-39, unlike the `mnemonic` module: PBKDF2-
-//!    HMAC-SHA512 over the normalized phrase *text*, salted with
-//!    `"mnemonic" || NFKD(passphrase)`, 2048 rounds, 64 bytes
+//!    HMAC-SHA512 over the whitespace-normalized, NFKD phrase *text*, salted
+//!    with `"mnemonic" || NFKD(passphrase)`, 2048 rounds, 64 bytes
 //!    ([`mnemonic_to_seed`]).
 //! 2. **Master.** `I = HMAC-SHA512(key = "QUIP seed", data = seed)`; the key is
 //!    `I[0..32]`, the chain code `I[32..64]` ([`master_node`]).
@@ -229,9 +229,12 @@ fn parse_mnemonic(normalized: &str) -> Result<bip39::Mnemonic> {
     if normalized.chars().any(|c| c != ' ' && c.is_whitespace()) {
         return Err(Error::InvalidMnemonic);
     }
-    // English words are lowercase ASCII, already NFKD; anything else fails
-    // the wordlist, so the NFKD step BIP-39 asks for is a no-op here.
-    bip39::Mnemonic::parse_in_normalized(bip39::Language::English, normalized)
+    // NFKD, as BIP-39 and `@scure/bip39` apply it to the phrase: a
+    // compatibility form such as the "ﬁ" ligature (U+FB01) or fullwidth
+    // letters decomposes to the ASCII word. NFKD maps nothing to U+0085, and
+    // the spaces it can produce come only with a combining mark, which fails
+    // the wordlist here as it does in scure.
+    bip39::Mnemonic::parse_in(bip39::Language::English, normalized)
         .map_err(|_| Error::InvalidMnemonic)
 }
 
@@ -249,8 +252,8 @@ pub fn validate_mnemonic(phrase: &str) -> bool {
 /// the mnemonic's entropy the way Substrate does and keeps 32 bytes. The same
 /// phrase gives different seeds through the two.
 ///
-/// Residual: `bip39` normalizes a non-NFKD passphrase into a `String` it does
-/// not wipe.
+/// Residual: `bip39` normalizes a non-NFKD phrase or passphrase into a
+/// `String` it does not wipe.
 ///
 /// # Errors
 ///
@@ -792,5 +795,31 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
+    }
+
+    /// Design v2.1: the phrase is NFKD-normalized, as `@scure/bip39` does. The
+    /// "ﬁ" ligature (U+FB01) and fullwidth letters decompose to ASCII and give
+    /// the ASCII phrase's leaf.
+    #[test]
+    fn the_phrase_is_nfkd_normalized() {
+        let ligature = BOTTOM.replace("fit", "\u{fb01}t");
+        let fullwidth = BOTTOM.replace("fit", "\u{ff46}\u{ff49}\u{ff54}");
+        assert_ne!(ligature, BOTTOM);
+        for suite in HybridSuite::ALL {
+            let ascii = hybrid_leaf(suite, BOTTOM, "", 0, 0).expect("ascii");
+            assert_eq!(
+                *hybrid_leaf(suite, &ligature, "", 0, 0).expect("ligature"),
+                *ascii
+            );
+            assert_eq!(
+                *hybrid_leaf(suite, &fullwidth, "", 0, 0).expect("fullwidth"),
+                *ascii
+            );
+        }
+        // The H4 leaf the independent cross-check computes for the ASCII phrase.
+        assert_eq!(
+            hex(&*hybrid_leaf(HybridSuite::SrFn512, &ligature, "", 0, 0).expect("ligature")),
+            "e3c7b2985b2fec5da49f7378a64df009babf2b815f5352bc5671c91425b5f4b2"
+        );
     }
 }
