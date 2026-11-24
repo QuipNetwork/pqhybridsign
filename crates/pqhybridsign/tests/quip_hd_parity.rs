@@ -53,6 +53,18 @@ const RAW: &str = "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2
 /// (Python hashlib.blake2b); claude's R9 script gave the same values.
 const F_ALICE: u32 = 910_586_124;
 const F_BOB: u32 = 1_714_080_267;
+/// A junction name of 64 bytes or more, so its SCALE compact length prefix
+/// takes two bytes (`0x1901` for 70 bytes), and `f` of it.
+const LONG_PHRASE_JUNCTION: &str =
+    "QUIP-HD-parity-phrase-junction-name-that-is-sixty-four-bytes-or-more!!";
+const F_LONG_PHRASE_JUNCTION: u32 = 218_918_165;
+/// A raw-seed junction name whose SCALE encoding is more than 32 bytes, so
+/// upstream `DeriveJunction` uses `blake2_256(SCALE(name))` as its chain
+/// code, and that chain code. Both values are recomputed by
+/// `scripts/quip-hd-leaf-crosscheck.py` (hashlib.blake2b).
+const LONG_RAW_JUNCTION: &str = "QUIP-HD-parity-raw-seed-junction-name";
+const LONG_RAW_JUNCTION_CC: &str =
+    "138c2ec7d940313a0df3f8c7e81abb307dfc62c6d14e78d8a2815861ed49de92";
 
 const SUITES: [(&str, &str, HybridSuite); 4] = [
     ("H1", "ED-ML-44", HybridSuite::EdMl44),
@@ -146,11 +158,14 @@ fn phrase_case(
 /// The chain code of a hard junction as sp-core's `DeriveJunction` builds it
 /// for the inputs used here: a numeric `t` is its `u64` SCALE encoding
 /// (little-endian), a short name its SCALE `&str` encoding (compact length
-/// prefix, then the bytes), zero-padded to 32 bytes. Names of 32 bytes or
-/// more would be hashed with blake2-256; none is used here.
+/// prefix, then the bytes), zero-padded to 32 bytes. A name whose encoding is
+/// longer than 32 bytes is hashed with blake2-256; this crate has no blake2,
+/// so the one such name used here carries its precomputed chain code.
 fn chain_code(t: &str) -> [u8; 32] {
     let mut cc = [0u8; 32];
-    if let Ok(n) = t.parse::<u64>() {
+    if t == LONG_RAW_JUNCTION {
+        hex::decode_to_slice(LONG_RAW_JUNCTION_CC, &mut cc).unwrap();
+    } else if let Ok(n) = t.parse::<u64>() {
         cc[..8].copy_from_slice(&n.to_le_bytes());
     } else {
         assert!(t.len() < 32, "only short names are used here");
@@ -328,7 +343,47 @@ fn positive_inputs() -> Vec<Positive> {
             F_ALICE,
             0,
         ),
+        phrase_case("dev phrase (empty SURI)", "", &sdk, DEV_PHRASE, "", 0, 0),
+        phrase_case(
+            "dev phrase with ///pw",
+            "///pw",
+            &sdk,
+            DEV_PHRASE,
+            "pw",
+            0,
+            0,
+        ),
+        phrase_case(
+            "password containing a slash",
+            &format!("{LEGAL}///p/w"),
+            &both,
+            LEGAL,
+            "p/w",
+            0,
+            0,
+        ),
+        phrase_case(
+            "junction name of 64 bytes or more (two-byte SCALE length)",
+            &format!("{LEGAL}//{LONG_PHRASE_JUNCTION}"),
+            &sdk,
+            LEGAL,
+            "",
+            F_LONG_PHRASE_JUNCTION,
+            0,
+        ),
         raw_case("raw seed", &format!("0x{RAW}"), &both, &[]),
+        raw_case(
+            "raw seed in uppercase hex digits",
+            &format!("0x{}", RAW.to_uppercase()),
+            &both,
+            &[],
+        ),
+        raw_case(
+            "raw seed junction name over 32 encoded bytes (blake2 chain code)",
+            &format!("0x{RAW}//{LONG_RAW_JUNCTION}"),
+            &sdk,
+            &[LONG_RAW_JUNCTION],
+        ),
         raw_case(
             "raw seed //1 (HKDF junction)",
             &format!("0x{RAW}//1"),
@@ -346,6 +401,7 @@ fn positive_inputs() -> Vec<Positive> {
 
 fn negatives() -> Vec<Negative> {
     let both = ["sdk", "signer"];
+    let all = ["quip-hd", "sdk", "signer"];
     let signer = ["signer"];
     let n = |name: &str, suri: String, by: &[&str]| Negative {
         name: s(name),
@@ -376,6 +432,17 @@ fn negatives() -> Vec<Negative> {
             &signer,
         ),
         n("soft junction", format!("{LEGAL}/soft"), &both),
+        n("empty junction", format!("{LEGAL}//"), &both),
+        n(
+            "dev phrase, empty SURI (signers have no dev phrase)",
+            String::new(),
+            &signer,
+        ),
+        n(
+            "dev phrase with ///pw (signers have no dev phrase)",
+            "///pw".to_owned(),
+            &signer,
+        ),
         n("third junction", format!("{LEGAL}//1//2//3"), &both),
         n("non-canonical //01", format!("{LEGAL}//01"), &both),
         n("non-canonical //00", format!("{LEGAL}//00"), &both),
@@ -408,12 +475,12 @@ fn negatives() -> Vec<Negative> {
         n(
             "bad checksum",
             "legal winner thank year wave sausage worth useful legal winner thank legal".to_owned(),
-            &both,
+            &all,
         ),
         n(
             "unknown word",
             "legal winner thank year wave sausage worth useful legal winner thank quipq".to_owned(),
-            &both,
+            &all,
         ),
     ]
 }
@@ -576,6 +643,29 @@ fn the_parity_file_encodes_the_design_equivalences() {
             case.name
         );
     }
+    // A negative the library layer rejects is a phrase hybrid_leaf refuses.
+    for case in file
+        .negative
+        .iter()
+        .filter(|n| n.rejected_by.iter().any(|l| l == "quip-hd"))
+    {
+        for (_, _, suite) in SUITES {
+            assert!(
+                hybrid_leaf(suite, &case.suri, "", 0, 0).is_err(),
+                "{}",
+                case.name
+            );
+        }
+    }
+    assert_eq!(
+        by_name("raw seed in uppercase hex digits"),
+        by_name("raw seed"),
+        "0x2A.. and 0x2a.. are one seed"
+    );
+    assert_ne!(
+        by_name("dev phrase with ///pw"),
+        by_name("dev phrase (empty SURI)")
+    );
     // Every negative is rejected by at least one layer.
     for case in &file.negative {
         assert!(!case.rejected_by.is_empty(), "{}", case.name);

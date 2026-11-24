@@ -41,6 +41,49 @@ def hard_junction(parent: bytes, chain_code: bytes) -> bytes:
     return hmac.new(prk, b"junction/hard/" + chain_code + b"\x01", hashlib.sha256).digest()
 
 
+DEV_PHRASE = "bottom drive obey lake curtain smoke basket hold race lonely fit walk"
+
+
+def scale_str(t: str) -> bytes:
+    b = t.encode()
+    n = len(b)
+    prefix = bytes([n << 2]) if n < 64 else ((n << 2) | 1).to_bytes(2, "little")
+    return prefix + b
+
+
+def level_of(t: str) -> int:
+    """Design §3 f(t): an all-digit t is itself; a name is the low 31 bits of
+    blake2_256(SCALE(t)) read little-endian."""
+    if t.isdigit():
+        return int(t)
+    h = hashlib.blake2b(scale_str(t), digest_size=32).digest()
+    return int.from_bytes(h[:4], "little") & 0x7FFFFFFF
+
+
+def chain_code(t: str) -> bytes:
+    """sp-core DeriveJunction's chain code for a hard junction t."""
+    if t.isdigit():
+        return int(t).to_bytes(8, "little") + bytes(24)
+    d = scale_str(t)
+    return hashlib.blake2b(d, digest_size=32).digest() if len(d) > 32 else d + bytes(32 - len(d))
+
+
+def check_suri_mapping(case: dict) -> None:
+    """For an sdk-scope positive, re-derive the case's inputs from its SURI."""
+    body, _, password = case["suri"].partition("///")
+    has_password = "///" in case["suri"]
+    head, *junctions = body.split("//")
+    if head.startswith("0x"):
+        assert head[2:].lower() == case["raw_seed"], case["name"]
+        assert [chain_code(j).hex() for j in junctions] == case.get("junction_chain_codes", []), case["name"]
+        return
+    phrase = head.strip() or DEV_PHRASE
+    assert " ".join(phrase.split()) == case["phrase"], case["name"]
+    assert (password if has_password else "") == case["passphrase"], case["name"]
+    levels = [level_of(j) for j in junctions] + [0, 0]
+    assert levels[:2] == [case["account"], case["index"]], case["name"]
+
+
 def check_parity_file(path: str) -> int:
     """Recompute every seed in tests/vectors/quip_hd_parity.json."""
     import json
@@ -50,6 +93,8 @@ def check_parity_file(path: str) -> int:
     ids = {sid: info["algorithm"] for sid, info in data["suites"].items()}
     checked = 0
     for case in data["positive"]:
+        if "sdk" in case["scope"]:
+            check_suri_mapping(case)
         for sid, key in case["keys"].items():
             if case.get("raw_seed") is not None:
                 seed = bytes.fromhex(case["raw_seed"])
