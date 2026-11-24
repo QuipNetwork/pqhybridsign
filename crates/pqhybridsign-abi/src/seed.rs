@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Master seed derivation: recovery phrases and hard junctions.
 
+use pqhybridsign::quip_hd::{self, HybridSuite};
 use zeroize::Zeroize;
 
 use crate::error::AbiError;
+use crate::suite::Suite;
 
 /// Length of a master seed, in bytes.
 pub const MASTER_SEED_LEN: usize = 32;
@@ -102,6 +104,45 @@ pub fn derive_hard_junction_path(
     let mut child = pqhybridsign::derive::derive_hard_junction_path(parent_master, chain_codes)?;
     out.copy_from_slice(&child);
     child.zeroize();
+    Ok(())
+}
+
+/// The 32-byte master seed of `suite`'s key for a recovery phrase, by
+/// QUIP HD v1: standard BIP-39 over the phrase text (`passphrase` is the
+/// BIP-39 passphrase, NFKD-normalized; `None` is empty), then the hardened
+/// path `m / 0x514E' / alg' / 20049' / account' / index'` with the suite's
+/// registered algorithm level (EdMl44 `0x100`, EdFn512 `0x200`, SrMl44
+/// `0x300`, SrFn512 `0x400`).
+///
+/// Pass `out` to [`crate::keygen_from_seed`] with the same `suite`. This is
+/// not [`master_seed_from_mnemonic`]: that is Substrate's derivation, and
+/// the same phrase gives a different key through the two.
+///
+/// `out` holds secret material. Wipe it when finished.
+///
+/// # Errors
+///
+/// [`AbiError::WrongEntryPointForSuite`] for EdSh and SrSh, which have no
+/// QUIP HD level. [`AbiError::HdIndexOutOfRange`] if `account` or `index`
+/// is `2^31` or more. [`AbiError::InvalidMnemonic`] if `phrase` is not a
+/// valid English BIP39 mnemonic.
+pub fn hybrid_leaf(
+    suite: Suite,
+    phrase: &str,
+    passphrase: Option<&str>,
+    account: u32,
+    index: u32,
+    out: &mut [u8; MASTER_SEED_LEN],
+) -> Result<(), AbiError> {
+    let hybrid = match suite {
+        Suite::EdMl44 => HybridSuite::EdMl44,
+        Suite::EdFn512 => HybridSuite::EdFn512,
+        Suite::SrMl44 => HybridSuite::SrMl44,
+        Suite::SrFn512 => HybridSuite::SrFn512,
+        Suite::EdSh | Suite::SrSh => return Err(AbiError::WrongEntryPointForSuite),
+    };
+    let leaf = quip_hd::hybrid_leaf(hybrid, phrase, passphrase.unwrap_or(""), account, index)?;
+    out.copy_from_slice(&*leaf);
     Ok(())
 }
 
@@ -228,5 +269,64 @@ mod tests {
         let mut out = [0u8; MASTER_SEED_LEN];
         derive_hard_junction_path(&parent, &[], &mut out).unwrap();
         assert_eq!(out, parent);
+    }
+
+    const LEGAL: &str =
+        "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
+    /// The core crate's KATs (`quip_hd`, cross-checked against an independent
+    /// Python implementation), reached through this entry point.
+    #[test]
+    fn hybrid_leaf_matches_the_core_kats() {
+        let kats = [
+            (
+                Suite::EdMl44,
+                "f5f4703d2e6926a78e1ee7fd916fcbd17f2b1652b5bfbac71f917a1fad5c869f",
+            ),
+            (
+                Suite::EdFn512,
+                "ffca289f66e2473a3353d7f726f2bc45ec1d488570f78737361bae455b69a92c",
+            ),
+            (
+                Suite::SrMl44,
+                "e76268538ea1d8aa6553daa3c559ea8e25102b5e7a228d1e6635f1af145bbcda",
+            ),
+            (
+                Suite::SrFn512,
+                "6e1129fa46fceba24607c5b056e9a327d91b1390783c40786d86d405b0ed4dce",
+            ),
+        ];
+        for (suite, want) in kats {
+            let mut out = [0u8; MASTER_SEED_LEN];
+            hybrid_leaf(suite, LEGAL, None, 0, 0, &mut out).unwrap();
+            let got: String = out.iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(got, want, "{suite:?}");
+            let mut empty = [0u8; MASTER_SEED_LEN];
+            hybrid_leaf(suite, LEGAL, Some(""), 0, 0, &mut empty).unwrap();
+            assert_eq!(empty, out, "None and an empty passphrase agree");
+        }
+    }
+
+    #[test]
+    fn hybrid_leaf_refuses_stateful_suites_bad_levels_and_bad_phrases() {
+        let mut out = [0u8; MASTER_SEED_LEN];
+        for suite in [Suite::EdSh, Suite::SrSh] {
+            assert_eq!(
+                hybrid_leaf(suite, LEGAL, None, 0, 0, &mut out),
+                Err(AbiError::WrongEntryPointForSuite)
+            );
+        }
+        assert_eq!(
+            hybrid_leaf(Suite::SrFn512, LEGAL, None, 1 << 31, 0, &mut out),
+            Err(AbiError::HdIndexOutOfRange)
+        );
+        assert_eq!(
+            hybrid_leaf(Suite::SrFn512, LEGAL, None, 0, u32::MAX, &mut out),
+            Err(AbiError::HdIndexOutOfRange)
+        );
+        assert_eq!(
+            hybrid_leaf(Suite::SrFn512, "legal winner", None, 0, 0, &mut out),
+            Err(AbiError::InvalidMnemonic)
+        );
     }
 }

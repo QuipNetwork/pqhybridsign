@@ -18,12 +18,12 @@ categories.workspace = true
 publish = false
 
 [dependencies]
-# `vrf` and `mnemonic` are off by default in `pqhybridsign` because a
+# `vrf`, `mnemonic` and `quip-hd` are off by default in `pqhybridsign` because a
 # signing-only Rust build should not compile the VRF's curve arithmetic or
 # BIP39's PBKDF2. A binding consumer has no such choice: they get the
 # compiled artifact, so a feature left off here is a mechanism that does
 # not exist for C, Python and JavaScript callers at all.
-pqhybridsign = { path = "../pqhybridsign", version = "0.1.0", features = ["vrf", "mnemonic"] }
+pqhybridsign = { path = "../pqhybridsign", version = "0.1.0", features = ["vrf", "mnemonic", "quip-hd"] }
 rand_core.workspace = true
 zeroize.workspace = true
 

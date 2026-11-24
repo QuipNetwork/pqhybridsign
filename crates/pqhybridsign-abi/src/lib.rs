@@ -82,8 +82,8 @@ mod vrf;
 pub use error::AbiError;
 pub use handle::{sign_stateful_with_handle, sign_stateless_with_handle, StatefulKeyHandle};
 pub use seed::{
-    derive_hard_junction, derive_hard_junction_path, master_seed_from_mnemonic, CHAIN_CODE_LEN,
-    MASTER_SEED_LEN,
+    derive_hard_junction, derive_hard_junction_path, hybrid_leaf, master_seed_from_mnemonic,
+    CHAIN_CODE_LEN, MASTER_SEED_LEN,
 };
 pub use sizes::{public_key_len, secret_key_len, signature_len, stored_public_key_len};
 pub use stateful_suites::{
