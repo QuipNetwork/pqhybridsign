@@ -224,6 +224,13 @@ export interface RawModule {
     open(suite: string, secretKey: Uint8Array): RawStatefulKey;
   };
   masterSeedFromMnemonic(phrase: string, password?: string | null): Uint8Array;
+  hybridLeaf(
+    suite: string,
+    phrase: string,
+    passphrase?: string | null,
+    account?: number | null,
+    index?: number | null,
+  ): Uint8Array;
   deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Uint8Array;
   deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Uint8Array;
   vrfProofLen(suite: string): number;
@@ -345,6 +352,23 @@ export interface RawModule {
  */
 export interface PqHybridSignApi {
   masterSeedFromMnemonic(phrase: string, password?: string | null): Promise<Uint8Array>;
+  /**
+   * The 32-byte master seed of `suite`'s key for a recovery phrase, by QUIP
+   * HD v1: standard BIP-39 over the phrase text, then the hardened path
+   * m / 0x514E' / alg' / 20049' / account' / index' at the suite's level
+   * (ED-ML-44 0x100, ED-FN-512 0x200, SR-ML-44 0x300, SR-FN-512 0x400).
+   * Pass it to `keygenFromSeed` with the same suite. Not
+   * `masterSeedFromMnemonic` (Substrate's derivation): the same phrase gives
+   * a different key through the two. `account` and `index` default to 0 and
+   * must be integers in [0, 2^31); ED-SH and SR-SH are rejected.
+   */
+  hybridLeaf(
+    suite: string,
+    phrase: string,
+    passphrase?: string | null,
+    account?: number | null,
+    index?: number | null,
+  ): Promise<Uint8Array>;
   deriveHardJunction(parentMaster: Uint8Array, chainCode: Uint8Array): Promise<Uint8Array>;
   deriveHardJunctionPath(parentMaster: Uint8Array, chainCodes: Uint8Array[]): Promise<Uint8Array>;
   /**
@@ -520,6 +544,10 @@ export function createApi(load: () => Promise<RawModule>): PqHybridSignApi {
   return {
     async masterSeedFromMnemonic(phrase, password) {
       return guard((raw) => raw.masterSeedFromMnemonic(phrase, password));
+    },
+
+    async hybridLeaf(suite, phrase, passphrase, account, index) {
+      return guard((raw) => raw.hybridLeaf(suite, phrase, passphrase, account, index));
     },
 
     async deriveHardJunction(parentMaster, chainCode) {

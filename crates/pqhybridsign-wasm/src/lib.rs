@@ -1493,6 +1493,67 @@ pub fn master_seed_from_mnemonic(
     out_value.map_err(js_error)
 }
 
+/// The 32-byte master seed of `suite`'s key for a recovery phrase, by QUIP
+/// HD v1: standard BIP-39 over the phrase text, then the hardened path
+/// `m / 0x514E' / alg' / 20049' / account' / index'` at the suite's
+/// algorithm level (ED-ML-44 `0x100`, ED-FN-512 `0x200`, SR-ML-44 `0x300`,
+/// SR-FN-512 `0x400`). Pass it to `keygenFromSeed` with the same suite.
+///
+/// Whitespace runs in `phrase` collapse, and the phrase and `passphrase`
+/// (the BIP-39 passphrase, empty when omitted) are NFKD-normalized. This is
+/// not `masterSeedFromMnemonic`, which is Substrate's derivation: the same
+/// phrase gives a different key through the two.
+///
+/// `account` and `index` default to 0. They are taken as JavaScript numbers
+/// and must be integers in `[0, 2^31)`: a wasm-bindgen `u32` parameter would
+/// wrap a negative or oversized number silently into another account.
+///
+/// # Errors
+///
+/// A JavaScript `Error` if `suite` is not one of the four stateless suites,
+/// if `account` or `index` is not an integer in `[0, 2^31)`, or if `phrase`
+/// is not a valid English BIP39 mnemonic.
+#[wasm_bindgen(js_name = hybridLeaf)]
+pub fn hybrid_leaf(
+    suite: &str,
+    phrase: &str,
+    passphrase: Option<String>,
+    account: Option<f64>,
+    index: Option<f64>,
+) -> Result<Uint8Array, JsValue> {
+    let suite = stateless_suite(suite).map_err(js_error)?;
+    let account = hd_level(account, "account")?;
+    let index = hd_level(index, "index")?;
+    let mut out = [0u8; pqhybridsign_abi::MASTER_SEED_LEN];
+    let result = pqhybridsign_abi::hybrid_leaf(
+        suite,
+        phrase,
+        passphrase.as_deref(),
+        account,
+        index,
+        &mut out,
+    );
+    let out_value = result.map(|()| Uint8Array::from(&out[..]));
+    out.zeroize();
+    out_value.map_err(js_error)
+}
+
+/// A QUIP HD level from a JavaScript number: absent is 0; otherwise an
+/// integer in `[0, 2^31)`.
+fn hd_level(value: Option<f64>, what: &str) -> Result<u32, JsValue> {
+    let Some(value) = value else {
+        return Ok(0);
+    };
+    if value.fract() == 0.0 && (0.0..2_147_483_648.0).contains(&value) {
+        // In range and integral, so the cast is exact.
+        Ok(value as u32)
+    } else {
+        Err(js_error(format!(
+            "{what} must be an integer in [0, 2^31), got {value}"
+        )))
+    }
+}
+
 /// Derive a hard-junction child master seed.
 ///
 /// # The re-keygen hazard

@@ -312,6 +312,30 @@ export function deriveHardJunctionPath(parent_master: Uint8Array, chain_codes: A
 export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
 
 /**
+ * The 32-byte master seed of `suite`'s key for a recovery phrase, by QUIP
+ * HD v1: standard BIP-39 over the phrase text, then the hardened path
+ * `m / 0x514E' / alg' / 20049' / account' / index'` at the suite's
+ * algorithm level (ED-ML-44 `0x100`, ED-FN-512 `0x200`, SR-ML-44 `0x300`,
+ * SR-FN-512 `0x400`). Pass it to `keygenFromSeed` with the same suite.
+ *
+ * Whitespace runs in `phrase` collapse, and the phrase and `passphrase`
+ * (the BIP-39 passphrase, empty when omitted) are NFKD-normalized. This is
+ * not `masterSeedFromMnemonic`, which is Substrate's derivation: the same
+ * phrase gives a different key through the two.
+ *
+ * `account` and `index` default to 0. They are taken as JavaScript numbers
+ * and must be integers in `[0, 2^31)`: a wasm-bindgen `u32` parameter would
+ * wrap a negative or oversized number silently into another account.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not one of the four stateless suites,
+ * if `account` or `index` is not an integer in `[0, 2^31)`, or if `phrase`
+ * is not a valid English BIP39 mnemonic.
+ */
+export function hybridLeaf(suite: string, phrase: string, passphrase?: string | null, account?: number | null, index?: number | null): Uint8Array;
+
+/**
  * The 32-byte identity of the key `public_key` describes, for a stateful
  * `suite` (`"ED-SH"` or `"SR-SH"`).
  *
