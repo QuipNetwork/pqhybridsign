@@ -10,6 +10,7 @@ use pqhybridsign_abi::{AbiError, CHAIN_CODE_LEN, MASTER_SEED_LEN};
 
 use crate::bytes_in::extract_bytes;
 use crate::errors::to_py_err;
+use crate::suite::PySuite;
 
 /// Turn an English BIP39 recovery phrase into a master seed.
 ///
@@ -44,6 +45,45 @@ fn master_seed_from_mnemonic(
     let result = pqhybridsign_abi::master_seed_from_mnemonic(phrase, password, &mut seed);
     let out = result.map(|()| PyBytes::new(py, &seed).unbind());
     seed.zeroize();
+    out.map_err(to_py_err)
+}
+
+/// The 32-byte master seed of `suite`'s key for a recovery phrase, by QUIP
+/// HD v1: standard BIP-39 over the phrase text, then the hardened path
+/// `m / 0x514E' / alg' / 20049' / account' / index'` at the suite's
+/// algorithm level (ED_ML_44 `0x100`, ED_FN_512 `0x200`, SR_ML_44 `0x300`,
+/// SR_FN_512 `0x400`). Pass it to `keygen_from_seed` with the same suite.
+///
+/// Whitespace runs in `phrase` collapse and the phrase and `passphrase` are
+/// NFKD-normalized; `passphrase` is the BIP-39 passphrase, empty when
+/// `None`. This is not `master_seed_from_mnemonic`, which is Substrate's
+/// derivation: the same phrase gives a different key through the two.
+///
+/// The returned seed is a Python `bytes` object and holds secret material;
+/// see `master_seed_from_mnemonic` for the same zeroizing caveat.
+///
+/// # Errors
+///
+/// `WrongEntryPointForSuiteError` for ED_SH and SR_SH, which have no QUIP HD
+/// level. `HdIndexOutOfRangeError` if `account` or `index` is `2**31` or
+/// more. `InvalidMnemonicError` if `phrase` is not a valid English BIP39
+/// mnemonic. `OverflowError` if `account` or `index` is negative or does not
+/// fit in 32 bits.
+#[pyfunction]
+#[pyo3(signature = (suite, phrase, passphrase=None, account=0, index=0))]
+fn hybrid_leaf(
+    py: Python<'_>,
+    suite: PySuite,
+    phrase: &str,
+    passphrase: Option<&str>,
+    account: u32,
+    index: u32,
+) -> PyResult<Py<PyBytes>> {
+    let mut leaf = [0u8; MASTER_SEED_LEN];
+    let result =
+        pqhybridsign_abi::hybrid_leaf(suite.into(), phrase, passphrase, account, index, &mut leaf);
+    let out = result.map(|()| PyBytes::new(py, &leaf).unbind());
+    leaf.zeroize();
     out.map_err(to_py_err)
 }
 
@@ -150,6 +190,7 @@ fn derive_hard_junction_path(
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(master_seed_from_mnemonic, m)?)?;
+    m.add_function(wrap_pyfunction!(hybrid_leaf, m)?)?;
     m.add_function(wrap_pyfunction!(derive_hard_junction, m)?)?;
     m.add_function(wrap_pyfunction!(derive_hard_junction_path, m)?)?;
     Ok(())

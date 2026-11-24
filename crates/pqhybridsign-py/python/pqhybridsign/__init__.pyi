@@ -97,6 +97,12 @@ class StatefulKeyNotCloneableError(PqHybridSignError):
 class InvalidMnemonicError(PqHybridSignError):
     """The recovery phrase is not a valid English BIP39 mnemonic."""
 
+class HdIndexOutOfRangeError(PqHybridSignError):
+    """A QUIP HD account or index was 2**31 or more."""
+
+class HdSeedTooShortError(PqHybridSignError):
+    """A QUIP HD seed was shorter than 16 bytes."""
+
 class InvalidProofError(PqHybridSignError):
     """The hybrid VRF proof did not verify; no output bytes were derived.
 
@@ -456,6 +462,27 @@ def master_seed_from_mnemonic(phrase: str, password: Optional[str] = None) -> by
 
     Raises `InvalidMnemonicError` if `phrase` is not a valid English BIP39
     mnemonic: a wrong word count, an unknown word, or a bad checksum."""
+
+def hybrid_leaf(
+    suite: Suite,
+    phrase: str,
+    passphrase: Optional[str] = None,
+    account: int = 0,
+    index: int = 0,
+) -> bytes:
+    """The 32-byte master seed of `suite`'s key for a recovery phrase, by
+    QUIP HD v1: standard BIP-39 over the phrase text, then the hardened path
+    m / 0x514E' / alg' / 20049' / account' / index' at the suite's level
+    (ED_ML_44 0x100, ED_FN_512 0x200, SR_ML_44 0x300, SR_FN_512 0x400).
+    Pass it to `keygen_from_seed` with the same suite.
+
+    The phrase's whitespace collapses; phrase and passphrase are
+    NFKD-normalized. This is not `master_seed_from_mnemonic` (Substrate's
+    derivation): the same phrase gives a different key through the two.
+
+    Raises `WrongEntryPointForSuiteError` for ED_SH and SR_SH,
+    `HdIndexOutOfRangeError` if `account` or `index` is 2**31 or more, and
+    `InvalidMnemonicError` for an invalid phrase."""
 
 def derive_hard_junction(
     parent_master: ReadableBuffer, chain_code: ReadableBuffer

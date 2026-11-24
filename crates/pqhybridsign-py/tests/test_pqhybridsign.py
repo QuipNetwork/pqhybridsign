@@ -854,6 +854,52 @@ def test_master_seed_from_mnemonic_matches_the_core_crates_golden_vector():
     assert seed.hex() == "fac7959dbfe72f052e5a0c3c8d6530f202b02fd8f9f5ca3580ec8deb7797479e"
 
 
+# QUIP HD (design v2 §2): the core crate's KATs (crates/pqhybridsign/src/
+# quip_hd.rs, cross-checked against scripts/quip-hd-leaf-crosscheck.py),
+# reached through this binding.
+LEGAL = "legal winner thank year wave sausage worth useful legal winner thank yellow"
+HYBRID_LEAF_KATS = [
+    (phs.Suite.ED_ML_44, "f5f4703d2e6926a78e1ee7fd916fcbd17f2b1652b5bfbac71f917a1fad5c869f"),
+    (phs.Suite.ED_FN_512, "ffca289f66e2473a3353d7f726f2bc45ec1d488570f78737361bae455b69a92c"),
+    (phs.Suite.SR_ML_44, "e76268538ea1d8aa6553daa3c559ea8e25102b5e7a228d1e6635f1af145bbcda"),
+    (phs.Suite.SR_FN_512, "6e1129fa46fceba24607c5b056e9a327d91b1390783c40786d86d405b0ed4dce"),
+]
+
+
+def test_hybrid_leaf_matches_the_core_kats_and_feeds_keygen():
+    for suite, want in HYBRID_LEAF_KATS:
+        leaf = phs.hybrid_leaf(suite, LEGAL)
+        assert leaf.hex() == want, suite
+        assert phs.hybrid_leaf(suite, LEGAL, "", 0, 0) == leaf
+        sk, pk = phs.keygen_from_seed(suite, leaf)
+        assert len(sk) > 0 and len(pk) > 0
+
+
+def test_hybrid_leaf_account_index_and_nfkd():
+    suite = phs.Suite.SR_FN_512
+    assert phs.hybrid_leaf(suite, LEGAL, account=1).hex() == (
+        "27e3e9e7815d8071d6d92e3c2df0411ad664923d04527d0958a41f8abc1059ce"
+    )
+    assert phs.hybrid_leaf(suite, LEGAL, index=7).hex() == (
+        "9a50171dc4a2349ee7fa3aa2efb139f7e7236b8f4572461b957359f92cad77f4"
+    )
+    assert phs.hybrid_leaf(suite, LEGAL, "caf\u00e9") == phs.hybrid_leaf(suite, LEGAL, "cafe\u0301")
+    assert phs.hybrid_leaf(suite, PHRASE_12.replace("fit", "\ufb01t")) == phs.hybrid_leaf(
+        suite, PHRASE_12
+    )
+
+
+def test_hybrid_leaf_refusals():
+    with pytest.raises(phs.WrongEntryPointForSuiteError):
+        phs.hybrid_leaf(phs.Suite.ED_SH, LEGAL)
+    with pytest.raises(phs.HdIndexOutOfRangeError):
+        phs.hybrid_leaf(phs.Suite.SR_FN_512, LEGAL, account=2**31)
+    with pytest.raises(phs.InvalidMnemonicError):
+        phs.hybrid_leaf(phs.Suite.SR_FN_512, "legal winner")
+    with pytest.raises(OverflowError):
+        phs.hybrid_leaf(phs.Suite.SR_FN_512, LEGAL, index=-1)
+
+
 def test_master_seed_from_mnemonic_rejects_an_invalid_phrase():
     with pytest.raises(phs.InvalidMnemonicError):
         phs.master_seed_from_mnemonic("not a mnemonic at all")
