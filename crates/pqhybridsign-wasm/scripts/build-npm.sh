@@ -16,6 +16,10 @@ set -euo pipefail
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$crate_dir"
 
+# shellcheck source=scripts/wasm-pack-version.sh disable=SC1091
+. "$crate_dir/scripts/wasm-pack-version.sh"
+require_pinned_wasm_pack
+
 workspace_root="$(cd "$crate_dir/../.." && pwd)"
 workspace_version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$workspace_root/Cargo.toml" | head -n 1)
 if [ -z "$workspace_version" ]; then

@@ -11,6 +11,10 @@ set -euo pipefail
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$crate_dir"
 
+# shellcheck source=scripts/wasm-pack-version.sh disable=SC1091
+. "$crate_dir/scripts/wasm-pack-version.sh"
+require_pinned_wasm_pack
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 

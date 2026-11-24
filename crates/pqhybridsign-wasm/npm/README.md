@@ -69,3 +69,7 @@ continuous integration) regenerates the wasm-bindgen TypeScript definitions
 and fails if they differ from the checked-in copies under `types/`. Run
 `scripts/regenerate-types.sh` and commit the result whenever
 `src/lib.rs`'s public surface changes.
+The type scripts and `scripts/build-npm.sh` require wasm-pack 0.13.1, the
+version CI installs (`cargo install wasm-pack --version 0.13.1 --locked`):
+other versions order some generated lines differently, and CI diffs the
+checked-in files.
