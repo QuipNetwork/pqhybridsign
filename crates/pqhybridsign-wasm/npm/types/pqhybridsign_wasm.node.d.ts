@@ -337,12 +337,16 @@ export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
  * copy of the JavaScript string, which wasm-bindgen frees after the call
  * without wiping it. That copy, the JavaScript strings themselves and the
  * returned `Uint8Array` are host-side copies this function cannot reach.
+ * So is one more: while wasm-bindgen's `passStringToWasm0` encodes a
+ * non-ASCII string it can `realloc` its buffer, which leaves the partial
+ * copy it outgrew in linear memory, unwiped.
  *
  * # Errors
  *
- * A JavaScript `Error` if `suite` is not one of the four stateless suites,
- * if `account` or `index` is not an integer in `[0, 2^31)`, or if `phrase`
- * is not a valid English BIP39 mnemonic.
+ * A JavaScript `Error` if `suite` is not a suite name, or is ED-SH or
+ * SR-SH ("this entry point does not accept this suite"), if `account` or
+ * `index` is not an integer in `[0, 2^31)`, or if `phrase` is not a valid
+ * English BIP39 mnemonic.
  */
 export function hybridLeaf(suite: string, phrase: string, passphrase?: string | null, account?: number | null, index?: number | null): Uint8Array;
 
@@ -433,7 +437,8 @@ export function keygenStatefulFromSeed(suite: string, seed: Uint8Array, max_stat
  * wrapped in `Zeroizing` before anything else, so it is wiped on every
  * path. `phrase` is a `&str` borrowed from wasm-bindgen's copy of the
  * JavaScript string, which wasm-bindgen frees without wiping; see
- * `hybridLeaf` for the same host-side limits.
+ * `hybridLeaf` for the same host-side limits, including the partial copy
+ * `passStringToWasm0` can leave when it reallocates for non-ASCII input.
  */
 export function masterSeedFromMnemonic(phrase: string, password?: string | null): Uint8Array;
 

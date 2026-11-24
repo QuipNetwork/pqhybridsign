@@ -310,7 +310,10 @@ fn stateful_suite(name: &str) -> Result<pqhybridsign_abi::Suite, String> {
 /// ED-SH/SR-SH. Eight entry points parse through here as of this writing:
 /// [`public_key_len`], [`secret_key_len`], [`signature_len`],
 /// [`stored_public_key_len`], [`verify`], [`vrf_proof_len`],
-/// [`vrf_verify`] and [`vrf_make_bytes`].
+/// [`vrf_verify`] and [`vrf_make_bytes`]. [`hybrid_leaf`] parses here too,
+/// although it is not total: it lets the ABI refuse ED-SH and SR-SH with
+/// `WrongEntryPointForSuite`, whose text fits a seed derivation better than
+/// [`stateless_suite`]'s message about signing.
 ///
 /// # Errors
 ///
@@ -1488,7 +1491,8 @@ impl StatefulKey {
 /// wrapped in `Zeroizing` before anything else, so it is wiped on every
 /// path. `phrase` is a `&str` borrowed from wasm-bindgen's copy of the
 /// JavaScript string, which wasm-bindgen frees without wiping; see
-/// `hybridLeaf` for the same host-side limits.
+/// `hybridLeaf` for the same host-side limits, including the partial copy
+/// `passStringToWasm0` can leave when it reallocates for non-ASCII input.
 #[wasm_bindgen(js_name = masterSeedFromMnemonic)]
 pub fn master_seed_from_mnemonic(
     phrase: &str,
@@ -1532,12 +1536,16 @@ pub fn master_seed_from_mnemonic(
 /// copy of the JavaScript string, which wasm-bindgen frees after the call
 /// without wiping it. That copy, the JavaScript strings themselves and the
 /// returned `Uint8Array` are host-side copies this function cannot reach.
+/// So is one more: while wasm-bindgen's `passStringToWasm0` encodes a
+/// non-ASCII string it can `realloc` its buffer, which leaves the partial
+/// copy it outgrew in linear memory, unwiped.
 ///
 /// # Errors
 ///
-/// A JavaScript `Error` if `suite` is not one of the four stateless suites,
-/// if `account` or `index` is not an integer in `[0, 2^31)`, or if `phrase`
-/// is not a valid English BIP39 mnemonic.
+/// A JavaScript `Error` if `suite` is not a suite name, or is ED-SH or
+/// SR-SH ("this entry point does not accept this suite"), if `account` or
+/// `index` is not an integer in `[0, 2^31)`, or if `phrase` is not a valid
+/// English BIP39 mnemonic.
 #[wasm_bindgen(js_name = hybridLeaf)]
 pub fn hybrid_leaf(
     suite: &str,
@@ -1548,7 +1556,10 @@ pub fn hybrid_leaf(
 ) -> Result<Uint8Array, JsValue> {
     // First, before any `?`: every return path below then wipes the copy.
     let passphrase = passphrase.map(Zeroizing::new);
-    let suite = stateless_suite(suite).map_err(js_error)?;
+    // Every suite name parses; the ABI refuses ED-SH and SR-SH with its own
+    // `WrongEntryPointForSuite` text ("this entry point does not accept this
+    // suite"), not `stateless_suite`'s message about signing.
+    let suite = any_suite(suite).map_err(js_error)?;
     let account = hd_level(account, "account")?;
     let index = hd_level(index, "index")?;
     let mut out = [0u8; pqhybridsign_abi::MASTER_SEED_LEN];

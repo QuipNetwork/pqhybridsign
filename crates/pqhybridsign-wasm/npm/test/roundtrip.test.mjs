@@ -247,7 +247,9 @@ test("hybridLeaf reaches the core KATs and feeds keygenFromSeed", async () => {
 });
 
 test("hybridLeaf refuses stateful suites, bad levels and bad phrases", async () => {
-  await assert.rejects(() => pqhs.hybridLeaf("ED-SH", LEGAL));
+  await assert.rejects(() => pqhs.hybridLeaf("ED-SH", LEGAL), /does not accept this suite/);
+  await assert.rejects(() => pqhs.hybridLeaf("SR-SH", LEGAL), /does not accept this suite/);
+  await assert.rejects(() => pqhs.hybridLeaf("XX-YY", LEGAL), /unknown suite/);
   for (const bad of [-1, 2 ** 31, 2 ** 32 + 1, 1.5, Number.NaN]) {
     await assert.rejects(() => pqhs.hybridLeaf("SR-FN-512", LEGAL, null, bad), /account/);
     await assert.rejects(() => pqhs.hybridLeaf("SR-FN-512", LEGAL, null, 0, bad), /index/);
