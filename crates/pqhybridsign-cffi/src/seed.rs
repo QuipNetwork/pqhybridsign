@@ -8,9 +8,10 @@ use pqhybridsign_abi::{AbiError, CHAIN_CODE_LEN, MASTER_SEED_LEN};
 
 use crate::error::{code_of, PQHS_ERR_BAD_LENGTH, PQHS_OK};
 use crate::ffi::{borrow_slice, borrow_slice_mut, guard};
+use crate::suite::suite_from_code;
 
 /// Width in bytes of a master seed, everywhere one crosses this boundary:
-/// [`pqhs_master_seed_from_mnemonic`]'s `out`,
+/// [`pqhs_master_seed_from_mnemonic`]'s and [`pqhs_hybrid_leaf`]'s `out`,
 /// [`pqhs_derive_hard_junction`]'s `parent` and `out`, and
 /// [`pqhs_derive_hard_junction_path`]'s `parent` and `out`.
 ///
@@ -152,6 +153,78 @@ pub unsafe extern "C" fn pqhs_master_seed_from_mnemonic(
             Err(e) => return e,
         };
         match pqhybridsign_abi::master_seed_from_mnemonic(phrase, password, out) {
+            Ok(()) => PQHS_OK,
+            Err(e) => code_of(e),
+        }
+    })
+}
+
+/// The `PQHS_MASTER_SEED_LEN`-byte master seed of `suite`'s key for a
+/// recovery phrase, by QUIP HD v1: standard BIP-39 over the phrase text,
+/// then the hardened path `m / 0x514E' / alg' / 20049' / account' / index'`
+/// at the suite's algorithm level (ED-ML-44 `0x100`, ED-FN-512 `0x200`,
+/// SR-ML-44 `0x300`, SR-FN-512 `0x400`). Pass `out` to
+/// `pqhs_keygen_from_seed` with the same `suite`.
+///
+/// This is not [`pqhs_master_seed_from_mnemonic`], which is Substrate's
+/// derivation: the same phrase gives a different key through the two.
+///
+/// `phrase` is a required NUL-terminated C string; whitespace runs collapse
+/// and the text is NFKD-normalized. `passphrase` is the BIP-39 passphrase,
+/// NFKD-normalized; a null `passphrase` is the empty string.
+///
+/// `out` holds secret material. Wipe it when finished.
+///
+/// # Errors
+///
+/// `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+/// `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH and SR-SH, which have no
+/// QUIP HD level. `PQHS_ERR_HD_INDEX_OUT_OF_RANGE` if `account` or `index`
+/// is `2^31` or more. `PQHS_ERR_INVALID_MNEMONIC` if `phrase` (or a non-null
+/// `passphrase`) is not valid UTF-8, or `phrase` is not a valid English
+/// BIP39 mnemonic. `PQHS_ERR_BAD_LENGTH` if `out_len` is not
+/// `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_NULL_POINTER` if `phrase` is null, or
+/// if `out` is null while `out_len` is nonzero.
+///
+/// # Safety
+///
+/// `phrase` and `passphrase`, if non-null, must each point at a byte
+/// sequence valid for reads up to and including its first NUL byte, for the
+/// duration of this call. `out`, if non-null, must be valid for a write of
+/// exactly `out_len` bytes for the duration of this call, and must not be
+/// aliased by another live pointer.
+#[no_mangle]
+pub unsafe extern "C" fn pqhs_hybrid_leaf(
+    suite: u8,
+    phrase: *const c_char,
+    passphrase: *const c_char,
+    account: u32,
+    index: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> c_int {
+    guard(move || {
+        let suite = match suite_from_code(suite) {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let phrase = match unsafe { borrow_required_c_str(phrase) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let passphrase = match unsafe { borrow_optional_c_str(passphrase) } {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+        let out = match unsafe { borrow_slice_mut(out, out_len) } {
+            Ok(s) => s,
+            Err(e) => return e,
+        };
+        let out = match exact_mut::<MASTER_SEED_LEN>(out) {
+            Ok(a) => a,
+            Err(e) => return e,
+        };
+        match pqhybridsign_abi::hybrid_leaf(suite, phrase, passphrase, account, index, out) {
             Ok(()) => PQHS_OK,
             Err(e) => code_of(e),
         }

@@ -22,7 +22,7 @@
  * --- Every entry point returns an error code ---
  *
  * `0` (PQHS_OK) is success. A nonzero return is one of the PQHS_ERR_*
- * constants below: 1..=21 mirror the Rust `pqhybridsign_abi::AbiError`
+ * constants below: 1..=24 mirror the Rust `pqhybridsign_abi::AbiError`
  * codes one for one, and 100 and above are this binding's own codes for
  * situations that only exist at a raw-pointer boundary. pqhs_error_message
  * turns any of them into a human-readable string. pqhs_verify is the one
@@ -334,6 +334,20 @@
 #define PQHS_ERR_INVALID_PROOF 22
 
 /**
+ * A QUIP HD account or index passed to [`crate::pqhs_hybrid_leaf`] was
+ * `2^31` or more: every level is hardened, so a level names the child
+ * before the `2^31` offset. Mirrors `AbiError::HdIndexOutOfRange`.
+ */
+#define PQHS_ERR_HD_INDEX_OUT_OF_RANGE 23
+
+/**
+ * A QUIP HD seed was shorter than 16 bytes. No entry point of this library
+ * returns it today; the code mirrors `AbiError::HdSeedTooShort` so every
+ * ABI code has a constant.
+ */
+#define PQHS_ERR_HD_SEED_TOO_SHORT 24
+
+/**
  * A required pointer argument was null while its paired length was
  * nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
  * raw pointer, so it has no code for a null one. A null pointer paired
@@ -364,7 +378,7 @@
 
 /**
  * Width in bytes of a master seed, everywhere one crosses this boundary:
- * [`pqhs_master_seed_from_mnemonic`]'s `out`,
+ * [`pqhs_master_seed_from_mnemonic`]'s and [`pqhs_hybrid_leaf`]'s `out`,
  * [`pqhs_derive_hard_junction`]'s `parent` and `out`, and
  * [`pqhs_derive_hard_junction_path`]'s `parent` and `out`.
  *
@@ -803,6 +817,50 @@ int pqhs_master_seed_from_mnemonic(const char *phrase,
                                    const char *password,
                                    uint8_t *out,
                                    size_t out_len);
+
+/**
+ * The `PQHS_MASTER_SEED_LEN`-byte master seed of `suite`'s key for a
+ * recovery phrase, by QUIP HD v1: standard BIP-39 over the phrase text,
+ * then the hardened path `m / 0x514E' / alg' / 20049' / account' / index'`
+ * at the suite's algorithm level (ED-ML-44 `0x100`, ED-FN-512 `0x200`,
+ * SR-ML-44 `0x300`, SR-FN-512 `0x400`). Pass `out` to
+ * `pqhs_keygen_from_seed` with the same `suite`.
+ *
+ * This is not [`pqhs_master_seed_from_mnemonic`], which is Substrate's
+ * derivation: the same phrase gives a different key through the two.
+ *
+ * `phrase` is a required NUL-terminated C string; whitespace runs collapse
+ * and the text is NFKD-normalized. `passphrase` is the BIP-39 passphrase,
+ * NFKD-normalized; a null `passphrase` is the empty string.
+ *
+ * `out` holds secret material. Wipe it when finished.
+ *
+ * # Errors
+ *
+ * `PQHS_ERR_INVALID_SUITE` if `suite` is not `1..=6`.
+ * `PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE` for ED-SH and SR-SH, which have no
+ * QUIP HD level. `PQHS_ERR_HD_INDEX_OUT_OF_RANGE` if `account` or `index`
+ * is `2^31` or more. `PQHS_ERR_INVALID_MNEMONIC` if `phrase` (or a non-null
+ * `passphrase`) is not valid UTF-8, or `phrase` is not a valid English
+ * BIP39 mnemonic. `PQHS_ERR_BAD_LENGTH` if `out_len` is not
+ * `PQHS_MASTER_SEED_LEN`. `PQHS_ERR_NULL_POINTER` if `phrase` is null, or
+ * if `out` is null while `out_len` is nonzero.
+ *
+ * # Safety
+ *
+ * `phrase` and `passphrase`, if non-null, must each point at a byte
+ * sequence valid for reads up to and including its first NUL byte, for the
+ * duration of this call. `out`, if non-null, must be valid for a write of
+ * exactly `out_len` bytes for the duration of this call, and must not be
+ * aliased by another live pointer.
+ */
+int pqhs_hybrid_leaf(uint8_t suite,
+                     const char *phrase,
+                     const char *passphrase,
+                     uint32_t account,
+                     uint32_t index,
+                     uint8_t *out,
+                     size_t out_len);
 
 /**
  * Derive a hard-junction child master seed.
