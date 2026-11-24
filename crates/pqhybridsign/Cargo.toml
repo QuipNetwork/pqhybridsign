@@ -92,6 +92,12 @@ alloc = []
 # itself, because only this feature wipes a heap-allocated buffer (the
 # PBKDF2 salt); the plain `alloc` feature never touches `zeroize` at all.
 mnemonic = ["alloc", "dep:bip39", "dep:pbkdf2", "dep:hmac", "zeroize/alloc"]
+# QUIP HD v1 (`quip_hd`): standard BIP-39 seeds and hardened HMAC-SHA512
+# derivation, as the QUIP EVM SDK's `hd.ts`. Off by default. `bip39/alloc`
+# turns on `bip39`'s NFKD passphrase normalization (via
+# `unicode-normalization`), which standard BIP-39 requires and `hd.ts`'s
+# `@scure/bip39` performs; the `mnemonic` feature never needs it.
+quip-hd = ["alloc", "dep:bip39", "bip39/alloc", "dep:hmac", "zeroize/alloc"]
 # ED-SH/SR-SH stateful hash-based suites, on by default. This is the friendly
 # on-switch: it selects the 256s profile. To use another profile, disable
 # default features and name it (each profile turns the suites on by itself).

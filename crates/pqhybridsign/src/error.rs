@@ -89,11 +89,24 @@ pub enum Error {
     /// Nothing was recorded, so the same unit of budget is still available
     /// once the storage fault is repaired.
     BudgetStoreFailed,
-    /// A phrase passed to `mnemonic::master_seed_from_mnemonic` was not a
-    /// valid English BIP39 mnemonic: wrong word count, an unknown word, or a
-    /// bad checksum.
-    #[cfg(feature = "mnemonic")]
+    /// A phrase passed to `mnemonic::master_seed_from_mnemonic` or
+    /// `quip_hd::mnemonic_to_seed` was not a valid English BIP39 mnemonic:
+    /// wrong word count, an unknown word, or a bad checksum.
+    #[cfg(any(feature = "mnemonic", feature = "quip-hd"))]
     InvalidMnemonic,
+    /// A QUIP HD seed was shorter than `quip_hd::MIN_SEED_LEN` (16) bytes.
+    #[cfg(feature = "quip-hd")]
+    HdSeedTooShort {
+        /// The seed length actually supplied.
+        actual: usize,
+    },
+    /// A QUIP HD path level was `2^31` or more. Every level is hardened, so
+    /// a level names the child before the `2^31` offset is added.
+    #[cfg(feature = "quip-hd")]
+    HdIndexOutOfRange {
+        /// The level that was rejected.
+        index: u32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -147,8 +160,16 @@ impl fmt::Display for Error {
                 f,
                 "stateless budget store could not durably record; nothing consumed"
             ),
-            #[cfg(feature = "mnemonic")]
+            #[cfg(any(feature = "mnemonic", feature = "quip-hd"))]
             Self::InvalidMnemonic => write!(f, "not a valid English BIP39 mnemonic phrase"),
+            #[cfg(feature = "quip-hd")]
+            Self::HdSeedTooShort { actual } => {
+                write!(f, "QUIP HD seed must be at least 16 bytes, got {actual}")
+            }
+            #[cfg(feature = "quip-hd")]
+            Self::HdIndexOutOfRange { index } => {
+                write!(f, "QUIP HD level {index} is not below 2^31")
+            }
         }
     }
 }
