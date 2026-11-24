@@ -22,6 +22,16 @@
 //!
 //! Every level is an HMAC keyed by a secret chain code, so there is no public
 //! derivation and nothing like an xpub.
+//!
+//! # Hybrid keys from a phrase
+//!
+//! [`hybrid_leaf`] derives one 32-byte leaf per hybrid suite, at the suite's
+//! registered algorithm level ([`HybridSuite::algorithm`]: `0x100` to
+//! `0x400`). The leaf is the suite's master seed: pass it to the suite's
+//! `keypair_from_seed`, whose HKDF split (specification section 9) separates
+//! the classical and post-quantum halves. Suites are therefore separated
+//! twice, by the algorithm level and by the suite label in the HKDF `info`,
+//! and no step uses a classical secret scalar.
 
 use crate::error::{Error, Result};
 use alloc::string::String;
@@ -253,6 +263,76 @@ pub fn mnemonic_to_seed(phrase: &str, passphrase: &str) -> Result<Zeroizing<[u8;
     result
 }
 
+/// QUIP HD algorithm level of H1, EdMl44 (ed25519 + ML-DSA-44).
+pub const ALGORITHM_ED_ML44: u32 = 0x100;
+/// QUIP HD algorithm level of H2, EdFn512 (ed25519 + FN-DSA-512).
+pub const ALGORITHM_ED_FN512: u32 = 0x200;
+/// QUIP HD algorithm level of H3, SrMl44 (sr25519 + ML-DSA-44).
+pub const ALGORITHM_SR_ML44: u32 = 0x300;
+/// QUIP HD algorithm level of H4, SrFn512 (sr25519 + FN-DSA-512).
+pub const ALGORITHM_SR_FN512: u32 = 0x400;
+
+/// A stateless hybrid suite with a registered QUIP HD algorithm level.
+///
+/// `0x0500` to `0x0FFF` are reserved for future hybrid suites, and the low
+/// byte of each suite's level is reserved to that suite. The stateful
+/// SHRINCS suites have no QUIP HD hybrid level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HybridSuite {
+    /// H1: ed25519 + ML-DSA-44 ([`crate::EdMl44`]).
+    EdMl44,
+    /// H2: ed25519 + FN-DSA-512 ([`crate::EdFn512`]).
+    EdFn512,
+    /// H3: sr25519 + ML-DSA-44 ([`crate::SrMl44`]).
+    SrMl44,
+    /// H4: sr25519 + FN-DSA-512 ([`crate::SrFn512`]).
+    SrFn512,
+}
+
+impl HybridSuite {
+    /// The four suites, H1 to H4.
+    pub const ALL: [Self; 4] = [Self::EdMl44, Self::EdFn512, Self::SrMl44, Self::SrFn512];
+
+    /// The suite's QUIP HD algorithm level.
+    pub const fn algorithm(self) -> u32 {
+        match self {
+            Self::EdMl44 => ALGORITHM_ED_ML44,
+            Self::EdFn512 => ALGORITHM_ED_FN512,
+            Self::SrMl44 => ALGORITHM_SR_ML44,
+            Self::SrFn512 => ALGORITHM_SR_FN512,
+        }
+    }
+}
+
+/// The 32-byte master seed of `suite`'s key for `phrase` and `passphrase`,
+/// at `m / 0x514E' / suite' / 20049' / account' / index'`.
+///
+/// Feed it to the suite's `keypair_from_seed` (`composite::keypair_from_seed`
+/// for EdMl44 and SrMl44, `composite_delta::keypair_from_seed` for EdFn512
+/// and SrFn512). The phrase is normalized and validated as in
+/// [`mnemonic_to_seed`]; the passphrase is the BIP-39 passphrase.
+///
+/// # Errors
+///
+/// [`Error::HdIndexOutOfRange`] when `account` or `index` is `2^31` or more
+/// (checked before the PBKDF2 work); [`Error::InvalidMnemonic`] when the
+/// phrase is not a valid English BIP-39 mnemonic.
+pub fn hybrid_leaf(
+    suite: HybridSuite,
+    phrase: &str,
+    passphrase: &str,
+    account: u32,
+    index: u32,
+) -> Result<Zeroizing<[u8; 32]>> {
+    for level in [account, index] {
+        if level >= HARDENED_OFFSET {
+            return Err(Error::HdIndexOutOfRange { index: level });
+        }
+    }
+    let seed = mnemonic_to_seed(phrase, passphrase)?;
+    derive_quip_seed(&*seed, &QuipHdPath::new(suite.algorithm(), account, index))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,5 +520,277 @@ mod tests {
     fn a_node_does_not_print_its_secrets() {
         let node = master_node(SEED).expect("seed");
         assert_eq!(format!("{node:?}"), "HdNode(<secret>)");
+    }
+
+    const LEGAL: &str =
+        "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    const BOTTOM: &str = "bottom drive obey lake curtain smoke basket hold race lonely fit walk";
+
+    /// Each suite's leaf, cross-checked against an independent standard-library
+    /// Python implementation (hashlib PBKDF2 and HMAC, unicodedata NFKD).
+    #[test]
+    fn hybrid_leaves_match_the_independent_implementation() {
+        // (suite, phrase, passphrase, account, index, leaf)
+        let kats: [(HybridSuite, &str, &str, u32, u32, &str); 20] = [
+            (
+                HybridSuite::EdMl44,
+                LEGAL,
+                "",
+                0,
+                0,
+                "f5f4703d2e6926a78e1ee7fd916fcbd17f2b1652b5bfbac71f917a1fad5c869f",
+            ),
+            (
+                HybridSuite::EdMl44,
+                LEGAL,
+                "",
+                1,
+                0,
+                "b277845d8dc9429abcd9c992ed309ee76adfb0378f2a89e6af2840def2817115",
+            ),
+            (
+                HybridSuite::EdMl44,
+                LEGAL,
+                "",
+                0,
+                7,
+                "351d50abc053fdd8d7728697f4522868099d0af299d9456fd840d180b6ad08db",
+            ),
+            (
+                HybridSuite::EdMl44,
+                LEGAL,
+                "caf\u{e9}",
+                0,
+                0,
+                "9fa6f1d6478021bb38ada9756d303ed72f17a3fc017bf2c1d3946a8a71807789",
+            ),
+            (
+                HybridSuite::EdMl44,
+                BOTTOM,
+                "",
+                0,
+                0,
+                "c5d99faf109f40a5c342a5e8a663c73bdb9cb01bc583a1ecdd582210917b85c3",
+            ),
+            (
+                HybridSuite::EdFn512,
+                LEGAL,
+                "",
+                0,
+                0,
+                "ffca289f66e2473a3353d7f726f2bc45ec1d488570f78737361bae455b69a92c",
+            ),
+            (
+                HybridSuite::EdFn512,
+                LEGAL,
+                "",
+                1,
+                0,
+                "1db93189366b4d4d3c4e215fc89d0d3c5ffc5e9fb0158cdfdc1ee1db54583fa7",
+            ),
+            (
+                HybridSuite::EdFn512,
+                LEGAL,
+                "",
+                0,
+                7,
+                "f1f3f776f38f1cf7e7a6ce0e8a521984ff96e9d1b975ab4cd73af5b67eda2bac",
+            ),
+            (
+                HybridSuite::EdFn512,
+                LEGAL,
+                "caf\u{e9}",
+                0,
+                0,
+                "c5e19e1bd64bbd1cb314fd683660acd57dbac3ef84b552da25204e4efa45093f",
+            ),
+            (
+                HybridSuite::EdFn512,
+                BOTTOM,
+                "",
+                0,
+                0,
+                "352502186339d1e627ab78a1b09b8178adea8557ae0aa3871816254d8419a53d",
+            ),
+            (
+                HybridSuite::SrMl44,
+                LEGAL,
+                "",
+                0,
+                0,
+                "e76268538ea1d8aa6553daa3c559ea8e25102b5e7a228d1e6635f1af145bbcda",
+            ),
+            (
+                HybridSuite::SrMl44,
+                LEGAL,
+                "",
+                1,
+                0,
+                "61afc473cf69cac2dbebe9a9bc6acf3d53b487c4c4f2a2c8280a27ad2a9d61db",
+            ),
+            (
+                HybridSuite::SrMl44,
+                LEGAL,
+                "",
+                0,
+                7,
+                "93105fa5aa8beee85281df80ac6a53fec6e3aaaa440d62db657f13398d1cbcf8",
+            ),
+            (
+                HybridSuite::SrMl44,
+                LEGAL,
+                "caf\u{e9}",
+                0,
+                0,
+                "df28aacf5dba6594e88e7552a9d4b744b62949628ed8e30eecf06ae658df7a17",
+            ),
+            (
+                HybridSuite::SrMl44,
+                BOTTOM,
+                "",
+                0,
+                0,
+                "82530d8ece916281362a2a817c04e0eefc2764a72124de51c29f33523ef26096",
+            ),
+            (
+                HybridSuite::SrFn512,
+                LEGAL,
+                "",
+                0,
+                0,
+                "6e1129fa46fceba24607c5b056e9a327d91b1390783c40786d86d405b0ed4dce",
+            ),
+            (
+                HybridSuite::SrFn512,
+                LEGAL,
+                "",
+                1,
+                0,
+                "27e3e9e7815d8071d6d92e3c2df0411ad664923d04527d0958a41f8abc1059ce",
+            ),
+            (
+                HybridSuite::SrFn512,
+                LEGAL,
+                "",
+                0,
+                7,
+                "9a50171dc4a2349ee7fa3aa2efb139f7e7236b8f4572461b957359f92cad77f4",
+            ),
+            (
+                HybridSuite::SrFn512,
+                LEGAL,
+                "caf\u{e9}",
+                0,
+                0,
+                "1e21eadc5b266e0317077617731cee8767f2b29170f6c20568992a0d1e433c70",
+            ),
+            (
+                HybridSuite::SrFn512,
+                BOTTOM,
+                "",
+                0,
+                0,
+                "e3c7b2985b2fec5da49f7378a64df009babf2b815f5352bc5671c91425b5f4b2",
+            ),
+        ];
+        for (suite, phrase, passphrase, account, index, want) in kats {
+            let leaf = hybrid_leaf(suite, phrase, passphrase, account, index).expect("leaf");
+            assert_eq!(
+                hex(&*leaf),
+                want,
+                "{suite:?} {passphrase:?} {account}/{index}"
+            );
+        }
+    }
+
+    #[test]
+    fn suite_levels_are_registered_and_distinct() {
+        let levels = HybridSuite::ALL.map(HybridSuite::algorithm);
+        assert_eq!(levels, [0x100, 0x200, 0x300, 0x400]);
+        let leaves =
+            HybridSuite::ALL.map(|suite| *hybrid_leaf(suite, LEGAL, "", 0, 0).expect("leaf"));
+        for (i, a) in leaves.iter().enumerate() {
+            for b in &leaves[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    /// The leaf is `derive_quip_seed` over the BIP-39 seed at the suite level.
+    #[test]
+    fn a_hybrid_leaf_is_the_quip_hd_leaf_at_the_suite_level() {
+        let seed = mnemonic_to_seed(LEGAL, "pw").expect("valid");
+        for suite in HybridSuite::ALL {
+            let want =
+                derive_quip_seed(&*seed, &QuipHdPath::new(suite.algorithm(), 3, 9)).expect("leaf");
+            assert_eq!(*hybrid_leaf(suite, LEGAL, "pw", 3, 9).expect("leaf"), *want);
+        }
+    }
+
+    #[test]
+    fn whitespace_variants_give_the_same_leaf() {
+        let dirty =
+            "  legal winner\tthank year wave sausage worth useful legal winner thank\u{a0}yellow\n";
+        for suite in HybridSuite::ALL {
+            assert_eq!(
+                *hybrid_leaf(suite, dirty, "", 0, 0).expect("leaf"),
+                *hybrid_leaf(suite, LEGAL, "", 0, 0).expect("leaf")
+            );
+        }
+    }
+
+    #[test]
+    fn hybrid_leaf_refuses_out_of_range_levels_and_bad_phrases() {
+        for suite in HybridSuite::ALL {
+            assert_eq!(
+                hybrid_leaf(suite, LEGAL, "", HARDENED_OFFSET, 0).err(),
+                Some(Error::HdIndexOutOfRange {
+                    index: HARDENED_OFFSET
+                })
+            );
+            assert_eq!(
+                hybrid_leaf(suite, LEGAL, "", 0, u32::MAX).err(),
+                Some(Error::HdIndexOutOfRange { index: u32::MAX })
+            );
+            assert!(
+                hybrid_leaf(suite, LEGAL, "", HARDENED_OFFSET - 1, HARDENED_OFFSET - 1).is_ok()
+            );
+            assert_eq!(
+                hybrid_leaf(suite, "legal winner", "", 0, 0).err(),
+                Some(Error::InvalidMnemonic)
+            );
+        }
+    }
+
+    /// The leaf feeds the suite's existing keygen, and each suite gets its own
+    /// key from one phrase.
+    #[test]
+    fn the_leaf_feeds_keypair_from_seed() {
+        use crate::suite::{DeltaSuite, Suite};
+        use crate::{composite, composite_delta, EdFn512, EdMl44, SrFn512, SrMl44};
+        fn fixed<S: Suite>(leaf: &[u8; 32]) -> Vec<u8> {
+            let mut sk = alloc::vec![0u8; S::SECRET_KEY_LEN];
+            let mut pk = alloc::vec![0u8; S::PUBLIC_KEY_LEN];
+            composite::keypair_from_seed::<S>(leaf, &mut sk, &mut pk).expect("keypair");
+            pk
+        }
+        fn delta<S: DeltaSuite>(leaf: &[u8; 32]) -> Vec<u8> {
+            let mut sk = alloc::vec![0u8; S::SECRET_KEY_LEN];
+            let mut pk = alloc::vec![0u8; S::PUBLIC_KEY_LEN];
+            composite_delta::keypair_from_seed::<S>(leaf, &mut sk, &mut pk).expect("keypair");
+            pk
+        }
+        let leaf = |suite| hybrid_leaf(suite, LEGAL, "", 0, 0).expect("leaf");
+        let h1 = fixed::<EdMl44>(&leaf(HybridSuite::EdMl44));
+        let h3 = fixed::<SrMl44>(&leaf(HybridSuite::SrMl44));
+        let h2 = delta::<EdFn512>(&leaf(HybridSuite::EdFn512));
+        let h4 = delta::<SrFn512>(&leaf(HybridSuite::SrFn512));
+        // The classical halves (first 32 bytes) differ across suites.
+        let classical = [&h1[..32], &h2[..32], &h3[..32], &h4[..32]];
+        for (i, a) in classical.iter().enumerate() {
+            for b in &classical[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }
