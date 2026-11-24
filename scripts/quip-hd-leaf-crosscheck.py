@@ -34,7 +34,42 @@ def hybrid_leaf(suite: str, phrase: str, passphrase: str, account: int, index: i
     return leaf(bip39_seed(phrase, passphrase), [0x514E, SUITES[suite], 20049, account, index])
 
 
+def hard_junction(parent: bytes, chain_code: bytes) -> bytes:
+    """pqhybridsign derive::derive_hard_junction: HKDF-SHA256, salt "hybrid-sig",
+    info "junction/hard/" || chain_code, 32 bytes."""
+    prk = hmac.new(b"hybrid-sig", parent, hashlib.sha256).digest()
+    return hmac.new(prk, b"junction/hard/" + chain_code + b"\x01", hashlib.sha256).digest()
+
+
+def check_parity_file(path: str) -> int:
+    """Recompute every seed in tests/vectors/quip_hd_parity.json."""
+    import json
+
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    ids = {sid: info["algorithm"] for sid, info in data["suites"].items()}
+    checked = 0
+    for case in data["positive"]:
+        for sid, key in case["keys"].items():
+            if case.get("raw_seed") is not None:
+                seed = bytes.fromhex(case["raw_seed"])
+                for cc in case.get("junction_chain_codes", []):
+                    seed = hard_junction(seed, bytes.fromhex(cc))
+            else:
+                phrase = " ".join(case["phrase"].split())
+                seed = leaf(
+                    bip39_seed(phrase, case["passphrase"]),
+                    [0x514E, ids[sid], 20049, case["account"], case["index"]],
+                )
+            assert seed.hex() == key["seed"], (case["name"], sid)
+            checked += 1
+    return checked
+
+
 if __name__ == "__main__":
+    if len(sys.argv) == 2:
+        print(f"parity file: {check_parity_file(sys.argv[1])} seeds match")
+        sys.exit(0)
     # Sanity: the hd.test.ts regression leaves (experimental algorithm).
     s = b"QUIP HD v1 regression vector seed"
     assert leaf(s, [0x514E, 0x7FFFFFFF, 20049, 0, 0]).hex().startswith("e384e035")
