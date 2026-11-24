@@ -2,6 +2,85 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.1.1 (unreleased)
+
+Adds QUIP HD v1 behind a new, off-by-default `quip-hd` feature. With the
+feature off nothing changes. With it on, every existing key, signature,
+verification result and wire format is unchanged: QUIP HD only adds a way
+to derive a master seed from a recovery phrase.
+
+### Added
+
+- `quip_hd` (feature `quip-hd`): QUIP HD v1 as the QUIP EVM SDK's
+  `hd.ts` defines it. Standard BIP-39 (`mnemonic_to_seed`, with NFKD on the
+  phrase and the passphrase and hd.ts's whitespace rules), the master node
+  and hardened child derivation, `QuipHdPath` and `derive_quip_seed`. It
+  reproduces every `hd.test.ts` vector.
+- `quip_hd::hybrid_leaf(suite, phrase, passphrase, account, index)` and
+  `HybridSuite`: one 32-byte leaf per stateless suite at the registered
+  algorithm levels `0x100` (EdMl44), `0x200` (EdFn512), `0x300` (SrMl44) and
+  `0x400` (SrFn512). It is the suite's seed for `keypair_from_seed`. The
+  registry is in DESIGN.md, "QUIP HD v1".
+- `Error::HdIndexOutOfRange` and `Error::HdSeedTooShort` (feature-gated;
+  the enum is `#[non_exhaustive]`). `Error::InvalidMnemonic` now also exists
+  under `quip-hd`.
+- Bindings, through the ABI layer, which enables `quip-hd`:
+  - `pqhybridsign_abi::hybrid_leaf`, with `AbiError::HdIndexOutOfRange` (23)
+    and `AbiError::HdSeedTooShort` (24);
+  - C: `pqhs_hybrid_leaf`, with `PQHS_ERR_HD_INDEX_OUT_OF_RANGE` (23) and
+    `PQHS_ERR_HD_SEED_TOO_SHORT` (24);
+  - Python: `hybrid_leaf`, with `HdIndexOutOfRangeError` and
+    `HdSeedTooShortError`;
+  - JavaScript: `hybridLeaf`, whose account and index must be integers in
+    [0, 2^31).
+- `scripts/quip-hd-leaf-crosscheck.py`, a standard-library recomputation of
+  the leaf KATs.
+
+### Dependencies
+
+- `quip-hd` enables `bip39/alloc`, which brings `unicode-normalization`
+  0.1.26 and `tinyvec` 1.13.3. BIP-39 requires NFKD, and `@scure/bip39`
+  applies it. The `mnemonic` feature does not use them.
+
+### Behaviour changes for the Quip Substrate profile
+
+These come with the SDK fork and the validator adopting this release (QUIP
+HD v1 as the Substrate key derivation), not from this crate alone:
+
+- Phrase-derived hybrid keys change. A recovery phrase now derives through
+  QUIP HD v1, not Substrate's entropy-based seed with sr25519/ed25519 hard
+  derivation. Existing phrase keystores re-derive to different keys.
+- For hybrid suites, `from_phrase(p).derive(//1) != from_string("p//1")`.
+  Junctions on a phrase are QUIP HD levels, resolved inside
+  `from_string_with_seed`, while `Pair::derive` applies the HKDF junction to
+  a seed.
+- `0x…//j` (a raw seed with junctions) gives a different key. The junction is
+  now `derive_hard_junction` (HKDF), not sr25519/ed25519 hard derivation.
+- `0X` (uppercase) is rejected as a seed prefix.
+- Non-canonical numeric junctions (`//01`, `//+1`, `//2147483648` and
+  above) are rejected, rather than silently selecting another account.
+- `AuthorityPair::from_string` for BABE and GRANDPA forwards to the hybrid
+  pair's `from_string_with_seed`, so an app-crypto key and its inner pair
+  agree on SURIs with junctions.
+
+## 0.1.0
+
+### Changed
+
+- `hashsigs-rs` moves from `0.2.1-rc6` to `0.2.1`. That changes the SHRINCS
+  key and signature bytes relative to rc6, so EdSh and SrSh keys and
+  signatures from 0.0.0 do not carry over. The four per-profile fixtures
+  and the stateful golden vectors `h5` and `h6` are regenerated, as is the
+  wasm stored-public-key fixture. Their suite, profile, label, master seed,
+  message and context fields are unchanged. The stateless suites EdMl44
+  through SrFn512 do not change.
+- Every version field is 0.1.0.
+
+### Added
+
+- The ci-templates dependency gate, with a cooldown allowlist entry for
+  `hashsigs-rs` 0.2.1.
+
 ## 0.0.0
 
 This is the first stable release. It carries the two audit fixes below and
