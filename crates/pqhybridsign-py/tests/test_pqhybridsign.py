@@ -898,6 +898,10 @@ def test_hybrid_leaf_refusals():
         phs.hybrid_leaf(phs.Suite.SR_FN_512, "legal winner")
     with pytest.raises(OverflowError):
         phs.hybrid_leaf(phs.Suite.SR_FN_512, LEGAL, index=-1)
+    with pytest.raises(OverflowError):
+        phs.hybrid_leaf(phs.Suite.SR_FN_512, LEGAL, account=2**32)
+    with pytest.raises(phs.HdIndexOutOfRangeError):
+        phs.hybrid_leaf(phs.Suite.SR_FN_512, LEGAL, index=2**32 - 1)
 
 
 def test_master_seed_from_mnemonic_rejects_an_invalid_phrase():

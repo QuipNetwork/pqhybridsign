@@ -481,8 +481,10 @@ def hybrid_leaf(
     derivation): the same phrase gives a different key through the two.
 
     Raises `WrongEntryPointForSuiteError` for ED_SH and SR_SH,
-    `HdIndexOutOfRangeError` if `account` or `index` is 2**31 or more, and
-    `InvalidMnemonicError` for an invalid phrase."""
+    `HdIndexOutOfRangeError` if `account` or `index` is in [2**31, 2**32),
+    `OverflowError` if `account` or `index` is negative or 2**32 or more
+    (it does not fit the 32-bit level), and `InvalidMnemonicError` for an
+    invalid phrase."""
 
 def derive_hard_junction(
     parent_master: ReadableBuffer, chain_code: ReadableBuffer

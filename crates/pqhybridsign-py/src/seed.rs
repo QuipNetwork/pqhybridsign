@@ -67,8 +67,9 @@ fn master_seed_from_mnemonic(
 /// `WrongEntryPointForSuiteError` for ED_SH and SR_SH, which have no QUIP HD
 /// level. `HdIndexOutOfRangeError` if `account` or `index` is `2**31` or
 /// more. `InvalidMnemonicError` if `phrase` is not a valid English BIP39
-/// mnemonic. `OverflowError` if `account` or `index` is negative or does not
-/// fit in 32 bits.
+/// mnemonic. `OverflowError` if `account` or `index` is negative or 2**32 or
+/// more: it does not fit the 32-bit level, so pyo3 refuses it before this
+/// function runs.
 #[pyfunction]
 #[pyo3(signature = (suite, phrase, passphrase=None, account=0, index=0))]
 fn hybrid_leaf(
