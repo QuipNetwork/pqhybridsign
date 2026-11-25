@@ -17,6 +17,9 @@ trap 'rm -rf "$work"' EXIT
 wasm-pack build --release --target web --out-dir "$work/web" --out-name pqhybridsign_wasm --no-pack >/dev/null
 wasm-pack build --release --target nodejs --out-dir "$work/node" --out-name pqhybridsign_wasm --no-pack >/dev/null
 
+# Ignore only the insignificant order of independent Wasm export properties.
+node scripts/normalize-types.mjs "$work/web/pqhybridsign_wasm.d.ts" "$work/node/pqhybridsign_wasm.d.ts"
+
 status=0
 if ! diff -u npm/types/pqhybridsign_wasm.web.d.ts "$work/web/pqhybridsign_wasm.d.ts"; then
     echo "npm/types/pqhybridsign_wasm.web.d.ts is stale; run scripts/regenerate-types.sh" >&2

@@ -11,8 +11,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ClassicalScheme::public_key_is_valid` for external admission; enforce it
   in stateful public-key constructors and on rotation targets. Generated
   keys, signatures and wire formats are unchanged. This narrows consensus
-  acceptance and requires coordinated activation in existing deployments;
-  see [the rollout notes](docs/qpa-01-rollout.md).
+  acceptance and requires coordinated activation in existing deployments.
 
 ### Validation
 
@@ -20,9 +19,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   profile. Cross-suite golden tests accept rejection during key admission
   and still test verification with an admissible classical key paired with
   the wrong PQ key.
-- Refresh the generated browser TypeScript declaration order and align the
-  Rust smoke example with the packaged `0.1.0` crate so artifact validation
-  exercises the fixed library.
+- Normalize generated TypeScript `InitOutput` property order across builds
+  so the npm declaration check detects API changes without failing on Wasm
+  export ordering. Add regression coverage for ordering and signature drift.
+- Align the Rust smoke example with the packaged `0.1.0` crate so artifact
+  validation exercises the fixed library.
 
 ## 0.0.0
 

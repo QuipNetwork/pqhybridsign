@@ -763,15 +763,26 @@ export function vrfVerify(suite: string, public_key: Uint8Array, input: Uint8Arr
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
-    readonly memory: WebAssembly.Memory;
+    readonly __externref_table_alloc: () => number;
+    readonly __externref_table_dealloc: (a: number) => void;
     readonly __wbg_get_keypair_publicKey: (a: number) => any;
     readonly __wbg_get_keypair_secretKey: (a: number) => any;
+    readonly __wbg_get_signstatefulresult_nextSecretKey: (a: number) => any;
+    readonly __wbg_get_signstatefulresult_signature: (a: number) => any;
     readonly __wbg_keypair_free: (a: number, b: number) => void;
     readonly __wbg_set_keypair_publicKey: (a: number, b: any) => void;
     readonly __wbg_set_keypair_secretKey: (a: number, b: any) => void;
+    readonly __wbg_set_signstatefulresult_nextSecretKey: (a: number, b: any) => void;
+    readonly __wbg_set_signstatefulresult_signature: (a: number, b: any) => void;
     readonly __wbg_signstatefulresult_free: (a: number, b: number) => void;
     readonly __wbg_statefulkey_free: (a: number, b: number) => void;
     readonly __wbg_vrfkey_free: (a: number, b: number) => void;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __wbindgen_externrefs: WebAssembly.Table;
+    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_malloc: (a: number, b: number) => number;
+    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_start: () => void;
     readonly adoptKey: (a: any, b: number, c: number) => [number, number];
     readonly deriveHardJunction: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly deriveHardJunctionPath: (a: number, b: number, c: any) => [number, number, number];
@@ -781,6 +792,7 @@ export interface InitOutput {
     readonly keygenFromSeed: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keygenStatefulFromSeed: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
     readonly masterSeedFromMnemonic: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly memory: WebAssembly.Memory;
     readonly profileName: () => [number, number];
     readonly publicKeyLen: (a: number, b: number) => [number, number, number];
     readonly secretKeyLen: (a: number, b: number) => [number, number, number];
@@ -806,18 +818,6 @@ export interface InitOutput {
     readonly vrfProveDeterministic: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly vrfVerify: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number];
     readonly vrfkey_prove: (a: number, b: any, c: number, d: number) => [number, number, number];
-    readonly __wbg_set_signstatefulresult_nextSecretKey: (a: number, b: any) => void;
-    readonly __wbg_set_signstatefulresult_signature: (a: number, b: any) => void;
-    readonly __wbg_get_signstatefulresult_nextSecretKey: (a: number) => any;
-    readonly __wbg_get_signstatefulresult_signature: (a: number) => any;
-    readonly __wbindgen_exn_store: (a: number) => void;
-    readonly __externref_table_alloc: () => number;
-    readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_start: () => void;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

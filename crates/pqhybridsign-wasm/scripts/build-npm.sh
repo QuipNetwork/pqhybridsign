@@ -30,6 +30,8 @@ mv -f "$pkg_tmp" npm/package.json
 wasm-pack build --release --target web --out-dir npm/web --out-name pqhybridsign_wasm --no-pack
 wasm-pack build --release --target nodejs --out-dir npm/node --out-name pqhybridsign_wasm --no-pack
 
+node scripts/normalize-types.mjs npm/web/pqhybridsign_wasm.d.ts npm/node/pqhybridsign_wasm.d.ts
+
 # wasm-pack writes its own package.json into each --out-dir; npm/package.json
 # (the hand-authored template, checked into git) is the one that ships. Each
 # subdirectory still needs its own minimal package.json, though: the web

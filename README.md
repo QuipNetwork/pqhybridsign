@@ -15,8 +15,7 @@ shipped. No cross-implementation test vectors exist yet. See
 Ed25519 suites reject small-order public keys during verification and key
 admission (QPA-01). Integrators should use
 `ClassicalScheme::public_key_is_valid` when registering external Ed25519
-keys. See [the validation policy and upgrade notes](docs/qpa-01-rollout.md)
-for affected APIs and consensus compatibility.
+keys.
 
 ## Features
 

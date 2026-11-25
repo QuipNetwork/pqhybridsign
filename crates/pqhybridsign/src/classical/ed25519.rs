@@ -30,7 +30,7 @@ use zeroize::Zeroize;
 /// implementations of these hybrid suites must reject small-order public
 /// keys. Deployments upgrading an existing consensus system must coordinate
 /// activation of this stricter acceptance rule and account for historical
-/// verification. See `docs/qpa-01-rollout.md` in the repository.
+/// verification.
 ///
 /// `tests/ed25519_strict.rs` pins rejection of weak keys and continued
 /// acceptance of honestly generated signatures with hard-failing assertions.

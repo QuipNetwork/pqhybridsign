@@ -100,3 +100,10 @@ continuous integration) regenerates the wasm-bindgen TypeScript definitions
 and fails if they differ from the checked-in copies under `types/`. Run
 `scripts/regenerate-types.sh` and commit the result whenever
 `src/lib.rs`'s public surface changes.
+
+All three scripts use Node.js to sort the independent `InitOutput` properties
+before writing or comparing declarations. Wasm export order can differ
+between local and CI builds, so an ordering-only difference is harmless.
+Property names and types, other declarations, comments, and overload order
+remain checked; an unexpected `InitOutput` format fails for review. The npm
+tests cover both ordering differences and detection of actual API changes.

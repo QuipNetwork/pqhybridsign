@@ -175,7 +175,7 @@ substituting a strict verifier can still introduce other disagreements.
 
 Key derivation, signing, suite labels and wire formats are unchanged. The
 weak-key rejection is an acceptance change that requires coordinated
-activation in an existing consensus system; see [the rollout notes](docs/qpa-01-rollout.md).
+activation in an existing consensus system.
 Tests assert weak-key rejection and honest signature compatibility, and fail
 on regressions. Dependency behavior is not a reason to waive this policy.
 
