@@ -15,43 +15,9 @@
         unreachable_pub
     )
 )]
-//! Strict RFC 8032 ed25519 verification tests, checked independently of
-//! `ed25519-zebra`.
-//!
-//! This crate's ed25519 component signs per RFC 8032 and verifies per
-//! [ZIP-215] (`ed25519-zebra`). See the rustdoc on
-//! `pqhybridsign::classical::Ed25519` for what that means and why. This file
-//! carries the evidence for both halves of that claim, and it draws a hard
-//! line between two kinds of test:
-//!
-//! * **Hard failures** (`mod own_outputs`, below): this crate's own signing
-//!   procedure produces canonical, non-small-order points and satisfies the
-//!   strict (cofactorless) verification equation, on top of satisfying
-//!   `ed25519-zebra`. That property is fully under this crate's control --
-//!   `derive` and `sign_deterministic` either keep producing strict-valid
-//!   output or they do not -- so a regression here is a real bug, and these
-//!   tests use ordinary `assert!` and are expected to fail the build if they
-//!   ever fail.
-//! * **Advisory warnings** (the rest of this file): whether a *given
-//!   adversarial* triple is accepted by `ed25519-zebra` and rejected by a
-//!   strict verifier is a property of `ed25519-zebra` and `curve25519-dalek`
-//!   internals that this crate does not own, and a dependency version bump
-//!   could shift it. These tests assert only that the pinned vectors parse;
-//!   the divergence verdict itself is reported, never asserted on. A
-//!   dependency upgrade that narrows or widens the ZIP-215/strict gap cannot
-//!   break the build here -- it can only change what gets printed.
-//!
-//!   Rust's test harness captures stdout *and* stderr for a passing test by
-//!   default (verified empirically against this toolchain), so a plain
-//!   `eprintln!` is invisible in a plain `cargo test` run. `support::warn`
-//!   works around that by writing straight to file descriptor 2 through
-//!   `/dev/stderr`, bypassing the harness's redirect, so these warnings
-//!   reach the terminal on a plain `cargo test` with no extra flag on Linux
-//!   and macOS (falling back to a captured `eprintln!`, needing
-//!   `--nocapture`, on platforms without `/dev/stderr`). See
-//!   `tests/support/mod.rs` for the mechanism.
-//!
-//! [ZIP-215]: https://zips.z.cash/zip-0215
+//! QPA-01: public-key admission and signature verification must reject
+//! small-order Ed25519 keys, while preserving the remaining ZIP-215 rules.
+//! All security verdicts are hard assertions, including the legacy vectors.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -60,7 +26,7 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use pqhybridsign::classical::Ed25519;
 use pqhybridsign::EdMl44;
 use pqhybridsign::{component::ClassicalScheme, composite, suite::Suite};
-use support::{strict, warn, weak_classical_forgery};
+use support::{strict, weak_public_keys};
 
 const LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
 
@@ -190,125 +156,167 @@ fn parse_vector(v: &NegativeVector) -> ([u8; 32], Vec<u8>, [u8; 64]) {
     (pk, msg, sig)
 }
 
-/// Advisory: the pinned negative vectors currently show a ZIP-215 / strict
-/// RFC 8032 divergence. This test always passes -- see the module doc for
-/// why -- but prints, per vector, exactly what diverged and what a
-/// consuming application should take away from it. See `support::warn` for
-/// how that reaches the terminal without `--nocapture`.
 #[test]
-fn zip215_negative_vectors_diverge_from_strict_rfc8032() {
+fn pinned_weak_key_vectors_are_rejected() {
     let vectors: Vec<NegativeVector> =
-        serde_json::from_str(include_str!("vectors/ed25519_zip215_negative.json"))
-            .expect("vectors must parse as JSON");
-    assert_eq!(
-        vectors.len(),
-        3,
-        "expected exactly 3 pinned ZIP-215/strict-RFC-8032 divergence vectors"
-    );
+        serde_json::from_str(include_str!("vectors/ed25519_zip215_negative.json")).unwrap();
+    assert_eq!(vectors.len(), 3);
+    for vector in vectors {
+        let (pk, msg, sig) = parse_vector(&vector);
+        // Control: this remains a valid ZIP-215 forgery; our additional key
+        // policy is what must reject it.
+        assert!(ed25519_zebra::VerificationKey::try_from(pk)
+            .unwrap()
+            .verify(&sig.into(), &msg)
+            .is_ok());
+        assert!(!Ed25519::public_key_is_valid(&pk), "{}", vector.description);
+        assert!(!bool::from(Ed25519::verify(&pk, &msg, LABEL, &sig)));
+    }
+}
 
-    for v in &vectors {
-        let (pk, msg, sig) = parse_vector(v);
-        let zebra_accepts = bool::from(Ed25519::verify(&pk, &msg, LABEL, &sig));
-        let outcome = strict::check(&pk, &msg, &sig);
-
-        if zebra_accepts && !outcome.strict_accepts() {
-            warn(&format!(
-                "WARNING [ed25519 ZIP-215 / strict RFC 8032 divergence]\n\
-                 \x20 what: {desc}\n\
-                 \x20 vector: pk={pk_hex} msg={msg_hex} sig={sig_hex}\n\
-                 \x20 this crate's `Ed25519::verify` (ed25519-zebra, ZIP-215): ACCEPTS\n\
-                 \x20 strict RFC 8032 (canonical encoding, non-small-order, cofactorless equation): REJECTS\n\
-                 \x20 breakdown: canonical={canonical} small_order={small_order} \
-                 cofactorless_equation_holds={cofactorless} cofactored_equation_holds={cofactored}\n\
-                 \x20 not just an order screen: even a verifier with no small-order check at all \
-                 (Go's crypto/ed25519 has none) would still reject this vector, because \
-                 cofactorless_equation_holds=false on its own.\n\
-                 \x20 consequence: a peer verifying the same bytes with ed25519-dalek's `verify_strict`, \
-                 Go's `crypto/ed25519`, or a common Solidity ed25519 port reaches the OPPOSITE verdict. \
-                 In a system where independent parties must agree on validity (an on-chain registry, a \
-                 consensus protocol), that disagreement is a chain split, not a rejected transaction.",
-                desc = v.description,
-                pk_hex = v.public_key_hex,
-                msg_hex = v.msg_hex,
-                sig_hex = v.signature_hex,
-                canonical = outcome.canonical,
-                small_order = outcome.small_order,
-                cofactorless = outcome.cofactorless_holds,
-                cofactored = outcome.cofactored_holds,
-            ));
-        } else {
-            warn(&format!(
-                "WARNING [ed25519 ZIP-215/strict-RFC-8032 divergence vector is stale]\n\
-                 \x20 what: {desc}\n\
-                 \x20 this vector no longer demonstrates the expected divergence \
-                 (zebra_accepts={zebra_accepts}, strict_accepts={strict_accepts}). A dependency \
-                 upgrade likely changed `ed25519-zebra` or `curve25519-dalek` decoding/acceptance \
-                 behavior. Regenerate tests/vectors/ed25519_zip215_negative.json: \
-                 `cargo test -p pqhybridsign --test generate_vectors -- --ignored --nocapture`.",
-                desc = v.description,
-                zebra_accepts = zebra_accepts,
-                strict_accepts = outcome.strict_accepts(),
-            ));
+#[test]
+fn all_small_order_keys_and_aliases_are_rejected_for_every_message() {
+    let mut sig = [0u8; 64];
+    sig[0] = 1; // R = identity, s = 0.
+    for pk in weak_public_keys() {
+        assert!(CompressedEdwardsY(pk)
+            .decompress()
+            .unwrap()
+            .is_small_order());
+        assert!(!Ed25519::public_key_is_valid(&pk));
+        for msg in [b"first".as_slice(), b"second".as_slice(), b""] {
+            assert!(ed25519_zebra::VerificationKey::try_from(pk)
+                .unwrap()
+                .verify(&sig.into(), msg)
+                .is_ok());
+            assert!(!bool::from(Ed25519::verify(&pk, msg, LABEL, &sig)));
         }
     }
 }
 
-/// Shows the ZIP-215 / strict RFC 8032 divergence survives composition to
-/// the EdMl44 (ed25519 + ML-DSA-44) composite level, not just the ed25519
-/// component in isolation.
-///
-/// Advisory, for the same reason as `zip215_negative_vectors_diverge_from_strict_rfc8032`:
-/// it depends on `ed25519-zebra` acceptance behavior this crate does not
-/// own.
 #[test]
-fn a_low_order_ed25519_half_splits_ed_ml44_verification() {
-    let master = [0x7bu8; 32];
-    let mut sk = vec![0u8; EdMl44::SECRET_KEY_LEN];
-    let mut pk = vec![0u8; EdMl44::PUBLIC_KEY_LEN];
-    composite::keypair_from_seed::<EdMl44>(&master, &mut sk, &mut pk).expect("keygen");
+fn malformed_keys_and_signatures_are_rejected() {
+    let (_, pk) = keypair(42);
+    let mut invalid = [0u8; 32];
+    invalid[0] = 2;
+    assert!(CompressedEdwardsY(invalid).decompress().is_none());
+    for key in [&invalid[..], &pk[..31], &[0u8; 33][..], &[]] {
+        assert!(!Ed25519::public_key_is_valid(key));
+        assert!(!bool::from(Ed25519::verify(key, b"", LABEL, &[0; 64])));
+    }
+    assert!(Ed25519::public_key_is_valid(&pk));
+    for sig in [&[0u8; 63][..], &[0u8; 65][..], &[]] {
+        assert!(!bool::from(Ed25519::verify(&pk, b"", LABEL, sig)));
+    }
+}
 
-    let msg = b"EdMl44 composite ZIP-215 divergence probe";
-    let ctx = b"";
-    let mut sig = vec![0u8; EdMl44::SIGNATURE_LEN];
-    composite::sign_deterministic::<EdMl44>(&sk, msg, ctx, b"nonce", &mut sig).expect("sign");
+#[test]
+fn other_zip215_key_encodings_remain_admissible() {
+    use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
+    let mixed = ED25519_BASEPOINT_POINT + EIGHT_TORSION[1];
+    assert!(!mixed.is_torsion_free());
+    assert!(Ed25519::public_key_is_valid(&mixed.compress().to_bytes()));
+    let mut checked = 0;
+    for y in 2..19 {
+        let mut canonical = [0u8; 32];
+        canonical[0] = y;
+        let Some(point) = CompressedEdwardsY(canonical).decompress() else {
+            continue;
+        };
+        if point.is_small_order() {
+            continue;
+        }
+        for sign in [0, 0x80] {
+            canonical[31] = sign;
+            let mut alias = [0xff; 32];
+            alias[0] = 0xed + y;
+            alias[31] = 0x7f | sign;
+            assert_eq!(
+                CompressedEdwardsY(alias).decompress(),
+                CompressedEdwardsY(canonical).decompress()
+            );
+            assert!(Ed25519::public_key_is_valid(&alias));
+            checked += 1;
+        }
+    }
+    assert!(checked > 0);
+}
 
-    // Splice the weak classical forgery in for the real ed25519 half. The
-    // post-quantum half stays an honest ML-DSA-44 signature over the same
-    // M'; composite verification is `classical_ok & pq_ok`, so this alone
-    // decides whether the whole composite verifies.
-    let (weak_pk, weak_sig) = weak_classical_forgery();
-    let c_pk_len = <<EdMl44 as Suite>::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
-    let split = EdMl44::SPLIT;
-    pk[..c_pk_len].copy_from_slice(&weak_pk);
-    sig[..split].copy_from_slice(&weak_sig);
+#[test]
+fn cofactored_verification_and_small_order_r_remain_supported() {
+    use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
+    use curve25519_dalek::scalar::Scalar;
+    use sha2::{Digest, Sha512};
+    let msg = b"QPA-01 restricts the public key, not R";
+    for point in [
+        ED25519_BASEPOINT_POINT,
+        ED25519_BASEPOINT_POINT + EIGHT_TORSION[1],
+    ] {
+        let pk = point.compress().to_bytes();
+        // Keep non-canonical R encodings and the scalar bound pinned too.
+        for r in weak_public_keys() {
+            // Known prime-order secret = 1, nonce = 0. R has small order.
+            let mut sig = [0u8; 64];
+            sig[..32].copy_from_slice(&r);
+            let challenge = Scalar::from_hash(
+                Sha512::new()
+                    .chain_update(&sig[..32])
+                    .chain_update(pk)
+                    .chain_update(msg),
+            );
+            sig[32..].copy_from_slice(&challenge.to_bytes());
+            assert!(ed25519_zebra::VerificationKey::try_from(pk)
+                .unwrap()
+                .verify(&sig.into(), msg)
+                .is_ok());
+            assert!(bool::from(Ed25519::verify(&pk, msg, LABEL, &sig)));
+            assert!(!bool::from(Ed25519::verify(&pk, b"changed", LABEL, &sig)));
+            sig[32..].fill(0xff);
+            assert!(!bool::from(Ed25519::verify(&pk, msg, LABEL, &sig)));
+        }
+    }
+}
 
-    let composite_accepts = composite::verify::<EdMl44>(&pk, msg, ctx, &sig);
-    // `weak_classical_forgery` accepts under ed25519-zebra for every
-    // message by construction (see its doc comment), so its strict verdict
-    // does not depend on which message the composite layer actually signed.
-    let classical_outcome = strict::check(&weak_pk, msg, &weak_sig);
-    let a_strict_composite_would_reject = !classical_outcome.strict_accepts();
+#[test]
+fn edml44_rejects_weak_classical_keys_even_with_valid_pq_signatures() {
+    let mut sk = vec![0; EdMl44::SECRET_KEY_LEN];
+    let mut pk = vec![0; EdMl44::PUBLIC_KEY_LEN];
+    composite::keypair_from_seed::<EdMl44>(&[0x7b; 32], &mut sk, &mut pk).unwrap();
+    let mut sig = vec![0; EdMl44::SIGNATURE_LEN];
+    composite::sign_deterministic::<EdMl44>(&sk, b"message", b"ctx", b"", &mut sig).unwrap();
+    assert!(composite::verify::<EdMl44>(&pk, b"message", b"ctx", &sig));
+    assert!(!composite::verify::<EdMl44>(&pk, b"changed", b"ctx", &sig));
+    sig[..64].fill(0);
+    sig[0] = 1;
+    for weak in weak_public_keys() {
+        pk[..32].copy_from_slice(&weak);
+        assert!(!composite::verify::<EdMl44>(&pk, b"message", b"ctx", &sig));
+    }
+}
 
-    if composite_accepts && a_strict_composite_would_reject {
-        warn(&format!(
-            "WARNING [ZIP-215 divergence survives EdMl44 composition]\n\
-             \x20 an EdMl44 (ed25519 + ML-DSA-44) composite signature whose classical half is a ZIP-215-only \
-             forgery -- an order-8 public key with no discoverable secret key -- verifies successfully \
-             end to end, because EdMl44 verification is `classical_ok & pq_ok` and the post-quantum half is \
-             an honestly produced ML-DSA-44 signature.\n\
-             \x20 a strict classical verifier rejects that same classical half (small_order={small_order}, \
-             cofactorless_equation_holds={cofactorless}), and so would reject the whole composite.\n\
-             \x20 consequence: two conforming EdMl44 verifiers -- one using this crate, one substituting a \
-             strict verifier for the classical half -- disagree about the exact same composite signature \
-             bytes.",
-            small_order = classical_outcome.small_order,
-            cofactorless = classical_outcome.cofactorless_holds,
-        ));
-    } else {
-        warn(&format!(
-            "WARNING [EdMl44 composition divergence vector is stale]\n\
-             \x20 composite_accepts={composite_accepts}, strict_would_reject={a_strict_composite_would_reject}; \
-             the forgery no longer demonstrates the expected divergence at the EdMl44 composite level.",
+#[test]
+fn edfn512_rejects_weak_classical_keys_even_with_valid_pq_signatures() {
+    use pqhybridsign::{composite_delta, suite::DeltaSuite, EdFn512};
+    let mut sk = vec![0; EdFn512::SECRET_KEY_LEN];
+    let mut pk = vec![0; EdFn512::PUBLIC_KEY_LEN];
+    composite_delta::keypair_from_seed::<EdFn512>(&[0x5a; 32], &mut sk, &mut pk).unwrap();
+    let mut sig = vec![0; EdFn512::MAX_SIGNATURE_LEN];
+    let len =
+        composite_delta::sign_deterministic::<EdFn512>(&sk, b"message", b"ctx", b"", &mut sig)
+            .unwrap();
+    sig.truncate(len);
+    assert!(composite_delta::verify::<EdFn512>(
+        &pk, b"message", b"ctx", &sig
+    ));
+    assert!(!composite_delta::verify::<EdFn512>(
+        &pk, b"changed", b"ctx", &sig
+    ));
+    sig[..64].fill(0);
+    sig[0] = 1;
+    for weak in weak_public_keys() {
+        pk[..32].copy_from_slice(&weak);
+        assert!(!composite_delta::verify::<EdFn512>(
+            &pk, b"message", b"ctx", &sig
         ));
     }
 }

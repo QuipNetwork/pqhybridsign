@@ -82,7 +82,7 @@ impl<S: StatefulSuite> PublicKey<S> {
 
     /// Reconstruct a public key from its wire bytes (`ClassicalPK ||
     /// PqVerifyKey`, [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes),
-    /// **checking nothing but the length**.
+    /// checking the length and the classical component's public-key policy.
     ///
     /// This function performs no commitment validation. It cannot: the only
     /// thing it is given is the key itself, and a key cannot vouch for
@@ -108,12 +108,20 @@ impl<S: StatefulSuite> PublicKey<S> {
     ///
     /// [`Error::BadLength`] if `bytes` is not
     /// [`StatefulSuite::VERIFY_PUBLIC_KEY_LEN`] bytes.
+    /// [`Error::ComponentFailure`] if the classical public key is invalid.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != S::VERIFY_PUBLIC_KEY_LEN {
             return Err(Error::BadLength {
                 expected: S::VERIFY_PUBLIC_KEY_LEN,
                 actual: bytes.len(),
             });
+        }
+        let classical_len = <S::Classical as ClassicalScheme>::PUBLIC_KEY_LEN;
+        if !bytes
+            .get(..classical_len)
+            .is_some_and(<S::Classical as ClassicalScheme>::public_key_is_valid)
+        {
+            return Err(Error::ComponentFailure);
         }
         Ok(Self {
             bytes: bytes.to_vec(),
@@ -223,8 +231,8 @@ where
     /// caller cannot substitute a classical key either.
     ///
     /// Contrast [`from_bytes`](Self::from_bytes), which takes a whole
-    /// verify-form key and checks only its length. Given an attacker's own
-    /// freshly generated key, `from_bytes` produces a public key that
+    /// verify-form key and checks its length and classical key policy. Given an
+    /// attacker's own freshly generated key, `from_bytes` produces a public key that
     /// verifies the attacker's own signatures perfectly well, because
     /// nothing in it refers to what the verifier installed. This constructor
     /// is what ties the key on the wire to the key on the account.
@@ -235,7 +243,7 @@ where
     /// [`StatefulSuite::STORED_PUBLIC_KEY_LEN`] bytes or `pq_verify_key` is
     /// not [`PqStatefulScheme::VERIFY_KEY_LEN`] bytes.
     /// [`Error::ComponentFailure`] if `pq_verify_key` is not the key
-    /// `stored_public_key` commits to.
+    /// `stored_public_key` commits to, or its classical public key is invalid.
     pub fn from_stored_commitment_and_bundle(
         stored_public_key: &[u8],
         pq_verify_key: &[u8],
@@ -261,6 +269,10 @@ where
         let (classical_pk, stored_pq) = stored_public_key
             .split_at_checked(classical_len)
             .ok_or(Error::ComponentFailure)?;
+
+        if !<S::Classical as ClassicalScheme>::public_key_is_valid(classical_pk) {
+            return Err(Error::ComponentFailure);
+        }
 
         <S::Pq as CommittedVerifyKey>::verify_committed_key(stored_pq, pq_verify_key)?;
 
@@ -2293,5 +2305,92 @@ mod tests {
 
         assert_eq!(budget.consumed(&budget_key_of(&pk_a)), Some(2));
         assert_eq!(budget.consumed(&budget_key_of(&pk_b)), Some(1));
+    }
+
+    #[cfg(feature = "profile-256s")]
+    #[test]
+    fn qpa01_edsh_rejects_weak_imports_and_both_signature_paths() {
+        use crate::shrincs::EdSh;
+        use curve25519_dalek::constants::EIGHT_TORSION;
+
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            suite: String,
+            public_key_hex: String,
+            stateful_ctx_hex: String,
+            stateful_msg_hex: String,
+            stateful_signature_hex: String,
+            stateless_ctx_hex: String,
+            stateless_msg_hex: String,
+            stateless_signature_hex: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct File {
+            suites: Vec<Entry>,
+        }
+        let fixtures: File =
+            serde_json::from_str(include_str!("../tests/vectors/fixture-256s.json")).unwrap();
+        let entry = fixtures
+            .suites
+            .into_iter()
+            .find(|e| e.suite == "ED-SH")
+            .unwrap();
+        let bytes = hex::decode(entry.public_key_hex).unwrap();
+        let pk = PublicKey::<EdSh>::from_bytes(&bytes).unwrap();
+        let stored = pk.stored_form().unwrap();
+        PublicKey::<EdSh>::from_stored_commitment_and_bundle(&stored, pk.pq_verify_key()).unwrap();
+        let paths = [
+            (
+                true,
+                entry.stateful_ctx_hex,
+                entry.stateful_msg_hex,
+                entry.stateful_signature_hex,
+            ),
+            (
+                false,
+                entry.stateless_ctx_hex,
+                entry.stateless_msg_hex,
+                entry.stateless_signature_hex,
+            ),
+        ];
+        for (stateful, ctx, msg, sig) in paths {
+            let ctx = hex::decode(ctx).unwrap();
+            let msg = hex::decode(msg).unwrap();
+            let mut sig = hex::decode(sig).unwrap();
+            let verify = if stateful {
+                EdSh::verify_stateful
+            } else {
+                EdSh::verify_stateless
+            };
+            assert!(verify(&pk, &msg, &ctx, &sig));
+            sig[..64].fill(0);
+            sig[0] = 1;
+            for point in EIGHT_TORSION {
+                let weak = point.compress().to_bytes();
+                let mut weak_bytes = bytes.clone();
+                weak_bytes[..32].copy_from_slice(&weak);
+                assert_eq!(
+                    PublicKey::<EdSh>::from_bytes(&weak_bytes).err(),
+                    Some(Error::ComponentFailure)
+                );
+                let mut weak_stored = stored.clone();
+                weak_stored[..32].copy_from_slice(&weak);
+                assert_eq!(
+                    PublicKey::<EdSh>::from_stored_commitment_and_bundle(
+                        &weak_stored,
+                        pk.pq_verify_key()
+                    )
+                    .err(),
+                    Some(Error::ComponentFailure)
+                );
+                // Deliberately bypass admission to test verification against a
+                // legacy stored key; the PQ signature remains valid throughout.
+                let weak_pk = PublicKey::<EdSh> {
+                    bytes: weak_bytes,
+                    _suite: PhantomData,
+                };
+                assert!(!verify(&weak_pk, &msg, &ctx, &sig));
+            }
+        }
     }
 }

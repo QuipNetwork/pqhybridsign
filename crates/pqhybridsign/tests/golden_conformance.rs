@@ -101,32 +101,49 @@ where
         f.suite
     );
 
-    // Cross-suite: EdSh signature against SrSh public key (and the reverse) must
-    // fail. Reconstruct the other suite's public key as `S::PublicKey` so
-    // the same `verify` path is exercised; the wire bytes differ by classical
-    // algorithm, so a true verify rejects them.
-    let other_pk =
-        PublicKey::<S>::from_bytes(other_pk_bytes).expect("other suite public key length matches");
+    // Cross-suite: reject at admission or at signature verification. An
+    // sr25519 encoding need not decode to an admissible Ed25519 point; since
+    // QPA-01, matching byte lengths alone no longer guarantee import succeeds.
+    let other_pk = PublicKey::<S>::from_bytes(other_pk_bytes);
     assert!(
-        !S::verify_stateful(
-            &other_pk,
+        !other_pk.as_ref().is_ok_and(|key| S::verify_stateful(
+            key,
             &f.stateful_msg,
             &f.stateful_ctx,
             &f.stateful_signature
-        ),
+        )),
         "{} must reject its stateful signature under the other suite public key",
         f.suite
     );
     assert!(
-        !S::verify_stateless(
-            &other_pk,
+        !other_pk.as_ref().is_ok_and(|key| S::verify_stateless(
+            key,
             &f.stateless_msg,
             &f.stateless_ctx,
             &f.stateless_signature
-        ),
+        )),
         "{} must reject its stateless signature under the other suite public key",
         f.suite
     );
+
+    // Also exercise verification in every profile with an admissible
+    // classical key and the other suite's PQ key, so early admission
+    // rejection above cannot hide a missing PQ verification check.
+    let mut mixed = other_pk_bytes.to_vec();
+    mixed[..pk.classical().len()].copy_from_slice(pk.classical());
+    let mixed_pk = PublicKey::<S>::from_bytes(&mixed).expect("admissible classical key");
+    assert!(!S::verify_stateful(
+        &mixed_pk,
+        &f.stateful_msg,
+        &f.stateful_ctx,
+        &f.stateful_signature
+    ));
+    assert!(!S::verify_stateless(
+        &mixed_pk,
+        &f.stateless_msg,
+        &f.stateless_ctx,
+        &f.stateless_signature
+    ));
 
     // Import re-derives the hypertree root to validate the blob, which costs
     // about 47 seconds at 128s. Keep the coverage only where import is cheap.

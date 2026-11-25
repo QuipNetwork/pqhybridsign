@@ -109,8 +109,7 @@ fn generate_h4() {
 const ED25519_LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
 
 /// Emit one ZIP-215/strict-RFC-8032 divergence vector for `msg`, and verify
-/// as it is generated that: `ed25519-zebra` accepts it (matching this
-/// crate's own `Ed25519::verify`), the cofactorless equation fails on this
+/// as it is generated that: `ed25519-zebra` accepts it, this crate rejects it, the cofactorless equation fails on this
 /// concrete message (not merely on average), and it is rejected for a
 /// small-order reason too. A vector that fails any of these checks would
 /// not demonstrate the divergence `tests/ed25519_strict.rs` pins, so this
@@ -118,7 +117,11 @@ const ED25519_LABEL: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
 fn emit_zip215_negative(description: &str, msg: &[u8]) {
     let (pk, sig) = weak_classical_forgery();
 
-    let zebra_accepts = bool::from(Ed25519::verify(&pk, msg, ED25519_LABEL, &sig));
+    let zebra_accepts = ed25519_zebra::VerificationKey::try_from(pk)
+        .unwrap()
+        .verify(&sig.into(), msg)
+        .is_ok();
+    assert!(!bool::from(Ed25519::verify(&pk, msg, ED25519_LABEL, &sig)));
     assert!(
         zebra_accepts,
         "{description}: expected ed25519-zebra (ZIP-215) to accept this vector"
@@ -158,9 +161,7 @@ fn emit_zip215_negative(description: &str, msg: &[u8]) {
 
 /// Generator for `tests/vectors/ed25519_zip215_negative.json`. Ignored by
 /// default: run explicitly and capture the output when the vectors need
-/// regenerating (for example, after a `curve25519-dalek`/`ed25519-zebra`
-/// upgrade makes `zip215_negative_vectors_diverge_from_strict_rfc8032`
-/// report the pinned vectors as stale).
+/// regenerating. The library must reject every generated weak-key vector.
 ///
 /// Each vector uses the same order-8 forged public key (see
 /// `weak_classical_forgery`) with a different message, since the forgery is

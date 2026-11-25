@@ -432,6 +432,8 @@ pub fn sign_rotation<S: StatefulSuite>(
 /// directly from `payload`'s already-checked fields -- there is no path that
 /// returns a partially built `NextStoredPublicKey`, and no separate "then
 /// install" step that a caller could invoke without having verified anything.
+/// The replacement classical key must satisfy the component's public-key
+/// admission policy; a valid signature cannot authorize a weak Ed25519 key.
 #[cfg(feature = "alloc")]
 pub fn verify_rotation<S: StatefulSuite>(
     current_pk: &stateful_composite::PublicKey<S>,
@@ -499,7 +501,12 @@ where
         stateless_sig,
     );
 
-    if bool::from(classical_ok & stateless_ok) {
+    // A valid authorization must not install a key that loses the classical
+    // factor. Keep both signature checks unconditional, including on refusal.
+    let next_key_ok = subtle::Choice::from(u8::from(
+        <S::Classical as ClassicalScheme>::public_key_is_valid(&payload.next_classical_pk),
+    ));
+    if bool::from(classical_ok & stateless_ok & next_key_ok) {
         Some(NextStoredPublicKey {
             next_classical_pk: payload.next_classical_pk,
             next_commitment: payload.next_commitment,
@@ -566,6 +573,12 @@ mod tests {
         const PUBLIC_KEY_LEN: usize = 1;
         const SECRET_KEY_LEN: usize = 1;
         const SIGNATURE_LEN: usize = 1;
+
+        fn public_key_is_valid(pk: &[u8]) -> bool {
+            // This test double uses one-byte keys but the rotation wire field
+            // is fixed at 32 bytes; its verifier reads the first byte of either.
+            pk.len() == Self::PUBLIC_KEY_LEN || pk.len() == FIELD_LEN
+        }
 
         fn derive(seed: &[u8; 32], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()> {
             sk_out.fill(seed[0]);
@@ -1408,5 +1421,58 @@ mod tests {
             sk.pq_verify_key(),
         )
         .expect("the fake component parses its own verify key")
+    }
+
+    #[cfg(feature = "alloc")]
+    crate::hybrid_stateful_suite! {
+        EdFakeH,
+        classical = crate::classical::Ed25519 as "ed25519",
+        pq = FakePq as "fake",
+        label = "hybrid-ed25519-fake-v1",
+        label_len = 23,
+        rotate_label = "hybrid-ed25519-fake-rotate-v1",
+        rotate_label_len = 30,
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn qpa01_valid_authorization_cannot_install_a_weak_ed25519_key() {
+        use crate::classical::Ed25519;
+        use curve25519_dalek::constants::EIGHT_TORSION;
+        let (sk, pk) = stateful_composite::keygen::<EdFakeH>(&[42; 32], 1).unwrap();
+        let mut p = RotationPayload {
+            kind: RotationKind::FullSwap,
+            current_commitment: fake_commitment(pk.pq_verify_key()),
+            next_commitment: [2; 32],
+            next_classical_pk: pk.classical().try_into().unwrap(),
+        };
+        let ctx = b"QPA-01 rotation";
+        let mut sig = alloc::vec![0; rotation_signature_len::<EdFakeH>()];
+        sign_rotation::<EdFakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig).unwrap();
+        assert!(verify_rotation::<EdFakeH>(&pk, ctx, &p, &sig).is_some());
+        for kind in [RotationKind::FullSwap, RotationKind::StatefulGraft] {
+            p.kind = kind;
+            for point in EIGHT_TORSION {
+                p.next_classical_pk = point.compress().to_bytes();
+                sign_rotation::<EdFakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig)
+                    .unwrap();
+                let m = m_prime_rotation::<EdFakeH>(&p, ctx).unwrap();
+                // Both signatures are valid for the weak replacement key. The
+                // admission rule, not a stale or corrupted signature, rejects it.
+                assert!(bool::from(Ed25519::verify(
+                    pk.classical(),
+                    &m,
+                    EdFakeH::ROTATE_LABEL,
+                    &sig[..64]
+                )));
+                assert!(bool::from(FakePq::verify_stateless_rotation(
+                    pk.pq_verify_key(),
+                    &p,
+                    &m,
+                    &sig[64..]
+                )));
+                assert!(verify_rotation::<EdFakeH>(&pk, ctx, &p, &sig).is_none());
+            }
+        }
     }
 }

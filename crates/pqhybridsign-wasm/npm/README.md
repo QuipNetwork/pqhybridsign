@@ -53,6 +53,37 @@ through SR-FN-512. ED-SH and SR-SH use it through `deriveVrfStatelessKey`
 and the returned key's `prove`, which spend a caller-tracked few-time
 stateless budget instead of a signing leaf.
 
+## Building and testing from source
+
+Use the repository's Rust toolchain and Node.js 20 or newer (CI uses Node.js
+24). The build needs `wasm-pack` on `PATH` and Rust's WebAssembly target.
+From the repository root:
+
+```sh
+cargo install wasm-pack --version 0.15.1 --locked --root target/local-tools
+export PATH="$PWD/target/local-tools/bin:$PATH"
+rustup target add wasm32-unknown-unknown
+
+cd crates/pqhybridsign-wasm/npm
+npm run build
+npm test
+../scripts/check-types.sh
+node ../tests/node/sign_and_verify.mjs
+```
+
+The local tools directory is ignored by git. Repeat the `PATH` export from
+the repository root in each new shell, and reinstall after removing that
+directory. `wasm-pack --version` should report `wasm-pack 0.15.1` before the
+build. A `wasm-pack: command not found` error means the installation or
+`PATH` step is missing.
+
+[wasm-pack's installation guide](https://wasm-bindgen.github.io/wasm-pack/installer/)
+also provides prebuilt binaries. The first build needs network access for
+matching wasm-bindgen/optimization tools and npm dependencies. The build
+produces both the browser and Node.js packages; `check-types.sh` compares
+their declarations with the checked-in TypeScript definitions. These
+commands build and test locally and do not publish a package.
+
 ## Publishing this package
 
 `package.json` here declares the package's name, exports and files, but

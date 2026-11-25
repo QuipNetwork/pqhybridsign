@@ -2,6 +2,28 @@
 
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Security
+
+- QPA-01: reject small-order Ed25519 public keys, including alternate
+  encodings, in EdMl44, EdFn512 and EdSh signature verification. Expose
+  `ClassicalScheme::public_key_is_valid` for external admission; enforce it
+  in stateful public-key constructors and on rotation targets. Generated
+  keys, signatures and wire formats are unchanged. This narrows consensus
+  acceptance and requires coordinated activation in existing deployments;
+  see [the rollout notes](docs/qpa-01-rollout.md).
+
+### Validation
+
+- QPA-01 regression coverage now includes the npm API and every SHRINCS
+  profile. Cross-suite golden tests accept rejection during key admission
+  and still test verification with an admissible classical key paired with
+  the wrong PQ key.
+- Refresh the generated browser TypeScript declaration order and align the
+  Rust smoke example with the packaged `0.1.0` crate so artifact validation
+  exercises the fixed library.
+
 ## 0.0.0
 
 This is the first stable release. It carries the two audit fixes below and

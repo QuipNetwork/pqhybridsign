@@ -9,10 +9,7 @@
 //! `#[path = "support/mod.rs"] mod support;` so the strict verifier and the
 //! forgery construction have exactly one definition each.
 //!
-//! `warn` is dead code in exactly one of the two including binaries (see
-//! its own doc comment), so `#[expect(dead_code)]` on it would error in
-//! whichever binary the lint does not fire. Allowed at module scope
-//! instead of per-item.
+// Each consumer uses a different subset of the oracle and fixture helpers.
 #![cfg_attr(test, allow(dead_code))]
 
 use curve25519_dalek::constants::EIGHT_TORSION;
@@ -21,43 +18,28 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 use sha2::{Digest, Sha512};
 
-/// Print a warning so a human running plain `cargo test` sees it, with no
-/// `--nocapture` flag required.
-///
-/// `cargo test` captures both stdout and stderr for a passing test and
-/// discards the capture -- `eprintln!` alone is invisible here (verified
-/// empirically against this toolchain: a plain `cargo test -p pqhybridsign
-/// --test ed25519_strict` run shows none of this crate's warning text,
-/// while `--nocapture` shows all of it). The capture works by redirecting
-/// the *Rust-level* `io::stdout`/`io::stderr` writers that `println!` and
-/// `eprintln!` go through; it does not touch the process's real file
-/// descriptor 2. Opening `/dev/stderr` -- a live alias for that fd on every
-/// platform this crate ships tests on (Linux, macOS) -- and writing to it
-/// directly goes around the redirect, so the warning reaches the terminal
-/// (or whatever stderr is piped to) regardless of capture.
-///
-/// Falls back to `eprintln!` if `/dev/stderr` cannot be opened, which
-/// covers platforms without it (Windows) at the cost of needing
-/// `--nocapture` there. That fallback trades total silence for partial
-/// visibility; it does not change what gets asserted, since these warnings
-/// never gate test pass/fail either way.
-///
-/// `#[path = "support/mod.rs"]` compiles a separate copy of this module
-/// into each test binary that includes it.
-/// `tests/generate_vectors.rs` includes it for `strict`/`weak_classical_forgery`
-/// but never emits a warning itself, so its copy never calls this function;
-/// `tests/ed25519_strict.rs`'s copy does. `-D warnings` sees each copy in
-/// isolation.
-pub fn warn(message: &str) {
-    use std::io::Write;
-    match std::fs::OpenOptions::new().write(true).open("/dev/stderr") {
-        Ok(mut stderr) => {
-            // Best-effort: a broken pipe on the other end of stderr is not
-            // something a diagnostic warning should turn into a panic over.
-            let _ = writeln!(stderr, "{message}");
-        }
-        Err(_) => eprintln!("{message}"),
+/// Every small-order point plus non-canonical encodings admitted by ZIP-215.
+pub fn weak_public_keys() -> Vec<[u8; 32]> {
+    let mut keys: Vec<_> = EIGHT_TORSION
+        .iter()
+        .map(|p| p.compress().to_bytes())
+        .collect();
+    // x = 0: the sign-bit aliases of identity and the order-2 point.
+    for point in [EIGHT_TORSION[0], EIGHT_TORSION[4]] {
+        let mut alias = point.compress().to_bytes();
+        alias[31] |= 0x80;
+        keys.push(alias);
     }
+    // y = p and p+1, with both signs, alias order-4 points and identity.
+    for y in [0xed, 0xee] {
+        for sign in [0x7f, 0xff] {
+            let mut alias = [0xff; 32];
+            alias[0] = y;
+            alias[31] = sign;
+            keys.push(alias);
+        }
+    }
+    keys
 }
 
 /// A from-scratch RFC 8032 5.1.7 verifier, built directly on

@@ -23,6 +23,16 @@ pub trait ClassicalScheme {
     /// varies in length.
     const SIGNATURE_LEN: usize;
 
+    /// Whether an external public key satisfies this component's admission policy.
+    ///
+    /// The default checks only the length. Components with additional key
+    /// restrictions must override this method and enforce the same policy in
+    /// [`verify`](Self::verify). Ed25519 also rejects undecodable and small-order
+    /// points. This check does not authenticate a key or prove possession.
+    fn public_key_is_valid(pk: &[u8]) -> bool {
+        pk.len() == Self::PUBLIC_KEY_LEN
+    }
+
     /// Derive the component keypair from a 32-byte seed.
     ///
     /// Writes `SECRET_KEY_LEN` bytes into `sk_out` and `PUBLIC_KEY_LEN`

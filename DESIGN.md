@@ -150,50 +150,34 @@ hides the no-allocator half of the same module from the no-allocator run.
 The `stateful` suites need `std`, because the reference signer needs `std`
 today.
 
-### ed25519 verification: ZIP-215 acceptance is stated, not mandated
+### Ed25519 verification and key admission (QPA-01)
 
-The ed25519 component verifies under ZIP-215, through `ed25519-zebra`. It
-accepts non-canonical encodings of the public key and of the signature's `R`
-value, and it checks the cofactored group equation `[8][s]B = [8]R + [8][k]A`
-rather than the cofactorless `[s]B = R + [k]A`.
+Ed25519 public keys MUST decode to a point that is not small-order. The
+identity and points of order 2, 4 or 8 MUST be rejected, including their
+non-canonical encodings. This rule applies to key registration, imports,
+rotation targets and signature verification in EdMl44, EdFn512 and EdSh.
+A hybrid proof of possession does not make a small-order classical key safe:
+its classical signature is publicly constructible without a secret key.
 
-RFC 8032 section 5.1.7 permits both equations, so checking the cofactored one
-is not by itself a departure from RFC 8032. The divergence is confined to
-section 5.1.3, which requires rejecting non-canonical encodings of `A` and `R`
-where ZIP-215 requires accepting them. This design states that property of this
-implementation. It does not require a second implementation to reproduce it.
-Reproducing it is RECOMMENDED, not mandatory.
+`ClassicalScheme::public_key_is_valid` exposes the component admission rule.
+Ed25519 overrides the default length check with decoding and small-order
+rejection. External registries must call it before trusting a key. Stateful
+public-key constructors and rotation verification enforce the same policy.
+These checks establish key suitability, not the identity of its owner.
 
-A second implementation that verifies with a stricter and more commonly
-deployed verifier stays conformant. Go's `crypto/ed25519`, the `verify_strict`
-path of `ed25519-dalek`, and the common Solidity ed25519 ports all qualify.
-Such an implementation can still disagree with this one about whether a
-specific attacker-supplied signature is valid. The attacker needs no secret
-key: an ed25519 public key with no prime-order component, of order 2, 4 or 8,
-makes a fixed forgery accept under ZIP-215 for almost any message, with `R`
-and `s` as fixed public constants. Rejecting such a key is a `verify_strict`
-convention. Neither RFC 8032 nor ZIP-215 requires it, so an implementation
-that omits the check stays conformant to both while still disagreeing with
-this one.
+For admitted keys, verification retains ed25519-zebra's ZIP-215 rules:
+non-canonical encodings of A and R are accepted, s must be canonical, and the
+cofactored equation [8][s]B = [8]R + [8][k]A must hold. Mixed-order keys remain
+accepted. This change does not impose canonical encodings, prime-subgroup
+membership, small-order rejection of R, or the cofactorless equation.
+Implementations MUST agree on the acceptance rules in consensus deployments;
+substituting a strict verifier can still introduce other disagreements.
 
-This is a difference in the accepted set, not a signature-malleability
-finding. Malleability is closed under ZIP-215 and under strict verification
-alike: `s` must be canonical, and the encoded bytes of `R` are hashed into the
-challenge `k`, so an attacker cannot derive a second valid signature over one
-message from a first.
-
-The outputs of this library are unaffected. `derive` and `sign_deterministic`
-always produce output that is valid under ZIP-215 and under strict
-verification, so the disadvantage falls on a second implementation that takes
-the stricter path, never on a signature this library produces. The test suite
-splits along that line. The tests that pin our own outputs as strict-valid
-fail the build, because this library controls those bytes. The tests that
-probe the divergence in the accepted set print a warning and pass, because the
-accepted set of a third-party verifier is not ours to bind, and a dependency
-upgrade that narrows or widens the gap is not a defect in this library. See
-the rustdoc on `pqhybridsign::classical::Ed25519` and
-`crates/pqhybridsign/tests/ed25519_strict.rs` for the pinned vectors and the
-demonstration at the EdMl44 composite level.
+Key derivation, signing, suite labels and wire formats are unchanged. The
+weak-key rejection is an acceptance change that requires coordinated
+activation in an existing consensus system; see [the rollout notes](docs/qpa-01-rollout.md).
+Tests assert weak-key rejection and honest signature compatibility, and fail
+on regressions. Dependency behavior is not a reason to waive this policy.
 
 ### Component traits
 
