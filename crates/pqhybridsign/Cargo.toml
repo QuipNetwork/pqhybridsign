@@ -46,8 +46,8 @@ hmac = { version = "0.12", default-features = false, optional = true }
 # caller-supplied RNG to the proof instead of panicking on a `no_std` target
 # without `getrandom`. schnorrkel re-exports no path to it.
 merlin = { version = "3.0", default-features = false, optional = true }
-# Point decoding for Ed25519 key admission and verification, also used by
-# the optional RFC 9381 ECVRF. This is already ed25519-zebra's dependency.
+# Point checks for Ed25519/sr25519 key admission and verification, also used
+# by the optional RFC 9381 ECVRF. Already a dependency of both components.
 # Keep no_std / no-alloc support; zeroize is needed by the VRF's scalars.
 curve25519-dalek = { version = "4.1", default-features = false, features = [
     "zeroize",

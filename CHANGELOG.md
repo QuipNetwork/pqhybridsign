@@ -6,6 +6,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- QPA-02: reject identity sr25519 public keys in SrMl44, SrFn512 and SrSh
+  signature verification, public-key admission, rotation targets, VRF
+  verification and VRF output derivation. These paths share one checked
+  parser. Generated keys, signatures and wire formats are unchanged;
+  existing consensus deployments require coordinated activation.
 - QPA-01: reject small-order Ed25519 public keys, including alternate
   encodings, in EdMl44, EdFn512 and EdSh signature verification. Expose
   `ClassicalScheme::public_key_is_valid` for external admission; enforce it
@@ -15,6 +20,10 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Validation
 
+- QPA-02 regressions cover both identity-key forgeries with a valid PQ
+  signature, malformed keys, honest signatures, VRF entry points, rotation,
+  both SrSh signature paths and imports across all four profiles, shared ABI
+  dispatch and the npm API.
 - Keep native release packaging and C++/Python artifact smoke tests on Linux
   AMD64 runners. Build the C archive for an explicit AMD64 target and reject
   other build hosts so ARM64 libraries cannot be mislabeled as AMD64.

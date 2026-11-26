@@ -99,10 +99,9 @@ impl<S: StatefulSuite> PublicKey<S> {
     /// only for bytes the caller already trusts: the value [`keygen`] handed
     /// back, or a verify key read from the caller's own storage.
     ///
-    /// The length check is the only validation, matching
-    /// [`crate::composite::verify`] and [`crate::composite_delta::verify`]:
-    /// a garbled public key produces a value that fails verification, rather
-    /// than an error that would need its own channel.
+    /// Validates the total length and the classical component's public-key
+    /// admission policy. The PQ verification key is retained without checking
+    /// a stored commitment; use the constructor above for that binding.
     ///
     /// # Errors
     ///
@@ -2305,6 +2304,101 @@ mod tests {
 
         assert_eq!(budget.consumed(&budget_key_of(&pk_a)), Some(2));
         assert_eq!(budget.consumed(&budget_key_of(&pk_b)), Some(1));
+    }
+
+    #[cfg(any(
+        feature = "profile-256s",
+        feature = "profile-256s-sha2",
+        feature = "profile-128s-q18",
+        feature = "profile-128s-q20"
+    ))]
+    #[test]
+    fn qpa02_srsh_rejects_identity_imports_and_both_signature_paths() {
+        use crate::shrincs::SrSh;
+        use curve25519_dalek::constants::RISTRETTO_BASEPOINT_COMPRESSED;
+
+        #[derive(serde::Deserialize)]
+        struct Entry {
+            suite: String,
+            public_key_hex: String,
+            stateful_ctx_hex: String,
+            stateful_msg_hex: String,
+            stateful_signature_hex: String,
+            stateless_ctx_hex: String,
+            stateless_msg_hex: String,
+            stateless_signature_hex: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct File {
+            suites: Vec<Entry>,
+        }
+        #[cfg(feature = "profile-256s")]
+        let json = include_str!("../tests/vectors/fixture-256s.json");
+        #[cfg(feature = "profile-256s-sha2")]
+        let json = include_str!("../tests/vectors/fixture-256s-sha2.json");
+        #[cfg(feature = "profile-128s-q18")]
+        let json = include_str!("../tests/vectors/fixture-128s-q18.json");
+        #[cfg(feature = "profile-128s-q20")]
+        let json = include_str!("../tests/vectors/fixture-128s-q20.json");
+        let fixtures: File = serde_json::from_str(json).unwrap();
+        let entry = fixtures
+            .suites
+            .into_iter()
+            .find(|e| e.suite == "SR-SH")
+            .unwrap();
+        let bytes = hex::decode(entry.public_key_hex).unwrap();
+        let pk = PublicKey::<SrSh>::from_bytes(&bytes).unwrap();
+        let stored = pk.stored_form().unwrap();
+        PublicKey::<SrSh>::from_stored_commitment_and_bundle(&stored, pk.pq_verify_key()).unwrap();
+        let mut weak_bytes = bytes.clone();
+        weak_bytes[..32].fill(0);
+        assert_eq!(
+            PublicKey::<SrSh>::from_bytes(&weak_bytes).err(),
+            Some(Error::ComponentFailure)
+        );
+        let mut weak_stored = stored;
+        weak_stored[..32].fill(0);
+        assert_eq!(
+            PublicKey::<SrSh>::from_stored_commitment_and_bundle(&weak_stored, pk.pq_verify_key())
+                .err(),
+            Some(Error::ComponentFailure),
+        );
+        // Bypass the constructors deliberately: verification must reject a
+        // legacy stored identity key even if admission happened before this fix.
+        let weak_pk = PublicKey::<SrSh> {
+            bytes: weak_bytes,
+            _suite: PhantomData,
+        };
+        for (stateful, ctx, msg, sig) in [
+            (
+                true,
+                entry.stateful_ctx_hex,
+                entry.stateful_msg_hex,
+                entry.stateful_signature_hex,
+            ),
+            (
+                false,
+                entry.stateless_ctx_hex,
+                entry.stateless_msg_hex,
+                entry.stateless_signature_hex,
+            ),
+        ] {
+            let ctx = hex::decode(ctx).unwrap();
+            let msg = hex::decode(msg).unwrap();
+            let mut sig = hex::decode(sig).unwrap();
+            let verify = if stateful {
+                SrSh::verify_stateful
+            } else {
+                SrSh::verify_stateless
+            };
+            assert!(verify(&pk, &msg, &ctx, &sig));
+            sig[..64].fill(0);
+            sig[63] = 0x80; // R = identity, s = 0, required schnorrkel marker.
+            assert!(!verify(&weak_pk, &msg, &ctx, &sig));
+            sig[..32].copy_from_slice(RISTRETTO_BASEPOINT_COMPRESSED.as_bytes());
+            sig[32] = 1; // R = B, s = 1. The PQ half stays valid in both cases.
+            assert!(!verify(&weak_pk, &msg, &ctx, &sig));
+        }
     }
 
     #[cfg(feature = "profile-256s")]

@@ -433,7 +433,8 @@ pub fn sign_rotation<S: StatefulSuite>(
 /// returns a partially built `NextStoredPublicKey`, and no separate "then
 /// install" step that a caller could invoke without having verified anything.
 /// The replacement classical key must satisfy the component's public-key
-/// admission policy; a valid signature cannot authorize a weak Ed25519 key.
+/// admission policy; a valid signature cannot authorize a small-order Ed25519
+/// key or an identity sr25519 key.
 #[cfg(feature = "alloc")]
 pub fn verify_rotation<S: StatefulSuite>(
     current_pk: &stateful_composite::PublicKey<S>,
@@ -1432,6 +1433,54 @@ mod tests {
         label_len = 23,
         rotate_label = "hybrid-ed25519-fake-rotate-v1",
         rotate_label_len = 30,
+    }
+
+    #[cfg(feature = "alloc")]
+    crate::hybrid_stateful_suite! {
+        SrFakeH,
+        classical = crate::classical::Sr25519 as "sr25519",
+        pq = FakePq as "fake",
+        label = "hybrid-sr25519-fake-v1",
+        label_len = 23,
+        rotate_label = "hybrid-sr25519-fake-rotate-v1",
+        rotate_label_len = 30,
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn qpa02_valid_authorization_cannot_install_an_identity_sr25519_key() {
+        use crate::classical::Sr25519;
+        let (sk, pk) = stateful_composite::keygen::<SrFakeH>(&[42; 32], 1).unwrap();
+        let ctx = b"QPA-02 rotation";
+        let mut sig = alloc::vec![0; rotation_signature_len::<SrFakeH>()];
+        for kind in [RotationKind::FullSwap, RotationKind::StatefulGraft] {
+            let mut p = RotationPayload {
+                kind,
+                current_commitment: fake_commitment(pk.pq_verify_key()),
+                next_commitment: [2; 32],
+                next_classical_pk: pk.classical().try_into().unwrap(),
+            };
+            sign_rotation::<SrFakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig).unwrap();
+            assert!(verify_rotation::<SrFakeH>(&pk, ctx, &p, &sig).is_some());
+            p.next_classical_pk = [0; 32];
+            sign_rotation::<SrFakeH>(&sk, &mut MemoryStore::default(), ctx, &p, &mut sig).unwrap();
+            let m = m_prime_rotation::<SrFakeH>(&p, ctx).unwrap();
+            // Authorization is valid for the exact identity target, so only
+            // the replacement key's admission policy can refuse this rotation.
+            assert!(bool::from(Sr25519::verify(
+                pk.classical(),
+                &m,
+                SrFakeH::ROTATE_LABEL,
+                &sig[..64]
+            )));
+            assert!(bool::from(FakePq::verify_stateless_rotation(
+                pk.pq_verify_key(),
+                &p,
+                &m,
+                &sig[64..]
+            )));
+            assert!(verify_rotation::<SrFakeH>(&pk, ctx, &p, &sig).is_none());
+        }
     }
 
     #[cfg(feature = "alloc")]

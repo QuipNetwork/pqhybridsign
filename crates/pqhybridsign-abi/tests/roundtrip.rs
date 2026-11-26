@@ -74,6 +74,25 @@ const SEED: [u8; 32] = [42u8; 32];
 const MSG: &[u8] = b"the message the abi layer signs";
 const CTX: &[u8] = b"abi-roundtrip-test";
 
+/// C, Python and Wasm all route verification through this dispatch layer.
+#[test]
+fn qpa02_dispatch_rejects_sr25519_identity_with_a_valid_pq_half() {
+    for suite in [Suite::SrMl44, Suite::SrFn512] {
+        let mut sk = vec![0; pqhybridsign_abi::secret_key_len(suite)];
+        let mut pk = vec![0; pqhybridsign_abi::public_key_len(suite)];
+        pqhybridsign_abi::keygen_from_seed(suite, &SEED, &mut sk, &mut pk).unwrap();
+        let mut sig = vec![0; pqhybridsign_abi::signature_len(suite)];
+        let len =
+            pqhybridsign_abi::sign_deterministic(suite, &sk, MSG, CTX, b"nonce", &mut sig).unwrap();
+        sig.truncate(len);
+        assert!(pqhybridsign_abi::verify(suite, &pk, MSG, CTX, &sig));
+        pk[..32].fill(0);
+        sig[..64].fill(0);
+        sig[63] = 0x80;
+        assert!(!pqhybridsign_abi::verify(suite, &pk, MSG, CTX, &sig));
+    }
+}
+
 /// EdMl44: dispatch through the enum must match the generic API byte for byte,
 /// for the same seed and message.
 #[test]

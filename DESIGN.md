@@ -179,6 +179,33 @@ activation in an existing consensus system.
 Tests assert weak-key rejection and honest signature compatibility, and fail
 on regressions. Dependency behavior is not a reason to waive this policy.
 
+### Sr25519 verification and key admission (QPA-02)
+
+Sr25519 public keys MUST decode to a non-identity Ristretto point. The
+identity encodes as 32 zero bytes and MUST be rejected in SrMl44, SrFn512
+and SrSh signature verification, public-key imports and rotation targets.
+Checking only the signature's R is insufficient: with an identity public
+key, both `R = identity, s = 0` and `R = B, s = 1` satisfy the signature
+equation for every message and signing context. A valid PQ signature does
+not restore the missing classical protection.
+
+`Sr25519::public_key_is_valid` exposes the admission rule through
+`ClassicalScheme`. Signature verification, VRF verification and VRF output
+derivation share the same checked parser. Stateful public-key constructors
+and rotation verification enforce this component policy. External registries
+MUST apply it before installing a key, in addition to authorization and
+proof-of-possession checks. For composite keys, check the full key length
+before passing the leading 32-byte classical component to the helper.
+
+Ristretto decoding already enforces canonical encodings; identity is its
+only low-order point. This change adds no signature-R restriction and
+changes no key derivation, signing, suite labels or wire formats. Existing
+consensus deployments must coordinate activation of the stricter acceptance
+rule and preserve historical verification where their protocol requires it.
+
+See the [remediation record](docs/qpa-02-remediation.md) for validation and
+the SDK key-admission trace.
+
 ### Component traits
 
 The core crate defines three abstractions. They map onto the Noise Protocol

@@ -5,6 +5,7 @@ use crate::{
     error::{Error, Result},
     seeded_rng::SeededRng,
 };
+use curve25519_dalek::traits::IsIdentity;
 use schnorrkel::context::attach_rng;
 use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, PublicKey, SecretKey, Signature};
 use sha2::{Digest, Sha512};
@@ -12,6 +13,20 @@ use subtle::Choice;
 use zeroize::Zeroize;
 
 /// sr25519 classical component, Schnorr over Ristretto.
+///
+/// Public keys must decode to a non-identity Ristretto point (QPA-02).
+/// The identity has a publicly known zero secret: signatures with `R = s*B`
+/// satisfy the verification equation for every message and signing context.
+/// A valid post-quantum signature cannot restore that classical protection.
+///
+/// [`public_key_is_valid`](ClassicalScheme::public_key_is_valid) exposes this
+/// rule for key registration and import. Signature verification, VRF
+/// verification and VRF output derivation enforce the same rule. It validates
+/// the public key, without authenticating its owner or proving possession.
+///
+/// Generated keys, signatures and wire formats are unchanged. Deployments
+/// upgrading an existing consensus system must coordinate the stricter
+/// acceptance rule and account for historical verification.
 #[derive(Clone, Copy, Debug)]
 pub struct Sr25519;
 
@@ -28,6 +43,10 @@ impl ClassicalScheme for Sr25519 {
     const PUBLIC_KEY_LEN: usize = 32;
     const SECRET_KEY_LEN: usize = 64;
     const SIGNATURE_LEN: usize = 64;
+
+    fn public_key_is_valid(pk: &[u8]) -> bool {
+        parse_public_key(pk).is_ok()
+    }
 
     fn derive(seed: &[u8; 32], sk_out: &mut [u8], pk_out: &mut [u8]) -> Result<()> {
         check_len(sk_out, Self::SECRET_KEY_LEN)?;
@@ -72,7 +91,7 @@ impl ClassicalScheme for Sr25519 {
     }
 
     fn verify(pk: &[u8], msg: &[u8], label: &'static [u8], sig: &[u8]) -> Choice {
-        let Ok(public) = PublicKey::from_bytes(pk) else {
+        let Ok(public) = parse_public_key(pk) else {
             return Choice::from(0u8);
         };
         let Ok(signature) = Signature::from_bytes(sig) else {
@@ -81,6 +100,15 @@ impl ClassicalScheme for Sr25519 {
         let ctx = signing_context(label);
         Choice::from(u8::from(public.verify(ctx.bytes(msg), &signature).is_ok()))
     }
+}
+
+/// Decode once and apply the shared admission policy at every public-key entry.
+fn parse_public_key(pk: &[u8]) -> Result<PublicKey> {
+    let public = PublicKey::from_bytes(pk).map_err(|_| Error::ComponentFailure)?;
+    if public.as_point().is_identity() {
+        return Err(Error::ComponentFailure);
+    }
+    Ok(public)
 }
 
 fn check_len(buf: &[u8], want: usize) -> Result<()> {
@@ -170,14 +198,14 @@ fn sign_with_rng(
 #[cfg(feature = "vrf")]
 mod vrf_impl {
     use super::{
-        check_len, nonce_seed_in, SeededRng, Sr25519, Wiped, {Error, Result},
+        check_len, nonce_seed_in, parse_public_key, SeededRng, Sr25519, Wiped, {Error, Result},
     };
     use crate::component::ClassicalScheme;
     use crate::vrf::{ClassicalVrf, PRE_OUTPUT_LEN};
     use merlin::Transcript;
     use schnorrkel::context::attach_rng;
     use schnorrkel::vrf::{VRFPreOut, VRFProof, KUSAMA_VRF};
-    use schnorrkel::{signing_context, PublicKey, SecretKey};
+    use schnorrkel::{signing_context, SecretKey};
     use subtle::Choice;
     use zeroize::Zeroize;
 
@@ -248,7 +276,7 @@ mod vrf_impl {
             pre_output: &[u8],
             proof: &[u8],
         ) -> Choice {
-            let Ok(public) = PublicKey::from_bytes(pk) else {
+            let Ok(public) = parse_public_key(pk) else {
                 return Choice::from(0u8);
             };
             let Ok(pre_out) = VRFPreOut::from_bytes(pre_output) else {
@@ -272,7 +300,7 @@ mod vrf_impl {
             pre_output: &[u8],
             context: &[u8],
         ) -> Result<B> {
-            let public = PublicKey::from_bytes(pk).map_err(|_| Error::ComponentFailure)?;
+            let public = parse_public_key(pk)?;
             let pre_out = VRFPreOut::from_bytes(pre_output).map_err(|_| Error::ComponentFailure)?;
             let ctx = signing_context(label);
             let inout = pre_out

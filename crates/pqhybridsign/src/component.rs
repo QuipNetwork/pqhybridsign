@@ -28,7 +28,8 @@ pub trait ClassicalScheme {
     /// The default checks only the length. Components with additional key
     /// restrictions must override this method and enforce the same policy in
     /// [`verify`](Self::verify). Ed25519 also rejects undecodable and small-order
-    /// points. This check does not authenticate a key or prove possession.
+    /// points; sr25519 rejects undecodable points and the Ristretto identity.
+    /// This check does not authenticate a key or prove possession.
     fn public_key_is_valid(pk: &[u8]) -> bool {
         pk.len() == Self::PUBLIC_KEY_LEN
     }
