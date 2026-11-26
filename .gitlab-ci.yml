@@ -553,6 +553,12 @@ python:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d/
 
+# Native artifacts are currently Linux amd64. Untagged jobs can land on
+# either ARM64 or AMD64 group runners, so their producer and native consumers
+# must share this constraint. Rust source crates and Wasm remain portable.
+.native-amd64:
+  tags: [linux, amd64]
+
 # Runs on every pipeline. This is the gate everything downstream hangs off.
 #
 # It writes to no registry: every step is a dry run or a local build, and
@@ -560,7 +566,7 @@ python:
 # exact files the publish jobs upload, which is what lets the smoke jobs
 # test the real thing instead of a rebuild.
 release:validate:
-  extends: .everywhere
+  extends: [.everywhere, .native-amd64]
   stage: validate
   # Extends `.everywhere` rather than declaring its own rules: a broken
   # release setup must fail on a branch pipeline, not halfway through a
@@ -667,7 +673,8 @@ smoke:rust:
 # repository's target/ is never on the include or link path, so a header
 # that does not match the shipped object fails here.
 smoke:cpp:
-  extends: .smoke
+  extends: [.smoke, .native-amd64]
+  before_script: []
   script:
     - mkdir -p /opt/clib && tar xzf dist/pqhybridsign-clib-*.tar.gz -C /opt/clib
     - ls -R /opt/clib
@@ -678,7 +685,7 @@ smoke:cpp:
 # Installs the built wheel into a fresh virtual environment. The example
 # imports pqhybridsign from site-packages, not from crates/ in this tree.
 smoke:python:
-  extends: .smoke
+  extends: [.smoke, .native-amd64]
   image: python:3.11
   before_script: []
   script:

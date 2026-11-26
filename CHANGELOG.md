@@ -15,6 +15,9 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Validation
 
+- Keep native release packaging and C++/Python artifact smoke tests on Linux
+  AMD64 runners. Build the C archive for an explicit AMD64 target and reject
+  other build hosts so ARM64 libraries cannot be mislabeled as AMD64.
 - QPA-01 regression coverage now includes the npm API and every SHRINCS
   profile. Cross-suite golden tests accept rejection during key admission
   and still test verification with an admissible classical key paired with

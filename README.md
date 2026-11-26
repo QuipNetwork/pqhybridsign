@@ -369,6 +369,11 @@ from the release page on GitLab. The archive holds
 `libpqhybridsign_cffi.so`, `libpqhybridsign_cffi.a`, `include/pqhybridsign.h`,
 and `LICENSE`.
 
+Native release artifacts currently target Linux AMD64. Building the C archive
+with `scripts/build-clib.sh` requires an `x86_64-unknown-linux-gnu` Rust host
+and explicitly selects that target. CI schedules native packaging and the
+C++/Python artifact smoke tests on matching `linux, amd64` runners.
+
 ## Stateless signing
 
 The lattice suites need no stored state. This example signs under
