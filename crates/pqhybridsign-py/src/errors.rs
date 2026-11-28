@@ -119,6 +119,16 @@ sub_exception!(
      attacker which part of a guessed phrase was wrong narrows the search."
 );
 sub_exception!(
+    HdIndexOutOfRangeError,
+    "A QUIP HD account or index was 2**31 or more. Every level is hardened, so a level names \
+     the child before the 2**31 offset."
+);
+sub_exception!(
+    HdSeedTooShortError,
+    "A QUIP HD seed was shorter than 16 bytes. No function of this module raises it today; it \
+     mirrors the library's error so every code has an exception."
+);
+sub_exception!(
     InvalidProofError,
     "The hybrid VRF proof did not verify under the public key and input it was presented \
      with, so no output bytes were derived. One exception for both halves: which of the \
@@ -149,6 +159,8 @@ pub(crate) fn to_py_err(e: AbiError) -> PyErr {
         AbiError::BudgetStoreFailed => BudgetStoreFailedError::new_err(msg),
         AbiError::InvalidMnemonic => InvalidMnemonicError::new_err(msg),
         AbiError::InvalidProof => InvalidProofError::new_err(msg),
+        AbiError::HdIndexOutOfRange => HdIndexOutOfRangeError::new_err(msg),
+        AbiError::HdSeedTooShort => HdSeedTooShortError::new_err(msg),
         AbiError::ComponentFailure => ComponentFailureError::new_err(msg),
         // `AbiError` is `#[non_exhaustive]`, so this arm is required by the
         // compiler even though every variant that exists today now has its
@@ -225,5 +237,10 @@ pub(crate) fn register(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
         py.get_type::<InvalidMnemonicError>(),
     )?;
     m.add("InvalidProofError", py.get_type::<InvalidProofError>())?;
+    m.add(
+        "HdIndexOutOfRangeError",
+        py.get_type::<HdIndexOutOfRangeError>(),
+    )?;
+    m.add("HdSeedTooShortError", py.get_type::<HdSeedTooShortError>())?;
     Ok(())
 }

@@ -2,7 +2,7 @@
 //! The integer error codes every entry point in this crate returns, and the
 //! lookup this crate offers to turn one into a message.
 //!
-//! Codes `1..=22` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
+//! Codes `1..=24` are [`pqhybridsign_abi::AbiError`]'s own codes, unchanged:
 //! a C caller that already branches on the numbers the ABI crate documents
 //! keeps working against this crate. Code `4` is retired and never reused.
 //! Codes `100` and above are this crate's own vocabulary, for failures that
@@ -114,6 +114,14 @@ pub const PQHS_ERR_INVALID_MNEMONIC: c_int = 21;
 /// code for both halves: which of the classical proof or the post-quantum
 /// binding failed is not reported. Mirrors `AbiError::InvalidProof`.
 pub const PQHS_ERR_INVALID_PROOF: c_int = 22;
+/// A QUIP HD account or index passed to [`crate::pqhs_hybrid_leaf`] was
+/// `2^31` or more: every level is hardened, so a level names the child
+/// before the `2^31` offset. Mirrors `AbiError::HdIndexOutOfRange`.
+pub const PQHS_ERR_HD_INDEX_OUT_OF_RANGE: c_int = 23;
+/// A QUIP HD seed was shorter than 16 bytes. No entry point of this library
+/// returns it today; the code mirrors `AbiError::HdSeedTooShort` so every
+/// ABI code has a constant.
+pub const PQHS_ERR_HD_SEED_TOO_SHORT: c_int = 24;
 
 /// A required pointer argument was null while its paired length was
 /// nonzero. This crate's own code: [`pqhybridsign_abi`] never receives a
@@ -179,6 +187,8 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
         }
         PQHS_ERR_INVALID_MNEMONIC => c"not a valid English BIP39 mnemonic phrase",
         PQHS_ERR_INVALID_PROOF => c"hybrid VRF proof did not verify; no output derived",
+        PQHS_ERR_HD_INDEX_OUT_OF_RANGE => c"a QUIP HD account or index is not below 2^31",
+        PQHS_ERR_HD_SEED_TOO_SHORT => c"a QUIP HD seed must be at least 16 bytes",
         PQHS_ERR_JOURNAL_KEY_MISMATCH => {
             c"this leaf journal does not belong to this key; reopen the key's own journal"
         }
@@ -196,7 +206,7 @@ pub extern "C" fn pqhs_error_message(code: c_int) -> *const c_char {
 mod tests {
     use super::*;
 
-    /// Every code this table hands out for `1..=22` must equal the code
+    /// Every code this table hands out for `1..=24` must equal the code
     /// [`AbiError::code`] reports for the variant it mirrors, and the
     /// message text must match [`AbiError`]'s own [`std::fmt::Display`]
     /// text, so the two crates' vocabularies cannot drift apart silently.
@@ -239,6 +249,8 @@ mod tests {
             (AbiError::BudgetStoreFailed, PQHS_ERR_BUDGET_STORE_FAILED),
             (AbiError::InvalidMnemonic, PQHS_ERR_INVALID_MNEMONIC),
             (AbiError::InvalidProof, PQHS_ERR_INVALID_PROOF),
+            (AbiError::HdIndexOutOfRange, PQHS_ERR_HD_INDEX_OUT_OF_RANGE),
+            (AbiError::HdSeedTooShort, PQHS_ERR_HD_SEED_TOO_SHORT),
         ];
         for (err, code) in cases {
             assert_eq!(code_of(err), code, "{err}");

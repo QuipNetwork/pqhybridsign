@@ -1168,6 +1168,64 @@ done:
     return failures;
 }
 
+/* QUIP HD: pqhs_hybrid_leaf reaches the core KATs (crates/pqhybridsign
+ * src/quip_hd.rs, cross-checked by scripts/quip-hd-leaf-crosscheck.py), the
+ * leaf feeds pqhs_keygen_from_seed, and the refusals have their own codes. */
+static int check_hybrid_leaf(void) {
+    const char *phrase =
+        "legal winner thank year wave sausage worth useful legal winner thank yellow";
+    static const uint8_t want_sr_fn512[PQHS_MASTER_SEED_LEN] = {
+        0x6e, 0x11, 0x29, 0xfa, 0x46, 0xfc, 0xeb, 0xa2, 0x46, 0x07, 0xc5, 0xb0, 0x56, 0xe9, 0xa3, 0x27,
+        0xd9, 0x1b, 0x13, 0x90, 0x78, 0x3c, 0x40, 0x78, 0x6d, 0x86, 0xd4, 0x05, 0xb0, 0xed, 0x4d, 0xce,
+    };
+    int failures = 0;
+    uint8_t leaf[PQHS_MASTER_SEED_LEN];
+    int rc = pqhs_hybrid_leaf(4, phrase, NULL, 0, 0, leaf, sizeof(leaf));
+    if (rc != PQHS_OK) return fail("hybrid_leaf SR-FN-512", rc);
+    failures += expect_true("the SR-FN-512 leaf matches the core KAT",
+                            memcmp(leaf, want_sr_fn512, sizeof(leaf)) == 0);
+
+    uint8_t again[PQHS_MASTER_SEED_LEN];
+    rc = pqhs_hybrid_leaf(4, phrase, "", 0, 0, again, sizeof(again));
+    failures += expect_rc("hybrid_leaf with an empty passphrase", rc, PQHS_OK);
+    failures += expect_true("a null and an empty passphrase agree",
+                            memcmp(leaf, again, sizeof(leaf)) == 0);
+
+    size_t sk_len, pk_len;
+    if (pqhs_secret_key_len(4, &sk_len) != PQHS_OK) return fail("sr_fn512 secret_key_len", 1);
+    if (pqhs_public_key_len(4, &pk_len) != PQHS_OK) return fail("sr_fn512 public_key_len", 1);
+    uint8_t *sk = calloc(1, sk_len);
+    uint8_t *pk = calloc(1, pk_len);
+    if (!sk || !pk) {
+        free(sk);
+        free(pk);
+        return fail("hybrid_leaf keypair allocation", 1);
+    }
+    rc = pqhs_keygen_from_seed(4, leaf, sizeof(leaf), sk, sk_len, pk, pk_len);
+    failures += expect_rc("the leaf feeds keygen_from_seed", rc, PQHS_OK);
+    free(sk);
+    free(pk);
+
+    failures += expect_rc("ED-SH has no QUIP HD level",
+                          pqhs_hybrid_leaf(5, phrase, NULL, 0, 0, leaf, sizeof(leaf)),
+                          PQHS_ERR_WRONG_ENTRY_POINT_FOR_SUITE);
+    failures += expect_rc("an unknown suite code",
+                          pqhs_hybrid_leaf(9, phrase, NULL, 0, 0, leaf, sizeof(leaf)),
+                          PQHS_ERR_INVALID_SUITE);
+    failures += expect_rc("an account of 2^31",
+                          pqhs_hybrid_leaf(4, phrase, NULL, 0x80000000u, 0, leaf, sizeof(leaf)),
+                          PQHS_ERR_HD_INDEX_OUT_OF_RANGE);
+    failures += expect_rc("an invalid phrase",
+                          pqhs_hybrid_leaf(4, "legal winner", NULL, 0, 0, leaf, sizeof(leaf)),
+                          PQHS_ERR_INVALID_MNEMONIC);
+    failures += expect_rc("a short output buffer",
+                          pqhs_hybrid_leaf(4, phrase, NULL, 0, 0, leaf, sizeof(leaf) - 1),
+                          PQHS_ERR_BAD_LENGTH);
+    failures += expect_rc("a null phrase", pqhs_hybrid_leaf(4, NULL, NULL, 0, 0, leaf, sizeof(leaf)),
+                          PQHS_ERR_NULL_POINTER);
+    return failures;
+}
+
 int main(void) {
     int failures = 0;
     failures += check_ed_ml44();
@@ -1179,6 +1237,7 @@ int main(void) {
     failures += check_malformed_verify_input();
     failures += check_null_pointer_and_profile();
     failures += check_seed_and_vrf();
+    failures += check_hybrid_leaf();
 
     if (failures == 0) {
         printf("OK: all C ABI checks passed\n");

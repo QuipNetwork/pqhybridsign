@@ -835,6 +835,67 @@ the profile and `maxSignatures`. `maxSignatures` is not seed derived, so all
 four values need a record. Never restore a signer by generating the key again
 from the seed. That resets the leaf counter to 1.
 
+### QUIP HD v1: seeds from a recovery phrase (the `quip-hd` feature)
+
+Behind the `quip-hd` feature, `quip_hd` reproduces QUIP HD v1, the
+derivation the QUIP EVM SDK ships (ethereum-sdk `src/v1/shrincs/hd.ts` at
+`77204ed8`). It is how the Quip Substrate profile turns a recovery phrase
+into a suite master seed. The section 9 split above is unchanged and applies
+to the result.
+
+```
+phrase   = NFKD(join(" ", split_js_whitespace(trim(input))))   -- English BIP-39, checksum checked
+seed64   = PBKDF2-HMAC-SHA512(phrase, "mnemonic" || NFKD(passphrase), 2048, 64)
+I        = HMAC-SHA512("QUIP seed", seed64);              k, c = I[0..32], I[32..64]
+child(i) = HMAC-SHA512(c, 0x00 || k || ser32BE(i + 2^31)) for i < 2^31
+leaf     = k at m / 0x514E' / alg' / 20049' / account' / index'
+```
+
+- Whitespace is JavaScript's `\s`: Unicode White_Space without U+0085, plus
+  U+FEFF. A word that still contains U+0085 is refused, as `@scure/bip39`,
+  which splits on single spaces, refuses it.
+- The phrase and the passphrase are NFKD-normalized, so a ligature or a
+  fullwidth form of a word gives the ASCII key.
+- A seed under 16 bytes and any level of `2^31` or more are errors, never
+  masked.
+- There is no range or zero check on a child key. Every leaf goes to a
+  hash-based expansion, never to a scalar.
+
+This is not `mnemonic::master_seed_from_mnemonic`, which is Substrate's
+derivation over the mnemonic's entropy, truncated to 32 bytes. The same
+phrase gives a different seed through the two.
+
+`hybrid_leaf(suite, phrase, passphrase, account, index)` gives one 32-byte
+leaf per stateless suite. That leaf is the suite's master seed for
+`keypair_from_seed`. The algorithm levels are a registry:
+
+| Level | Suite |
+|---|---|
+| `0x100` | H1, EdMl44 (ed25519 + ML-DSA-44) |
+| `0x200` | H2, EdFn512 (ed25519 + FN-DSA-512) |
+| `0x300` | H3, SrMl44 (sr25519 + ML-DSA-44) |
+| `0x400` | H4, SrFn512 (sr25519 + FN-DSA-512) |
+| `0x0500`-`0x0FFF` | reserved for future hybrid suites |
+| `0x7FFF_FFFF` | experimental (hd.ts default, the EVM SDK's SHRINCS keys) |
+
+The low byte of each suite level is reserved to that suite. The stateful
+suites have no level.
+
+Properties:
+- Suites are separated twice: by the algorithm level, and by the suite
+  label in the section 9 `info`.
+- The classical and post-quantum halves come from the HKDF split, so
+  neither half's seed reveals the other's.
+- No step uses a classical secret scalar, so the hard-derivation reuse of an
+  sr25519 or ed25519 secret (GregoAI wp-2 finding G-003) cannot occur.
+- One phrase never shares a key between two suites.
+- Every level is hardened, so there is no public derivation.
+
+The bindings expose the same function: `pqhybridsign_abi::hybrid_leaf`,
+`pqhs_hybrid_leaf`, Python `hybrid_leaf` and JavaScript `hybridLeaf`.
+`scripts/quip-hd-leaf-crosscheck.py` recomputes the KATs with the Python
+standard library only.
+
 ## Error handling
 
 Errors split by what they may reveal.

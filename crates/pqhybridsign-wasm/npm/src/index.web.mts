@@ -60,6 +60,7 @@ const api = createApi(load);
 
 export const {
   masterSeedFromMnemonic,
+  hybridLeaf,
   deriveHardJunction,
   deriveHardJunctionPath,
   /**

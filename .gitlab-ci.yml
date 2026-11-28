@@ -103,6 +103,8 @@ clippy:
     # `vrf` is off by default, so the workspace run above never compiles the
     # hybrid VRF or its schnorrkel VRF bindings.
     - cargo clippy --locked -p pqhybridsign --all-targets --features vrf -- -D warnings
+    # `quip-hd` is off by default too; lint the crate with it on its own.
+    - cargo clippy --locked -p pqhybridsign --all-targets --features quip-hd -- -D warnings
 
 deps:
   extends: .everywhere
@@ -167,6 +169,7 @@ no-std:
     - cargo build --locked -p pqhybridsign --no-default-features --target thumbv7em-none-eabi
     - cargo build --locked -p pqhybridsign --no-default-features --features alloc --target thumbv7em-none-eabi
     - cargo build --locked -p pqhybridsign --no-default-features --features mnemonic --target thumbv7em-none-eabi
+    - cargo build --locked -p pqhybridsign --no-default-features --features quip-hd --target thumbv7em-none-eabi
     # The hybrid VRF has to hold this line too. schnorrkel's own `vrf_sign`
     # draws the DLEQ proof's witness through `getrandom_or_panic`, which
     # panics on a target with no `getrandom`; `vrf` attaches the caller's RNG
@@ -175,6 +178,7 @@ no-std:
     - cargo test --locked -p pqhybridsign --no-default-features
     - cargo test --locked -p pqhybridsign --no-default-features --features alloc
     - cargo test --locked -p pqhybridsign --no-default-features --features mnemonic
+    - cargo test --locked -p pqhybridsign --no-default-features --features quip-hd
 
 wasm:
   extends: .everywhere
@@ -183,6 +187,7 @@ wasm:
     - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features
     - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features --features alloc
     - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features --features mnemonic
+    - cargo build --locked -p pqhybridsign --target wasm32-unknown-unknown --no-default-features --features quip-hd
     # The lattice crate must also build without an allocator: it is the
     # crate that pulls in ed25519-zebra, schnorrkel and fips204, any of
     # which could introduce a std or getrandom dependency.
@@ -274,6 +279,7 @@ doc:
   stage: check
   script:
     - RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
+    - RUSTDOCFLAGS="-D warnings" cargo doc --locked -p pqhybridsign --no-deps --features quip-hd
 
 msrv:
   extends: .everywhere
@@ -300,6 +306,9 @@ test-debug:
     # `vrf` is not a default feature, so the workspace run above skips the
     # hybrid VRF entirely, including its compile-fail guarantee.
     - cargo test --locked -p pqhybridsign --features vrf
+    # `quip-hd` is off by default; the workspace run gets it only through
+    # pqhybridsign-abi's feature unification. Test the crate with it directly.
+    - cargo test --locked -p pqhybridsign --features quip-hd
 
 test-release:
   extends: .everywhere
@@ -309,6 +318,7 @@ test-release:
     # mode exercises different code than the debug build above.
     - cargo test --locked --workspace --release
     - cargo test --locked -p pqhybridsign --release --features vrf
+    - cargo test --locked -p pqhybridsign --release --features quip-hd
 
 # Full suite under each of the four profiles. Proves the tiering holds: a
 # test that generates a key under a 128s profile slows this job and is the

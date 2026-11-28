@@ -67,6 +67,8 @@ pub mod message;
 #[cfg(feature = "mnemonic")]
 pub mod mnemonic;
 pub mod policy;
+#[cfg(feature = "quip-hd")]
+pub mod quip_hd;
 pub mod rotation;
 mod secret_sha512;
 mod seeded_rng;

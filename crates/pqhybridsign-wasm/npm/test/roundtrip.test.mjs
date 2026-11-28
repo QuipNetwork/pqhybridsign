@@ -213,6 +213,50 @@ test("a password changes the master seed", async () => {
   assert.notDeepEqual(without, withPw);
 });
 
+// QUIP HD (design v2 §2): the core crate's KATs (crates/pqhybridsign/src/
+// quip_hd.rs, cross-checked by scripts/quip-hd-leaf-crosscheck.py).
+const LEGAL = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+const hex = (bytes) => Buffer.from(bytes).toString("hex");
+
+test("hybridLeaf reaches the core KATs and feeds keygenFromSeed", async () => {
+  const kats = [
+    ["ED-ML-44", "f5f4703d2e6926a78e1ee7fd916fcbd17f2b1652b5bfbac71f917a1fad5c869f"],
+    ["ED-FN-512", "ffca289f66e2473a3353d7f726f2bc45ec1d488570f78737361bae455b69a92c"],
+    ["SR-ML-44", "e76268538ea1d8aa6553daa3c559ea8e25102b5e7a228d1e6635f1af145bbcda"],
+    ["SR-FN-512", "6e1129fa46fceba24607c5b056e9a327d91b1390783c40786d86d405b0ed4dce"],
+  ];
+  for (const [suite, want] of kats) {
+    const leaf = await pqhs.hybridLeaf(suite, LEGAL);
+    assert.equal(hex(leaf), want, suite);
+    assert.deepEqual(await pqhs.hybridLeaf(suite, LEGAL, "", 0, 0), leaf);
+    const pair = await pqhs.keygenFromSeed(suite, leaf);
+    assert.ok(pair.publicKey.length > 0);
+  }
+  assert.equal(
+    hex(await pqhs.hybridLeaf("SR-FN-512", LEGAL, null, 1)),
+    "27e3e9e7815d8071d6d92e3c2df0411ad664923d04527d0958a41f8abc1059ce",
+  );
+  assert.equal(
+    hex(await pqhs.hybridLeaf("SR-FN-512", LEGAL, null, 0, 7)),
+    "9a50171dc4a2349ee7fa3aa2efb139f7e7236b8f4572461b957359f92cad77f4",
+  );
+  assert.deepEqual(
+    await pqhs.hybridLeaf("SR-FN-512", LEGAL, "caf\u00e9"),
+    await pqhs.hybridLeaf("SR-FN-512", LEGAL, "cafe\u0301"),
+  );
+});
+
+test("hybridLeaf refuses stateful suites, bad levels and bad phrases", async () => {
+  await assert.rejects(() => pqhs.hybridLeaf("ED-SH", LEGAL), /does not accept this suite/);
+  await assert.rejects(() => pqhs.hybridLeaf("SR-SH", LEGAL), /does not accept this suite/);
+  await assert.rejects(() => pqhs.hybridLeaf("XX-YY", LEGAL), /unknown suite/);
+  for (const bad of [-1, 2 ** 31, 2 ** 32 + 1, 1.5, Number.NaN]) {
+    await assert.rejects(() => pqhs.hybridLeaf("SR-FN-512", LEGAL, null, bad), /account/);
+    await assert.rejects(() => pqhs.hybridLeaf("SR-FN-512", LEGAL, null, 0, bad), /index/);
+  }
+  await assert.rejects(() => pqhs.hybridLeaf("SR-FN-512", "legal winner"));
+});
+
 test("a junction child differs from its parent and its sibling", async () => {
   const parent = new Uint8Array(32).fill(3);
   const a = await pqhs.deriveHardJunction(parent, new Uint8Array(32).fill(1));

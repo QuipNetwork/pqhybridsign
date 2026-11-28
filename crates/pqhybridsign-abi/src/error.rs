@@ -147,6 +147,15 @@ pub enum AbiError {
     /// post-quantum binding failed is not reported, for the same reason
     /// [`crate::vrf_verify`] returns a bare `bool`.
     InvalidProof = 22,
+    /// A QUIP HD account or index was `2^31` or more: every level is
+    /// hardened, so a level names the child before the `2^31` offset.
+    /// Mirrors [`CoreError::HdIndexOutOfRange`].
+    HdIndexOutOfRange = 23,
+    /// A QUIP HD seed was shorter than 16 bytes. Mirrors
+    /// [`CoreError::HdSeedTooShort`]. No entry point of this crate can reach
+    /// it today ([`crate::hybrid_leaf`] always derives a 64-byte BIP-39
+    /// seed); it has a code so every core variant maps to its own.
+    HdSeedTooShort = 24,
 }
 
 impl AbiError {
@@ -191,6 +200,8 @@ impl fmt::Display for AbiError {
             }
             Self::InvalidMnemonic => "not a valid English BIP39 mnemonic phrase",
             Self::InvalidProof => "hybrid VRF proof did not verify; no output derived",
+            Self::HdIndexOutOfRange => "a QUIP HD account or index is not below 2^31",
+            Self::HdSeedTooShort => "a QUIP HD seed must be at least 16 bytes",
         };
         f.write_str(msg)
     }
@@ -214,6 +225,8 @@ impl From<CoreError> for AbiError {
             CoreError::BudgetStoreFailed => Self::BudgetStoreFailed,
             CoreError::InvalidMnemonic => Self::InvalidMnemonic,
             CoreError::InvalidProof => Self::InvalidProof,
+            CoreError::HdIndexOutOfRange { .. } => Self::HdIndexOutOfRange,
+            CoreError::HdSeedTooShort { .. } => Self::HdSeedTooShort,
             // `CoreError` is `#[non_exhaustive]`: only a variant added after
             // this crate was written can reach this arm, since every
             // variant that exists today has its own arm above.
@@ -273,6 +286,8 @@ mod tests {
         assert_eq!(AbiError::BudgetStoreFailed.code(), 20);
         assert_eq!(AbiError::InvalidMnemonic.code(), 21);
         assert_eq!(AbiError::InvalidProof.code(), 22);
+        assert_eq!(AbiError::HdIndexOutOfRange.code(), 23);
+        assert_eq!(AbiError::HdSeedTooShort.code(), 24);
     }
 
     #[test]
@@ -339,6 +354,14 @@ mod tests {
         assert_eq!(
             AbiError::from(CoreError::InvalidMnemonic),
             AbiError::InvalidMnemonic
+        );
+        assert_eq!(
+            AbiError::from(CoreError::HdIndexOutOfRange { index: 1 << 31 }),
+            AbiError::HdIndexOutOfRange
+        );
+        assert_eq!(
+            AbiError::from(CoreError::HdSeedTooShort { actual: 15 }),
+            AbiError::HdSeedTooShort
         );
         assert_eq!(
             AbiError::from(CoreError::InvalidProof),

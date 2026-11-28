@@ -312,6 +312,45 @@ export function deriveHardJunctionPath(parent_master: Uint8Array, chain_codes: A
 export function deriveVrfStatelessKey(suite: string, master: Uint8Array): any;
 
 /**
+ * The 32-byte master seed of `suite`'s key for a recovery phrase, by QUIP
+ * HD v1: standard BIP-39 over the phrase text, then the hardened path
+ * `m / 0x514E' / alg' / 20049' / account' / index'` at the suite's
+ * algorithm level (ED-ML-44 `0x100`, ED-FN-512 `0x200`, SR-ML-44 `0x300`,
+ * SR-FN-512 `0x400`). Pass it to `keygenFromSeed` with the same suite.
+ *
+ * Whitespace runs in `phrase` collapse, and the phrase and `passphrase`
+ * (the BIP-39 passphrase, empty when omitted) are NFKD-normalized. This is
+ * not `masterSeedFromMnemonic`, which is Substrate's derivation: the same
+ * phrase gives a different key through the two.
+ *
+ * `account` and `index` default to 0. They are taken as JavaScript numbers
+ * and must be integers in `[0, 2^31)`: a wasm-bindgen `u32` parameter would
+ * wrap a negative or oversized number silently into another account.
+ *
+ * # Secret copies
+ *
+ * `passphrase` arrives as an owned `String` in wasm linear memory. It is
+ * wrapped in `Zeroizing` before anything that can return early, so it is
+ * wiped on every path: an unknown suite, a bad `account` or `index`, an
+ * invalid phrase, and success. The leaf's own buffer is wiped after it is
+ * copied out. `phrase` arrives as a `&str` borrowed from wasm-bindgen's
+ * copy of the JavaScript string, which wasm-bindgen frees after the call
+ * without wiping it. That copy, the JavaScript strings themselves and the
+ * returned `Uint8Array` are host-side copies this function cannot reach.
+ * So is one more: while wasm-bindgen's `passStringToWasm0` encodes a
+ * non-ASCII string it can `realloc` its buffer, which leaves the partial
+ * copy it outgrew in linear memory, unwiped.
+ *
+ * # Errors
+ *
+ * A JavaScript `Error` if `suite` is not a suite name, or is ED-SH or
+ * SR-SH ("this entry point does not accept this suite"), if `account` or
+ * `index` is not an integer in `[0, 2^31)`, or if `phrase` is not a valid
+ * English BIP39 mnemonic.
+ */
+export function hybridLeaf(suite: string, phrase: string, passphrase?: string | null, account?: number | null, index?: number | null): Uint8Array;
+
+/**
  * The 32-byte identity of the key `public_key` describes, for a stateful
  * `suite` (`"ED-SH"` or `"SR-SH"`).
  *
@@ -391,6 +430,15 @@ export function keygenStatefulFromSeed(suite: string, seed: Uint8Array, max_stat
  * a wrong word count, an unknown word, or a bad checksum. The three are
  * not distinguished, because telling an attacker which part of a guessed
  * phrase was wrong narrows the search.
+ *
+ * # Secret copies
+ *
+ * `password` arrives as an owned `String` in wasm linear memory and is
+ * wrapped in `Zeroizing` before anything else, so it is wiped on every
+ * path. `phrase` is a `&str` borrowed from wasm-bindgen's copy of the
+ * JavaScript string, which wasm-bindgen frees without wiping; see
+ * `hybridLeaf` for the same host-side limits, including the partial copy
+ * `passStringToWasm0` can leave when it reallocates for non-ASCII input.
  */
 export function masterSeedFromMnemonic(phrase: string, password?: string | null): Uint8Array;
 
@@ -787,6 +835,7 @@ export interface InitOutput {
     readonly deriveHardJunction: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly deriveHardJunctionPath: (a: number, b: number, c: any) => [number, number, number];
     readonly deriveVrfStatelessKey: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly hybridLeaf: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
     readonly keyIdentity: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keyIdentityFromSecretKey: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly keygenFromSeed: (a: number, b: number, c: number, d: number) => [number, number, number];
