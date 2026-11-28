@@ -21,9 +21,15 @@ response arithmetic borrows the nonce and uses a wiped in-place multiplication
 operand. These measures do not guarantee erasure of compiler- or
 dependency-created temporaries.
 
-The SDK wrapper holds parent and child seeds in drop-wiped buffers. Its pinned
-pqhybridsign revision lacks the output-buffer API, so its call still passes a
-child seed through a by-value `Result`. Integrating the output-buffer API
+The SDK wrapper holds parent and child seeds in drop-wiped buffers. Until its
+pinned library exposes the output-buffer API, an SDK-local implementation of
+the identical HKDF junction writes into the guarded child buffer. SDK tests
+compare it with the pinned library. The SDK's key-generation and key-import
+adapters also write into drop-wiped secret-key objects and guard generated
+seeds. Its ML-DSA public-key recovery still calls fips204's by-value secret
+key deserializer, which may create another copy outside the caller's guard.
+
+Replacing the SDK's temporary junction implementation with the library API
 requires a library revision that contains these changes, the QPA-02 fixes,
 and the SDK's QUIP HD API, followed by an SDK dependency and lockfile update.
 
@@ -39,9 +45,10 @@ and the SDK's QUIP HD API, followed by an SDK dependency and lockfile update.
   wipe of the caller's scalar cannot cover the callee's stack frame. Review
   or replace the relevant arithmetic implementation and verify its generated
   code on each supported target.
-* Integrate the SDK with the fixed library, eliminate the by-value junction
-  result in the SDK, and inspect all reported paths in the final linked native
-  and Wasm artifacts with the supported release toolchains. The CertiK report
+* Integrate the SDK with the fixed library, replace its temporary junction
+  implementation with the output-buffer API, and inspect all reported paths in
+  the final linked native and Wasm artifacts with supported release toolchains.
+  The CertiK report
   used rustc 1.99.1; the local inspection used rustc 1.97.1 and LLVM 22.1.6.
   Functional tests do not measure memory residue.
 
@@ -55,3 +62,11 @@ integration copy. The SDK's 44 wrapper tests passed against a temporary copy
 combining QUIP HD and the library changes; its junction tests also passed
 against the actual pinned dependency. QPA-02 regression tests passed in both
 contexts. These are compatibility checks, not proof of memory erasure.
+
+On 2026-11-27 the SDK's crypto-core tests and 46 wrapper tests passed against
+its existing pin; the junction tests also passed in release mode. A native
+release test executable was built and its junction code inspected. The
+crypto-core crate compiled for `wasm32-unknown-unknown`; the full SDK Wasm
+check did not complete because `clang` was unavailable. Workspace clippy
+for both SDK crates was blocked by existing warnings in the runtime-interface
+procedural macro; the crypto-core clippy check passed separately.
