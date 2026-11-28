@@ -64,7 +64,7 @@ impl SecretSha512 {
         }
         self.buffer[112..].copy_from_slice(&bits.to_be_bytes());
         self.compress();
-        for (chunk, word) in out.chunks_exact_mut(8).zip(self.state.iter()) {
+        for (chunk, word) in out.as_chunks_mut::<8>().0.iter_mut().zip(self.state.iter()) {
             chunk.copy_from_slice(&word.to_be_bytes());
         }
         self.zeroize();
