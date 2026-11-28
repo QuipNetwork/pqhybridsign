@@ -23,7 +23,7 @@ categories = ["cryptography", "no-std"]
 subtle = { version = "2.6.1", default-features = false }
 zeroize = { version = "1.8", default-features = false, features = ["derive"] }
 hkdf = { version = "0.12", default-features = false }
-sha2 = { version = "0.10.8", default-features = false }
+sha2 = { version = "0.10.8", default-features = false, features = ["compress"] }
 rand_core = { version = "0.6.4", default-features = false }
 ed25519-zebra = { version = "4.2", default-features = false }
 schnorrkel = { version = "0.11.5", default-features = false }

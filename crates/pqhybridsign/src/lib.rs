@@ -68,6 +68,7 @@ pub mod message;
 pub mod mnemonic;
 pub mod policy;
 pub mod rotation;
+mod secret_sha512;
 mod seeded_rng;
 pub mod stateful;
 #[cfg(feature = "alloc")]

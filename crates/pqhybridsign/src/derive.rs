@@ -205,6 +205,20 @@ pub fn derive_stateless_vrf_seed(master: &[u8; 32], label: &[u8]) -> Result<[u8;
 /// a second host. A key pool spanning multiple nodes MUST give each node its
 /// own distinct junction, never the same junction re-derived on two hosts.
 pub fn derive_hard_junction(parent_master: &[u8; 32], chain_code: &[u8; 32]) -> Result<[u8; 32]> {
+    let mut child = Wiped([0u8; 32]);
+    derive_hard_junction_into(parent_master, chain_code, &mut child.0)?;
+    Ok(child.0)
+}
+
+/// Derives a hard junction directly into caller-owned storage.
+///
+/// The caller must guard and eventually erase `child`. On error its contents
+/// are erased. The output is identical to [`derive_hard_junction`].
+pub fn derive_hard_junction_into(
+    parent_master: &[u8; 32],
+    chain_code: &[u8; 32],
+    child: &mut [u8; 32],
+) -> Result<()> {
     let (mut prk, hk) = Hkdf::<Sha256>::extract(Some(SALT), parent_master);
     prk.as_mut_slice().zeroize();
 
@@ -212,10 +226,11 @@ pub fn derive_hard_junction(parent_master: &[u8; 32], chain_code: &[u8; 32]) -> 
     info[..JUNCTION_INFO_PREFIX.len()].copy_from_slice(JUNCTION_INFO_PREFIX);
     info[JUNCTION_INFO_PREFIX.len()..].copy_from_slice(chain_code);
 
-    let mut child = [0u8; 32];
-    hk.expand(&info, &mut child)
-        .map_err(|_| Error::ComponentFailure)?;
-    Ok(child)
+    if hk.expand(&info, child).is_err() {
+        child.zeroize();
+        return Err(Error::ComponentFailure);
+    }
+    Ok(())
 }
 
 /// Holds a master seed so its wipe happens on drop, exactly as
@@ -252,10 +267,12 @@ pub fn derive_hard_junction_path(
     chain_codes: &[[u8; 32]],
 ) -> Result<[u8; 32]> {
     let mut current = Wiped(*parent_master);
+    let mut next = Wiped([0u8; 32]);
     for chain_code in chain_codes {
-        let next = derive_hard_junction(&current.0, chain_code)?;
+        derive_hard_junction_into(&current.0, chain_code, &mut next.0)?;
         current.0.zeroize();
-        current.0 = next;
+        current.0.copy_from_slice(&next.0);
+        next.0.zeroize();
     }
     Ok(current.0)
 }
@@ -263,6 +280,24 @@ pub fn derive_hard_junction_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn junction_output_buffer_matches_return_and_path_apis() {
+        let parent = [9u8; 32];
+        let codes = [[7u8; 32], [8u8; 32]];
+        let mut first = [0u8; 32];
+        let mut second = [0u8; 32];
+        derive_hard_junction_into(&parent, &codes[0], &mut first).expect("first");
+        assert_eq!(
+            first,
+            derive_hard_junction(&parent, &codes[0]).expect("first")
+        );
+        derive_hard_junction_into(&first, &codes[1], &mut second).expect("second");
+        assert_eq!(
+            second,
+            derive_hard_junction_path(&parent, &codes).expect("path")
+        );
+    }
 
     const ED_ML44: &[u8] = b"hybrid-ed25519-mldsa44-v1\0";
     const SR_ML44: &[u8] = b"hybrid-sr25519-mldsa44-v1\0";

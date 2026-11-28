@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+use crate::secret_sha512::SecretSha512;
 use crate::{
     component::PqScheme,
     error::{Error, Result},
@@ -9,7 +10,6 @@ use fn_dsa::{
     KeyPairGenerator512, SigningKey, SigningKey512, VerifyingKey, VerifyingKey512, DOMAIN_NONE,
     FN_DSA_LOGN_512, HASH_ID_RAW,
 };
-use sha2::{Digest, Sha512};
 use subtle::Choice;
 use zeroize::Zeroize;
 
@@ -123,15 +123,16 @@ fn check_len(buf: &[u8], want: usize) -> Result<()> {
 /// that depended on the pointer width of the machine that computed it
 /// would not survive being written down.
 fn nonce_seed(sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha512::new();
+    let mut hasher = SecretSha512::new();
     hasher.update(NONCE_SEED_DOMAIN);
-    hasher.update((sk.len() as u64).to_be_bytes());
+    hasher.update(&(sk.len() as u64).to_be_bytes());
     hasher.update(sk);
-    hasher.update((nonce.len() as u64).to_be_bytes());
+    hasher.update(&(nonce.len() as u64).to_be_bytes());
     hasher.update(nonce);
-    hasher.update((msg.len() as u64).to_be_bytes());
+    hasher.update(&(msg.len() as u64).to_be_bytes());
     hasher.update(msg);
-    let mut digest = hasher.finalize();
+    let mut digest = [0u8; 64];
+    hasher.finalize_into(&mut digest);
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&digest[..32]);
     digest.zeroize();

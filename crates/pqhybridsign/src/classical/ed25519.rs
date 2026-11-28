@@ -218,6 +218,7 @@ mod vrf_impl {
     use super::{check_len, Ed25519, Error, Result};
     use crate::classical::Wiped;
     use crate::component::ClassicalScheme;
+    use crate::secret_sha512::SecretSha512;
     use crate::vrf::{ClassicalVrf, PRE_OUTPUT_LEN};
     use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
     use curve25519_dalek::scalar::Scalar;
@@ -352,7 +353,10 @@ mod vrf_impl {
     /// alternative, `Scalar::from_bits`, is deprecated in `curve25519-dalek`
     /// 4 precisely because an unreduced scalar is unsafe in general.
     fn expand_secret(seed: &[u8; 32]) -> Expanded {
-        let mut hashed = Sha512::digest(seed);
+        let mut hasher = SecretSha512::new();
+        hasher.update(seed);
+        let mut hashed = [0u8; 64];
+        hasher.finalize_into(&mut hashed);
         let mut clamped = [0u8; 32];
         clamped.copy_from_slice(&hashed[..32]);
         clamped[0] &= 248;
@@ -373,15 +377,13 @@ mod vrf_impl {
     /// is no witness to draw and nothing that could reach `getrandom` and
     /// panic on a target that has none.
     fn nonce(prefix: &[u8; 32], h_string: &[u8; 32]) -> Scalar {
-        let mut hasher = Sha512::new();
+        let mut hasher = SecretSha512::new();
         hasher.update(prefix);
         hasher.update(h_string);
-        let mut k_string = hasher.finalize();
         let mut wide = [0u8; 64];
-        wide.copy_from_slice(&k_string);
+        hasher.finalize_into(&mut wide);
         let k = Scalar::from_bytes_mod_order_wide(&wide);
         wide.zeroize();
-        k_string.zeroize();
         k
     }
 
@@ -415,6 +417,7 @@ mod vrf_impl {
 
     /// RFC 9381 section 5.1, `ECVRF_prove`, writing `Gamma` and `c || s` into
     /// separate buffers.
+    #[expect(clippy::op_ref, reason = "borrow secret scalars to avoid extra copies")]
     fn prove(
         sk: &[u8],
         alpha: &[&[u8]],
@@ -440,14 +443,16 @@ mod vrf_impl {
 
         let h_point = encode_to_curve(&y_string, alpha).ok_or(Error::ComponentFailure)?;
         let h_string = h_point.compress().to_bytes();
-        let gamma = h_point * secret.0.x;
+        let gamma = &h_point * &secret.0.x;
 
         let k = Wiped(nonce(&secret.0.prefix, &h_string));
         let u_point = EdwardsPoint::mul_base(&k.0);
-        let v_point = h_point * k.0;
+        let v_point = &h_point * &k.0;
 
         let c = challenge([&y_point, &h_point, &gamma, &u_point, &v_point]);
-        let s = k.0 + challenge_scalar(&c) * secret.0.x;
+        let mut product = Wiped(challenge_scalar(&c));
+        product.0 *= &secret.0.x;
+        let s = &k.0 + &product.0;
 
         pre_output_out.copy_from_slice(&gamma.compress().to_bytes());
         proof_out[..C_LEN].copy_from_slice(&c);

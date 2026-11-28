@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+use crate::secret_sha512::SecretSha512;
 use crate::{
     classical::Wiped,
     component::ClassicalScheme,
@@ -8,7 +9,6 @@ use crate::{
 use curve25519_dalek::traits::IsIdentity;
 use schnorrkel::context::attach_rng;
 use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, PublicKey, SecretKey, Signature};
-use sha2::{Digest, Sha512};
 use subtle::Choice;
 use zeroize::Zeroize;
 
@@ -140,15 +140,16 @@ fn nonce_seed(sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
 /// [`nonce_seed`] with the domain separator as a parameter, so the VRF path
 /// below can reach the same layout under a domain of its own.
 fn nonce_seed_in(domain: &[u8], sk: &[u8], nonce: &[u8], msg: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha512::new();
+    let mut hasher = SecretSha512::new();
     hasher.update(domain);
-    hasher.update((sk.len() as u64).to_be_bytes());
+    hasher.update(&(sk.len() as u64).to_be_bytes());
     hasher.update(sk);
-    hasher.update((nonce.len() as u64).to_be_bytes());
+    hasher.update(&(nonce.len() as u64).to_be_bytes());
     hasher.update(nonce);
-    hasher.update((msg.len() as u64).to_be_bytes());
+    hasher.update(&(msg.len() as u64).to_be_bytes());
     hasher.update(msg);
-    let mut digest = hasher.finalize();
+    let mut digest = [0u8; 64];
+    hasher.finalize_into(&mut digest);
     let mut seed = [0u8; 32];
     seed.copy_from_slice(&digest[..32]);
     // The digest is secret: its first half is the nonce seed and it is

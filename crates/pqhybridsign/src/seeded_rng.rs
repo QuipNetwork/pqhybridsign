@@ -17,9 +17,9 @@
 //! seed, schnorrkel takes 32 for a nonce witness. The unit tests pin those
 //! widths against SHA-512 computed directly.
 
+use crate::secret_sha512::SecretSha512;
 use rand_core::block::{BlockRng, BlockRngCore};
 use rand_core::{CryptoRng, RngCore};
-use sha2::{Digest, Sha512};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// One SHA-512 digest as the sixteen little-endian words `BlockRng` reads.
@@ -54,10 +54,11 @@ impl BlockRngCore for Sha512Counter {
     type Results = Block;
 
     fn generate(&mut self, results: &mut Block) {
-        let mut hasher = Sha512::new();
-        hasher.update(self.state);
-        hasher.update(self.counter.to_be_bytes());
-        let mut digest = hasher.finalize();
+        let mut hasher = SecretSha512::new();
+        hasher.update(&self.state);
+        hasher.update(&self.counter.to_be_bytes());
+        let mut digest = [0u8; 64];
+        hasher.finalize_into(&mut digest);
         for (word, bytes) in results.0.iter_mut().zip(digest.as_chunks::<4>().0) {
             *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         }
@@ -102,6 +103,7 @@ impl CryptoRng for SeededRng {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha512};
 
     /// One SHA-512 digest of `seed || counter` as a big-endian `u64`, the
     /// block the expander hands out for that counter.
